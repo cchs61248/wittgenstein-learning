@@ -69,6 +69,7 @@ export interface StartSessionMessage {
     content: string;
     provider: ProviderType;
     target_depth: DepthType;
+    model?: string;
   };
 }
 

@@ -71,7 +71,7 @@ export default function App() {
     }
   };
 
-  const handleStart = (content: string, provider: ProviderType, depth: DepthType) => {
+  const handleStart = (content: string, provider: ProviderType, depth: DepthType, model: string) => {
     if (!token) return;
 
     const sid = sessionIdRef.current;
@@ -81,7 +81,7 @@ export default function App() {
         setConnected(true);
         ws.send({
           type: 'start_session',
-          payload: { content, provider, target_depth: depth },
+          payload: { content, provider, target_depth: depth, model },
         });
       },
       onClose: () => setConnected(false),

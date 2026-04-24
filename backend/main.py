@@ -10,6 +10,7 @@ from pathlib import Path
 from .config import DB_PATH, CORS_ORIGINS, DEFAULT_PROVIDER
 from .db.database import init_db, close_db
 from .auth.router import router as auth_router
+from .routers.upload import router as upload_router
 from .auth.utils import decode_token
 from .llm.provider_factory import create_provider
 from .orchestrator.learning_orchestrator import LearningOrchestrator
@@ -34,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(upload_router)
 
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
@@ -86,7 +88,8 @@ async def websocket_endpoint(
 
             if msg_type == "start_session":
                 provider_name: str = p.get("provider", DEFAULT_PROVIDER)
-                llm = create_provider(provider_name)
+                model: str | None = p.get("model") or None
+                llm = create_provider(provider_name, model=model)
                 orchestrator = LearningOrchestrator(llm)
                 # 儲存 orchestrator 以便後續 handle_answer 使用
                 _orchestrators[session_id] = orchestrator
