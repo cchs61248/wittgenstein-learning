@@ -1,9 +1,10 @@
 const BASE = 'http://localhost:8000';
 
 export interface UploadResult {
-  content: string;
+  file_id: string;
   filename: string;
-  char_count: number;
+  size: number;
+  mime_type: string;
 }
 
 export async function uploadFile(file: File, token: string): Promise<UploadResult> {

@@ -32,16 +32,19 @@ class LearningOrchestrator:
         session_id: str,
         user_id: str,
         raw_content: str,
+        provider_file_ref: dict | None,
         target_depth: str,
         emit: WSEmitter,
     ) -> None:
-        content_hash = hashlib.sha256(raw_content.encode()).hexdigest()[:16]
+        hash_seed = raw_content if raw_content else json.dumps(provider_file_ref or {}, ensure_ascii=False)
+        content_hash = hashlib.sha256(hash_seed.encode()).hexdigest()[:16]
 
         ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
             task_payload={
                 "raw_content": raw_content,
+                "provider_file_ref": provider_file_ref,
                 "max_stages": 8,
                 "target_depth": target_depth,
             },
@@ -74,8 +77,8 @@ class LearningOrchestrator:
             },
         })
 
-        # 儲存 stages 供後續使用（存在 working memory 的 pending_questions 暫存位置）
-        wm.pending_questions = stages  # type: ignore  # 暫借欄位存 stages
+        # 獨立保存整份 stages，避免與 pending_questions 混用
+        wm.stages = stages
 
         await self.run_stage(session_id, user_id, stages, 0, emit)
 
@@ -170,7 +173,10 @@ class LearningOrchestrator:
         emit: WSEmitter,
     ) -> None:
         wm = get_working_memory(session_id)
-        stages: list[dict] = wm.pending_questions  # type: ignore
+        stages: list[dict] = wm.stages
+        if not stages:
+            await emit({"type": "error", "payload": {"message": "學習階段資料遺失，請重新開始會話"}})
+            return
 
         session = await session_memory.get_session(session_id)
         if not session:
@@ -340,8 +346,7 @@ class LearningOrchestrator:
             questions: list[dict] = q_result.get("questions", [])
 
             # 保留原有 stages，只更新問題清單
-            original_stages = [s for s in wm.pending_questions if isinstance(s, dict) and "stage_id" in s]
-            wm.pending_questions = original_stages + questions
+            wm.pending_questions = questions
             wm.stage_evaluations = []
 
             if questions:
@@ -397,8 +402,7 @@ class LearningOrchestrator:
             q_result = await self.questioner.run(q_ctx)
             questions = q_result.get("questions", [])
 
-            original_stages = [s for s in wm.pending_questions if isinstance(s, dict) and "stage_id" in s]
-            wm.pending_questions = original_stages + questions
+            wm.pending_questions = questions
 
             if questions:
                 q = questions[0]

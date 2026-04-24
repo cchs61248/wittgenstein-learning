@@ -71,7 +71,13 @@ export default function App() {
     }
   };
 
-  const handleStart = (content: string, provider: ProviderType, depth: DepthType, model: string) => {
+  const handleStart = (
+    provider: ProviderType,
+    depth: DepthType,
+    model: string,
+    uploadedFileId?: string,
+    content?: string
+  ) => {
     if (!token) return;
 
     const sid = sessionIdRef.current;
@@ -81,7 +87,7 @@ export default function App() {
         setConnected(true);
         ws.send({
           type: 'start_session',
-          payload: { content, provider, target_depth: depth, model },
+          payload: { content, uploaded_file_id: uploadedFileId, provider, target_depth: depth, model },
         });
       },
       onClose: () => setConnected(false),

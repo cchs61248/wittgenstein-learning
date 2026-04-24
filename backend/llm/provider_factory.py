@@ -14,8 +14,8 @@ class LLMProviderType(str, Enum):
 
 _DEFAULTS: dict[LLMProviderType, tuple[str, type]] = {
     LLMProviderType.CLAUDE:  ("claude-sonnet-4-6", ClaudeProvider),
-    LLMProviderType.OPENAI:  ("gpt-4o-mini", OpenAIProvider),
-    LLMProviderType.GEMINI:  ("gemini-2.0-flash", GeminiProvider),
+    LLMProviderType.OPENAI:  ("gpt-5.4-mini", OpenAIProvider),
+    LLMProviderType.GEMINI:  ("gemini-3-flash-preview", GeminiProvider),
 }
 
 

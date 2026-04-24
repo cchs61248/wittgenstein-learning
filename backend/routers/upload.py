@@ -1,10 +1,10 @@
-import io
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 
 from ..auth.utils import decode_token
+from ..files.upload_store import save_upload
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -34,37 +34,15 @@ async def upload_file(
     if len(raw) > _MAX_BYTES:
         raise HTTPException(status_code=413, detail="檔案超過 10 MB 上限")
 
-    content = _extract_text(raw, suffix)
-    if not content.strip():
-        raise HTTPException(status_code=422, detail="無法從檔案中提取文字內容")
+    file_id = save_upload(
+        filename=filename,
+        mime_type=file.content_type or "application/octet-stream",
+        raw=raw,
+    )
 
-    return {"content": content, "filename": filename, "char_count": len(content)}
-
-
-def _extract_text(raw: bytes, suffix: str) -> str:
-    if suffix in (".txt", ".md"):
-        return raw.decode("utf-8", errors="replace")
-
-    if suffix == ".pdf":
-        try:
-            import pypdf
-            reader = pypdf.PdfReader(io.BytesIO(raw))
-            pages = [page.extract_text() or "" for page in reader.pages]
-            return "\n\n".join(p for p in pages if p.strip())
-        except Exception as e:
-            raise HTTPException(status_code=422, detail=f"PDF 解析失敗：{e}")
-
-    if suffix in (".docx", ".doc"):
-        try:
-            import docx
-            doc = docx.Document(io.BytesIO(raw))
-            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        except Exception as e:
-            if suffix == ".doc":
-                raise HTTPException(
-                    status_code=422,
-                    detail="舊版 .doc 格式不支援，請另存為 .docx 後再上傳",
-                )
-            raise HTTPException(status_code=422, detail=f"Word 檔案解析失敗：{e}")
-
-    return ""
+    return {
+        "file_id": file_id,
+        "filename": filename,
+        "size": len(raw),
+        "mime_type": file.content_type or "application/octet-stream",
+    }

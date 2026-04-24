@@ -20,8 +20,25 @@ class OpenAIProvider(BaseLLMProvider):
             result.append({"role": "system", "content": system_prompt})
         for msg in messages:
             if msg.role != MessageRole.SYSTEM:
-                result.append({"role": msg.role.value, "content": msg.content})
+                if msg.attachment and msg.attachment.get("openai_file_id") and msg.role == MessageRole.USER:
+                    result.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": msg.content},
+                                {"type": "file", "file": {"file_id": msg.attachment["openai_file_id"]}},
+                            ],
+                        }
+                    )
+                else:
+                    result.append({"role": msg.role.value, "content": msg.content})
         return result
+
+    def _token_param(self) -> dict:
+        # GPT-5 系列改用 max_completion_tokens
+        if self.model.startswith("gpt-5"):
+            return {"max_completion_tokens": self.max_tokens}
+        return {"max_tokens": self.max_tokens}
 
     async def chat(
         self,
@@ -30,7 +47,7 @@ class OpenAIProvider(BaseLLMProvider):
     ) -> LLMResponse:
         response = await self._client.chat.completions.create(
             model=self.model,
-            max_tokens=self.max_tokens,
+            **self._token_param(),
             temperature=self.temperature,
             messages=self._to_openai_messages(messages, system_prompt),
         )
@@ -50,7 +67,7 @@ class OpenAIProvider(BaseLLMProvider):
     ) -> AsyncGenerator[str, None]:
         stream = await self._client.chat.completions.create(
             model=self.model,
-            max_tokens=self.max_tokens,
+            **self._token_param(),
             temperature=self.temperature,
             messages=self._to_openai_messages(messages, system_prompt),
             stream=True,

@@ -66,7 +66,8 @@ export type ServerMessage =
 export interface StartSessionMessage {
   type: 'start_session';
   payload: {
-    content: string;
+    content?: string;
+    uploaded_file_id?: string;
     provider: ProviderType;
     target_depth: DepthType;
     model?: string;

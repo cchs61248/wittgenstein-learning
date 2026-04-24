@@ -13,8 +13,10 @@ from .auth.router import router as auth_router
 from .routers.upload import router as upload_router
 from .auth.utils import decode_token
 from .llm.provider_factory import create_provider
+from .llm.file_adapter import create_provider_file_ref
 from .orchestrator.learning_orchestrator import LearningOrchestrator
 from .memory.working_memory import get_working_memory
+from .files.upload_store import load_upload
 
 
 @asynccontextmanager
@@ -36,10 +38,6 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(upload_router)
-
-frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
-if frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")
 
 
 class WebSocketManager:
@@ -87,19 +85,50 @@ async def websocket_endpoint(
             p: dict = msg.get("payload", {})
 
             if msg_type == "start_session":
-                provider_name: str = p.get("provider", DEFAULT_PROVIDER)
-                model: str | None = p.get("model") or None
-                llm = create_provider(provider_name, model=model)
-                orchestrator = LearningOrchestrator(llm)
-                # 儲存 orchestrator 以便後續 handle_answer 使用
-                _orchestrators[session_id] = orchestrator
-                await orchestrator.start_session(
-                    session_id=session_id,
-                    user_id=user_id,
-                    raw_content=p["content"],
-                    target_depth=p.get("target_depth", "intermediate"),
-                    emit=emit,
-                )
+                try:
+                    provider_name: str = p.get("provider", DEFAULT_PROVIDER)
+                    model: str | None = p.get("model") or None
+                    uploaded_file_id: str | None = p.get("uploaded_file_id") or None
+                    raw_content: str = p.get("content", "")
+                    if not uploaded_file_id and not raw_content.strip():
+                        await emit({"type": "error", "payload": {"message": "請先上傳檔案或提供文字內容"}})
+                        continue
+
+                    provider_file_ref: dict | None = None
+                    if uploaded_file_id:
+                        try:
+                            uploaded = load_upload(uploaded_file_id)
+                        except FileNotFoundError:
+                            await emit({"type": "error", "payload": {"message": "找不到已上傳檔案，請重新上傳"}})
+                            continue
+                        pref = await create_provider_file_ref(
+                            provider=provider_name,
+                            filename=uploaded["filename"],
+                            mime_type=uploaded["mime_type"],
+                            raw=uploaded["raw"],
+                        )
+                        provider_file_ref = {
+                            "filename": pref.filename,
+                            "mime_type": pref.mime_type,
+                            "openai_file_id": pref.openai_file_id,
+                            "gemini_file_uri": pref.gemini_file_uri,
+                            "claude_file_id": pref.claude_file_id,
+                        }
+
+                    llm = create_provider(provider_name, model=model)
+                    orchestrator = LearningOrchestrator(llm)
+                    # 儲存 orchestrator 以便後續 handle_answer 使用
+                    _orchestrators[session_id] = orchestrator
+                    await orchestrator.start_session(
+                        session_id=session_id,
+                        user_id=user_id,
+                        raw_content=raw_content,
+                        provider_file_ref=provider_file_ref,
+                        target_depth=p.get("target_depth", "intermediate"),
+                        emit=emit,
+                    )
+                except Exception as e:
+                    await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
 
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)
@@ -130,3 +159,9 @@ _orchestrators: dict[str, LearningOrchestrator] = {}
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+if frontend_dist.exists():
+    # 必須最後掛載，避免 StaticFiles 攔截 /ws/* 等非 HTTP 路由
+    app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")

@@ -14,6 +14,7 @@ class MessageRole(str, Enum):
 class LLMMessage:
     role: MessageRole
     content: str
+    attachment: Optional[dict] = None
 
 
 @dataclass

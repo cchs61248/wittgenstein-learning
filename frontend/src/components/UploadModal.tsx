@@ -1,10 +1,17 @@
-import { useState, useRef, DragEvent, ChangeEvent } from 'react';
+import { useState, useRef } from 'react';
+import type { DragEvent, ChangeEvent } from 'react';
 import { useSessionStore } from '../store/sessionStore';
 import { uploadFile } from '../api/upload';
 import type { ProviderType, DepthType } from '../types/messages';
 
 interface Props {
-  onStart: (content: string, provider: ProviderType, depth: DepthType, model: string) => void;
+  onStart: (
+    provider: ProviderType,
+    depth: DepthType,
+    model: string,
+    uploadedFileId?: string,
+    content?: string
+  ) => void;
 }
 
 const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
@@ -14,16 +21,13 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
     { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 — 快速' },
   ],
   openai: [
-    { id: 'gpt-4.1',     label: 'GPT-4.1 — 旗艦' },
-    { id: 'gpt-4o',      label: 'GPT-4o — 標準' },
-    { id: 'gpt-4o-mini', label: 'GPT-4o mini — 輕量' },
-    { id: 'o3',          label: 'o3 — 推理旗艦' },
-    { id: 'o4-mini',     label: 'o4-mini — 快速推理' },
+    { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini — 穩定/成本平衡' },
+    { id: 'gpt-5.4',      label: 'GPT-5.4 — 品質優先' },
   ],
   gemini: [
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — 平衡' },
-    { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro — 旗艦' },
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — 快速' },
+    { id: 'gemini-3-flash-preview',      label: 'Gemini 3 Flash Preview — 預設' },
+    { id: 'gemini-3.1-pro-preview',      label: 'Gemini 3.1 Pro Preview — 品質優先' },
+    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite Preview — 輕量快速' },
   ],
 };
 
@@ -35,6 +39,7 @@ export function UploadModal({ onStart }: Props) {
   const [depth, setDepth] = useState<DepthType>('intermediate');
   const [uploading, setUploading] = useState(false);
   const [uploadedFilename, setUploadedFilename] = useState<string | null>(null);
+  const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -49,10 +54,11 @@ export function UploadModal({ onStart }: Props) {
     setUploading(true);
     setUploadError(null);
     setUploadedFilename(null);
+    setUploadedFileId(null);
     try {
       const result = await uploadFile(file, token);
-      setContent(result.content);
       setUploadedFilename(result.filename);
+      setUploadedFileId(result.file_id);
     } catch (e: unknown) {
       setUploadError(e instanceof Error ? e.message : '上傳失敗');
     } finally {
@@ -74,8 +80,9 @@ export function UploadModal({ onStart }: Props) {
   };
 
   const handleStart = () => {
-    if (content.trim().length < 50) return;
-    onStart(content.trim(), provider, depth, model);
+    const text = content.trim();
+    if (!uploadedFileId && text.length < 50) return;
+    onStart(provider, depth, model, uploadedFileId ?? undefined, text || undefined);
   };
 
   const models = PROVIDER_MODELS[provider];
@@ -112,7 +119,7 @@ export function UploadModal({ onStart }: Props) {
             <>
               <span className="drop-icon">📄</span>
               <span className="drop-hint">點擊或拖曳檔案至此</span>
-              <span className="drop-formats">支援 .txt .md .pdf .docx</span>
+              <span className="drop-formats">支援 .txt .md .pdf .docx（不做本地文字解析）</span>
             </>
           )}
         </div>
@@ -121,8 +128,8 @@ export function UploadModal({ onStart }: Props) {
 
         <textarea
           value={content}
-          onChange={(e) => { setContent(e.target.value); setUploadedFilename(null); }}
-          placeholder="或直接貼上學習材料（至少 50 字）..."
+          onChange={(e) => { setContent(e.target.value); setUploadedFilename(null); setUploadedFileId(null); }}
+          placeholder="可直接貼上學習材料（至少 50 字）；若已上傳檔案可留空"
           rows={8}
         />
 
@@ -162,7 +169,7 @@ export function UploadModal({ onStart }: Props) {
         <button
           className="btn-primary btn-large"
           onClick={handleStart}
-          disabled={content.trim().length < 50 || uploading}
+          disabled={(!uploadedFileId && content.trim().length < 50) || uploading}
         >
           開始學習
         </button>

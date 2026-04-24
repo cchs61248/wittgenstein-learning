@@ -1,32 +1,102 @@
 import json
 from typing import Any
 from .base_agent import BaseAgent, AgentContext
-from ..llm.base_provider import MessageRole
+from ..llm.base_provider import LLMMessage, MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 
 
 class ContentSplitterAgent(BaseAgent):
+    def _extract_json_candidate(self, text: str) -> str:
+        s = text.strip()
+        if s.startswith("```"):
+            parts = s.split("```")
+            if len(parts) >= 2:
+                s = parts[1]
+                if s.startswith("json"):
+                    s = s[4:]
+        start = s.find("{")
+        end = s.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return s[start : end + 1].strip()
+        return s
+
+    def _normalize_splitter_output(self, data: dict[str, Any], max_stages: int) -> dict[str, Any]:
+        stages_raw = data.get("stages")
+        stages: list[dict[str, Any]] = stages_raw if isinstance(stages_raw, list) else []
+        normalized_stages: list[dict[str, Any]] = []
+
+        for idx, s in enumerate(stages[:max_stages]):
+            if not isinstance(s, dict):
+                continue
+            normalized_stages.append(
+                {
+                    "stage_id": int(s.get("stage_id", idx + 1)),
+                    "title": str(s.get("title", f"階段 {idx + 1}")),
+                    "content": str(s.get("content", "")),
+                    "key_concepts": [
+                        str(c) for c in (s.get("key_concepts") or []) if isinstance(c, (str, int, float))
+                    ],
+                    "prerequisites": [
+                        str(c) for c in (s.get("prerequisites") or []) if isinstance(c, (str, int, float))
+                    ],
+                    "estimated_questions": int(s.get("estimated_questions", 2) or 2),
+                }
+            )
+
+        if not normalized_stages:
+            raise ValueError("內容切割結果缺少有效 stages")
+
+        return {
+            "stages": normalized_stages,
+            "summary": str(data.get("summary", "")),
+        }
+
+    async def _parse_or_repair_json(self, raw_text: str, max_stages: int) -> dict[str, Any]:
+        candidate = self._extract_json_candidate(raw_text)
+
+        for attempt in range(3):
+            try:
+                parsed = json.loads(candidate)
+                if not isinstance(parsed, dict):
+                    raise ValueError("回傳 JSON 不是物件")
+                return self._normalize_splitter_output(parsed, max_stages=max_stages)
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                repair_system = (
+                    "你是 JSON 修復器。只輸出合法 JSON，不要任何額外文字。"
+                    "請確保字串內換行使用 \\n 且所有欄位間有逗號。"
+                )
+                repair_user = (
+                    "請將下列內容修正為合法 JSON，保持原本語意與欄位。\n"
+                    "必要欄位：stages(array), summary(string)。\n"
+                    "stage 欄位：stage_id,title,content,key_concepts,prerequisites,estimated_questions。\n"
+                    f"目前錯誤：{e}\n\n"
+                    f"{candidate}"
+                )
+                repaired = await self.llm.chat(
+                    [LLMMessage(role=MessageRole.USER, content=repair_user)],
+                    system_prompt=repair_system,
+                )
+                candidate = self._extract_json_candidate(repaired.content)
+
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
         self._reset()
         payload = ctx.task_payload
-        raw_content: str = payload["raw_content"]
+        raw_content: str = payload.get("raw_content", "")
+        provider_file_ref: dict | None = payload.get("provider_file_ref")
         max_stages: int = payload.get("max_stages", 8)
         target_depth: str = payload.get("target_depth", "intermediate")
 
         system = SYSTEM_PROMPTS["content_splitter"].format(max_stages=max_stages)
         user_msg = (
             f"目標難度：{target_depth}\n\n"
-            f"學習材料：\n{raw_content}"
+            "請直接閱讀附件檔案並切割學習階段。"
         )
-        self._add_message(MessageRole.USER, user_msg)
+        if raw_content.strip():
+            user_msg += f"\n\n補充文字：\n{raw_content}"
+        self._messages.append(LLMMessage(role=MessageRole.USER, content=user_msg, attachment=provider_file_ref))
 
         response = await self.llm.chat(self._messages, system_prompt=system)
         self._reset()
-
-        raw_json = response.content.strip()
-        if raw_json.startswith("```"):
-            raw_json = raw_json.split("```")[1]
-            if raw_json.startswith("json"):
-                raw_json = raw_json[4:]
-        data = json.loads(raw_json.strip())
-        return data
+        return await self._parse_or_repair_json(response.content, max_stages=max_stages)

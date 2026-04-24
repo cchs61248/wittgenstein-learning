@@ -9,7 +9,8 @@ class WSMessage(BaseModel):
 
 class StartSessionPayload(BaseModel):
     user_id: str
-    content: str
+    content: str = ""
+    uploaded_file_id: Optional[str] = None
     provider: Literal["claude", "openai", "gemini"] = "claude"
     target_depth: Literal["beginner", "intermediate", "advanced"] = "intermediate"
 

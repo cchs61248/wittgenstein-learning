@@ -18,6 +18,7 @@ class TurnContext:
 class WorkingMemory:
     session_id: str
     current_stage_id: int = 0
+    stages: list[dict] = field(default_factory=list)
     current_turn: Optional[TurnContext] = None
     stage_turns: list[TurnContext] = field(default_factory=list)
     pending_questions: list[dict] = field(default_factory=list)

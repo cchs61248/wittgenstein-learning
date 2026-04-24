@@ -13,11 +13,29 @@ class ClaudeProvider(BaseLLMProvider):
         return 200_000
 
     def _to_anthropic_messages(self, messages: list[LLMMessage]) -> list[dict]:
-        return [
-            {"role": msg.role.value, "content": msg.content}
-            for msg in messages
-            if msg.role != MessageRole.SYSTEM
-        ]
+        formatted: list[dict] = []
+        for msg in messages:
+            if msg.role == MessageRole.SYSTEM:
+                continue
+            if msg.role == MessageRole.USER and msg.attachment and msg.attachment.get("claude_file_id"):
+                formatted.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": msg.content},
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "file",
+                                    "file_id": msg.attachment["claude_file_id"],
+                                },
+                            },
+                        ],
+                    }
+                )
+            else:
+                formatted.append({"role": msg.role.value, "content": msg.content})
+        return formatted
 
     async def chat(
         self,
