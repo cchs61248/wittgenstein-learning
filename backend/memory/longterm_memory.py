@@ -1,0 +1,102 @@
+import json
+from datetime import datetime
+from typing import Optional
+from ..db.database import get_db
+
+
+async def get_user_profile_summary(user_id: str) -> str:
+    db = await get_db()
+    async with db.execute(
+        "SELECT * FROM user_learning_profile WHERE user_id = ?", (user_id,)
+    ) as cur:
+        row = await cur.fetchone()
+
+    if not row:
+        return "尚無學習記錄"
+
+    profile = dict(row)
+    return (
+        f"偏好{profile.get('preferred_style', 'concrete')}式解釋，"
+        f"平均需要{profile.get('avg_attempts_per_stage', 1.5):.1f}次嘗試通過。"
+    )
+
+
+async def get_weak_concepts(user_id: str, limit: int = 5) -> str:
+    db = await get_db()
+    async with db.execute(
+        """SELECT concept_name FROM concept_mastery
+           WHERE user_id = ? AND mastery_score < 0.6
+           ORDER BY last_tested DESC LIMIT ?""",
+        (user_id, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    if not rows:
+        return "無"
+    return "、".join(row[0] for row in rows)
+
+
+async def update_concept_mastery(
+    user_id: str,
+    concept_name: str,
+    new_score: float,
+    confused_concepts: list[str],
+    successful_analogies: list[str],
+) -> None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT mastery_score, total_exposures, confusion_patterns FROM concept_mastery WHERE user_id = ? AND concept_name = ?",
+        (user_id, concept_name),
+    ) as cur:
+        row = await cur.fetchone()
+
+    if row:
+        # 指數移動平均（EMA）更新分數
+        old_score = row[0]
+        exposures = row[1] + 1
+        ema_score = 0.7 * old_score + 0.3 * new_score
+        existing_confusion = json.loads(row[2] or "[]")
+        existing_confusion = list(dict.fromkeys(existing_confusion + confused_concepts))[:10]
+
+        await db.execute(
+            """UPDATE concept_mastery
+               SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?, last_tested = ?
+               WHERE user_id = ? AND concept_name = ?""",
+            (ema_score, exposures, json.dumps(existing_confusion, ensure_ascii=False),
+             datetime.utcnow(), user_id, concept_name),
+        )
+    else:
+        await db.execute(
+            """INSERT INTO concept_mastery
+               (user_id, concept_name, mastery_score, total_exposures, confusion_patterns, successful_analogies, last_tested)
+               VALUES (?, ?, ?, 1, ?, ?, ?)""",
+            (
+                user_id, concept_name, new_score,
+                json.dumps(confused_concepts[:10], ensure_ascii=False),
+                json.dumps(successful_analogies[:5], ensure_ascii=False),
+                datetime.utcnow(),
+            ),
+        )
+    await db.commit()
+
+
+async def update_user_profile(user_id: str, attempts_this_session: float) -> None:
+    db = await get_db()
+    async with db.execute(
+        "SELECT avg_attempts_per_stage FROM user_learning_profile WHERE user_id = ?",
+        (user_id,),
+    ) as cur:
+        row = await cur.fetchone()
+
+    if row:
+        new_avg = 0.8 * row[0] + 0.2 * attempts_this_session
+        await db.execute(
+            "UPDATE user_learning_profile SET avg_attempts_per_stage = ?, updated_at = ? WHERE user_id = ?",
+            (new_avg, datetime.utcnow(), user_id),
+        )
+    else:
+        await db.execute(
+            "INSERT INTO user_learning_profile (user_id, avg_attempts_per_stage) VALUES (?, ?)",
+            (user_id, attempts_this_session),
+        )
+    await db.commit()

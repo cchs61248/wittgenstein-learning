@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# 環境變數（含 API 金鑰）
+backend/.env
+.env
+
+# 資料庫
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 前端建置產出
+frontend/dist/
+frontend/node_modules/
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
