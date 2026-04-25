@@ -29,6 +29,25 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
     { id: 'gemini-3.1-pro-preview',      label: 'Gemini 3.1 Pro Preview — 品質優先' },
     { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite Preview — 輕量快速' },
   ],
+  monica: [
+    { id: 'claude-4.6-sonnet',       label: 'Claude 4.6 Sonnet — 預設' },
+    { id: 'claude-4.5-sonnet',       label: 'Claude 4.5 Sonnet' },
+    { id: 'claude-4.5-haiku',        label: 'Claude 4.5 Haiku — 快速' },
+    { id: 'claude-4-sonnet',         label: 'Claude 4 Sonnet' },
+    { id: 'claude-4-sonnet-think',   label: 'Claude 4 Sonnet Think — 深度思考' },
+    { id: 'gpt-5.4',                 label: 'GPT-5.4' },
+    { id: 'gpt-5.3-codex',           label: 'GPT-5.3 Codex' },
+    { id: 'gpt-5.3',                 label: 'GPT-5.3' },
+    { id: 'gpt-5.2',                 label: 'GPT-5.2' },
+    { id: 'gpt-5.1',                 label: 'GPT-5.1' },
+    { id: 'gpt-5',                   label: 'GPT-5' },
+    { id: 'gpt-4o',                  label: 'GPT-4o' },
+    { id: 'gpt-4o-mini',             label: 'GPT-4o mini — 輕量' },
+    { id: 'gemini-3-1-pro',          label: 'Gemini 3.1 Pro' },
+    { id: 'gemini-3-pro',            label: 'Gemini 3 Pro' },
+    { id: 'gemini-3-flash',          label: 'Gemini 3 Flash — 快速' },
+    { id: 'gemini-2.5-flash',        label: 'Gemini 2.5 Flash' },
+  ],
 };
 
 export function UploadModal({ onStart }: Props) {
@@ -144,6 +163,7 @@ export function UploadModal({ onStart }: Props) {
               <option value="claude">Anthropic Claude</option>
               <option value="openai">OpenAI</option>
               <option value="gemini">Google Gemini</option>
+              <option value="monica">Monica（本地代理）</option>
             </select>
           </div>
 

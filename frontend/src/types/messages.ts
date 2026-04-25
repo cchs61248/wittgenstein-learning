@@ -1,4 +1,4 @@
-export type ProviderType = 'claude' | 'openai' | 'gemini';
+export type ProviderType = 'claude' | 'openai' | 'gemini' | 'monica';
 export type DepthType = 'beginner' | 'intermediate' | 'advanced';
 export type DecisionType = 'advance' | 'retry' | 'remediate' | 'reteach';
 

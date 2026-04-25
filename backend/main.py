@@ -118,6 +118,7 @@ async def websocket_endpoint(
                             "openai_file_id": pref.openai_file_id,
                             "gemini_file_uri": pref.gemini_file_uri,
                             "claude_file_id": pref.claude_file_id,
+                            "monica_file_data": pref.monica_file_data,
                         }
 
                     llm = create_provider(provider_name, model=model)

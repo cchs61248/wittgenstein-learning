@@ -1,3 +1,4 @@
+import base64
 import os
 import tempfile
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ class ProviderFileRef:
     openai_file_id: str | None = None
     gemini_file_uri: str | None = None
     claude_file_id: str | None = None
+    monica_file_data: str | None = None
 
 
 async def create_provider_file_ref(
@@ -29,6 +31,8 @@ async def create_provider_file_ref(
         return await _upload_gemini(filename, mime_type, raw)
     if provider == "claude":
         return await _upload_claude(filename, mime_type, raw)
+    if provider == "monica":
+        return _inline_monica(filename, mime_type, raw)
     raise ValueError(f"未知 provider: {provider}")
 
 
@@ -107,4 +111,14 @@ async def _upload_claude(filename: str, mime_type: str, raw: bytes) -> ProviderF
         filename=filename,
         mime_type=mime_type,
         claude_file_id=payload.get("id"),
+    )
+
+
+def _inline_monica(filename: str, mime_type: str, raw: bytes) -> ProviderFileRef:
+    b64 = base64.b64encode(raw).decode()
+    return ProviderFileRef(
+        provider="monica",
+        filename=filename,
+        mime_type=mime_type,
+        monica_file_data=f"data:{mime_type};base64,{b64}",
     )
