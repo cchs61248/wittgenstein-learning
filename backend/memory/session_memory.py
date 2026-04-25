@@ -21,6 +21,15 @@ async def create_session(
     await db.commit()
 
 
+async def store_stages(session_id: str, stages: list[dict]) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE sessions SET stages_json = ? WHERE session_id = ?",
+        (json.dumps(stages, ensure_ascii=False), session_id),
+    )
+    await db.commit()
+
+
 async def get_session(session_id: str) -> Optional[dict]:
     db = await get_db()
     async with db.execute(
@@ -28,6 +37,37 @@ async def get_session(session_id: str) -> Optional[dict]:
     ) as cur:
         row = await cur.fetchone()
     return dict(row) if row else None
+
+
+async def get_user_active_session(user_id: str) -> Optional[dict]:
+    db = await get_db()
+    async with db.execute(
+        """SELECT * FROM sessions
+           WHERE user_id = ? AND status = 'active'
+           ORDER BY updated_at DESC LIMIT 1""",
+        (user_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def complete_session(session_id: str) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE sessions SET status = 'completed', updated_at = ? WHERE session_id = ?",
+        (datetime.utcnow(), session_id),
+    )
+    await db.commit()
+
+
+async def get_stage_statuses(session_id: str) -> dict[int, str]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT stage_id, status FROM stage_progress WHERE session_id = ?",
+        (session_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return {row["stage_id"]: row["status"] for row in rows}
 
 
 async def update_current_stage(session_id: str, stage_id: int) -> None:

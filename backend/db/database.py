@@ -35,6 +35,13 @@ async def init_db(db_path: str) -> None:
     await _connection.executescript(sql)
     await _connection.commit()
 
+    # Migration 002：加入 stages_json 欄位（已存在則忽略）
+    try:
+        await _connection.execute("ALTER TABLE sessions ADD COLUMN stages_json TEXT DEFAULT '[]'")
+        await _connection.commit()
+    except Exception:
+        pass  # 欄位已存在，忽略
+
 
 async def close_db() -> None:
     global _connection

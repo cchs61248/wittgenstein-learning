@@ -125,6 +125,7 @@ class LearningOrchestrator:
             total_stages=len(stages),
             raw_content_summary=args["summary"],
         )
+        await session_memory.store_stages(session_id, stages)
         for s in stages:
             await session_memory.upsert_stage_progress(
                 session_id, s["stage_id"], "pending", 0, 0.0, {}
@@ -403,6 +404,7 @@ class LearningOrchestrator:
                 await longterm_memory.update_user_profile(user_id, len(wm.stage_turns))
                 await self.run_stage(session_id, user_id, stages, current_idx + 1, emit)
             else:
+                await session_memory.complete_session(session_id)
                 await emit({"type": "course_completed", "payload": {"message": "恭喜！你已完成所有學習階段。"}})
 
         elif d in ("retry", "remediate"):
@@ -529,3 +531,44 @@ class LearningOrchestrator:
                         "attempt_number": len(wm.stage_turns) + 1,
                     },
                 })
+
+    # ── 恢復已存在的學習會話 ──────────────────────────────────
+
+    async def resume_session(
+        self,
+        session_id: str,
+        user_id: str,
+        emit: WSEmitter,
+    ) -> None:
+        session = await session_memory.get_session(session_id)
+        if not session:
+            await emit({"type": "error", "payload": {"message": "找不到會話，請重新上傳材料"}})
+            return
+
+        stages_raw = session["stages_json"] or "[]"
+        stages: list[dict] = json.loads(stages_raw)
+        if not stages:
+            await emit({"type": "error", "payload": {"message": "會話資料不完整，請重新上傳材料"}})
+            return
+
+        statuses = await session_memory.get_stage_statuses(session_id)
+
+        wm = get_working_memory(session_id)
+        wm.stages = stages
+
+        current_stage_id = session["current_stage_id"]
+        current_idx = next(
+            (i for i, s in enumerate(stages) if s["stage_id"] == current_stage_id), 0
+        )
+
+        await emit({
+            "type": "session_started",
+            "payload": {
+                "session_id": session_id,
+                "total_stages": len(stages),
+                "stages": [{"stage_id": s["stage_id"], "title": s["title"]} for s in stages],
+                "stage_statuses": {str(k): v for k, v in statuses.items()},
+            },
+        })
+
+        await self.run_stage(session_id, user_id, stages, current_idx, emit)

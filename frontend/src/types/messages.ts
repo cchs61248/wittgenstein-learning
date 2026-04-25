@@ -23,6 +23,7 @@ export interface SessionStartedPayload {
   session_id: string;
   total_stages: number;
   stages: StageInfo[];
+  stage_statuses?: Record<string, string>;
 }
 
 export interface ExplanationChunkPayload {
@@ -93,5 +94,14 @@ export interface SubmitAnswerMessage {
     session_id: string;
     question_id: string;
     answer: string;
+  };
+}
+
+export interface ResumeSessionMessage {
+  type: 'resume_session';
+  payload: {
+    session_id: string;
+    provider: ProviderType;
+    model?: string;
   };
 }

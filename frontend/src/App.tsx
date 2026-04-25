@@ -7,6 +7,7 @@ import { StageMap } from './components/StageMap';
 import { ExplanationPanel } from './components/ExplanationPanel';
 import { QuestionPanel } from './components/QuestionPanel';
 import { LearningWebSocket } from './api/websocket';
+import { getActiveSession } from './api/session';
 import type { ServerMessage, ProviderType, DepthType } from './types/messages';
 import './App.css';
 
@@ -32,15 +33,44 @@ export default function App() {
     stages,
   } = useSessionStore();
 
-  const [showUpload, setShowUpload] = useState(true);
+  const [showUpload, setShowUpload] = useState(false);
   const wsRef = useRef<LearningWebSocket | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
 
+  // 掛載時：若有 token，先查詢是否有活躍會話；沒有才顯示上傳 modal
   useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+
+    getActiveSession(token).then((session) => {
+      if (cancelled) return;
+      if (!session) {
+        setShowUpload(true);
+        return;
+      }
+      const savedSessionId = localStorage.getItem('wl_session_id') || session.session_id;
+      sessionIdRef.current = savedSessionId;
+      const ws = new LearningWebSocket(savedSessionId, token, {
+        onMessage: handleMessage,
+        onOpen: () => {
+          setConnected(true);
+          ws.send({
+            type: 'resume_session',
+            payload: { session_id: savedSessionId, provider: 'claude' },
+          });
+        },
+        onClose: () => setConnected(false),
+      });
+      ws.connect();
+      wsRef.current = ws;
+    });
+
     return () => {
+      cancelled = true;
       wsRef.current?.close();
     };
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const handleMessage = (msg: ServerMessage) => {
     switch (msg.type) {
@@ -48,7 +78,7 @@ export default function App() {
         setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
         break;
       case 'session_started':
-        setSession(msg.payload.session_id, msg.payload.stages);
+        setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
         break;
       case 'explanation_chunk':
         appendExplanationChunk(msg.payload.chunk);
@@ -77,6 +107,10 @@ export default function App() {
         break;
       case 'error':
         console.error('Server error:', msg.payload.message);
+        // resume 或啟動失敗且尚未進入任何 stage，退回上傳畫面
+        if (!stages.length) {
+          setShowUpload(true);
+        }
         break;
     }
   };
@@ -90,8 +124,11 @@ export default function App() {
   ) => {
     if (!token) return;
 
-    const sid = sessionIdRef.current;
-    const ws = new LearningWebSocket(sid, token, {
+    wsRef.current?.close();
+    const newSid = generateSessionId();
+    sessionIdRef.current = newSid;
+
+    const ws = new LearningWebSocket(newSid, token, {
       onMessage: handleMessage,
       onOpen: () => {
         setConnected(true);
@@ -128,6 +165,17 @@ export default function App() {
         <h1>維特根斯坦學習系統</h1>
         <div className="header-right">
           <span>{email}</span>
+          <button
+            onClick={() => {
+              wsRef.current?.close();
+              wsRef.current = null;
+              sessionIdRef.current = generateSessionId();
+              setShowUpload(true);
+            }}
+            className="btn-ghost"
+          >
+            新學習
+          </button>
           <button
             onClick={() => {
               clearAuth();

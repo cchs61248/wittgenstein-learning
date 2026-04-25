@@ -19,7 +19,7 @@ interface SessionState {
   sessionId: string | null;
   stages: StageWithStatus[];
   currentStageId: number | null;
-  setSession: (sessionId: string, stages: StageInfo[]) => void;
+  setSession: (sessionId: string, stages: StageInfo[], stageStatuses?: Record<string, string>) => void;
 
   // 講解
   explanationText: string;
@@ -62,16 +62,29 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_token');
     localStorage.removeItem('wl_user_id');
     localStorage.removeItem('wl_email');
-    set({ token: null, userId: null, email: null });
+    localStorage.removeItem('wl_session_id');
+    set({ token: null, userId: null, email: null, sessionId: null, stages: [] });
   },
 
-  sessionId: null,
+  sessionId: localStorage.getItem('wl_session_id'),
   stages: [],
   currentStageId: null,
-  setSession: (sessionId, stages) =>
+  setSession: (sessionId, stages, stageStatuses?) => {
+    localStorage.setItem('wl_session_id', sessionId);
     set({
       sessionId,
-      stages: stages.map((s, i) => ({ ...s, status: i === 0 ? 'current' : 'pending' })),
+      stages: stages.map((s, i) => {
+        const dbStatus = stageStatuses?.[String(s.stage_id)];
+        let status: StageStatus;
+        if (dbStatus === 'completed') {
+          status = 'completed';
+        } else if (dbStatus === 'in_progress') {
+          status = 'current';
+        } else {
+          status = i === 0 ? 'current' : 'pending';
+        }
+        return { ...s, status };
+      }),
       currentStageId: stages[0]?.stage_id ?? null,
       explanationText: '',
       isStreaming: false,
@@ -79,7 +92,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       lastFeedback: null,
       lastDecision: null,
       courseCompleted: false,
-    }),
+    });
+  },
 
   explanationText: '',
   isStreaming: false,

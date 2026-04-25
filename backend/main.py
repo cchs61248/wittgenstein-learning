@@ -11,6 +11,7 @@ from .config import DB_PATH, CORS_ORIGINS, DEFAULT_PROVIDER
 from .db.database import init_db, close_db
 from .auth.router import router as auth_router
 from .routers.upload import router as upload_router
+from .routers.session import router as session_router
 from .auth.utils import decode_token
 from .llm.provider_factory import create_provider
 from .llm.file_adapter import create_provider_file_ref
@@ -38,6 +39,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(upload_router)
+app.include_router(session_router)
 
 
 class WebSocketManager:
@@ -75,7 +77,10 @@ async def websocket_endpoint(
     await ws_manager.connect(session_id, websocket)
 
     async def emit(msg: dict) -> None:
-        await ws_manager.send(session_id, msg)
+        try:
+            await ws_manager.send(session_id, msg)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
 
     try:
         while True:
@@ -152,6 +157,22 @@ async def websocket_endpoint(
                         answer=p["answer"],
                         emit=emit,
                     )
+
+            elif msg_type == "resume_session":
+                try:
+                    provider_name: str = p.get("provider", DEFAULT_PROVIDER)
+                    model: str | None = p.get("model") or None
+                    session_id_to_resume: str = p.get("session_id", session_id)
+                    llm = create_provider(provider_name, model=model)
+                    orchestrator = LearningOrchestrator(llm)
+                    _orchestrators[session_id_to_resume] = orchestrator
+                    await orchestrator.resume_session(
+                        session_id=session_id_to_resume,
+                        user_id=user_id,
+                        emit=emit,
+                    )
+                except Exception as e:
+                    await emit({"type": "error", "payload": {"message": f"恢復會話失敗：{e}"}})
 
             elif msg_type == "request_hint":
                 await emit({
