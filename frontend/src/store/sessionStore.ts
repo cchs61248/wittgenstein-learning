@@ -46,6 +46,7 @@ interface SessionState {
   courseCompleted: boolean;
   setCourseCompleted: () => void;
   resetExplanation: () => void;
+  clearSession: () => void;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -132,4 +133,18 @@ export const useSessionStore = create<SessionState>((set) => ({
   courseCompleted: false,
   setCourseCompleted: () => set({ courseCompleted: true }),
   resetExplanation: () => set({ explanationText: '', isStreaming: false, currentQuestion: null, lastFeedback: null }),
+  clearSession: () => {
+    localStorage.removeItem('wl_session_id');
+    set({
+      sessionId: null,
+      stages: [],
+      currentStageId: null,
+      explanationText: '',
+      isStreaming: false,
+      currentQuestion: null,
+      lastFeedback: null,
+      lastDecision: null,
+      courseCompleted: false,
+    });
+  },
 }));

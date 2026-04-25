@@ -30,6 +30,7 @@ export default function App() {
     setPendingMap,
     pendingMap,
     resetExplanation,
+    clearSession,
     stages,
   } = useSessionStore();
 
@@ -170,6 +171,7 @@ export default function App() {
               wsRef.current?.close();
               wsRef.current = null;
               sessionIdRef.current = generateSessionId();
+              clearSession();
               setShowUpload(true);
             }}
             className="btn-ghost"

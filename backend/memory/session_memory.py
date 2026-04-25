@@ -70,6 +70,46 @@ async def get_stage_statuses(session_id: str) -> dict[int, str]:
     return {row["stage_id"]: row["status"] for row in rows}
 
 
+async def store_stage_explanation(session_id: str, stage_id: int, full_explanation: str) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE stage_progress SET full_explanation = ? WHERE session_id = ? AND stage_id = ?",
+        (full_explanation, session_id, stage_id),
+    )
+    await db.commit()
+
+
+async def get_stage_explanation(session_id: str, stage_id: int) -> str:
+    db = await get_db()
+    async with db.execute(
+        "SELECT full_explanation FROM stage_progress WHERE session_id = ? AND stage_id = ?",
+        (session_id, stage_id),
+    ) as cur:
+        row = await cur.fetchone()
+    return (row["full_explanation"] or "") if row else ""
+
+
+async def store_stage_questions(session_id: str, stage_id: int, questions: list[dict]) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE stage_progress SET questions_json = ? WHERE session_id = ? AND stage_id = ?",
+        (json.dumps(questions, ensure_ascii=False), session_id, stage_id),
+    )
+    await db.commit()
+
+
+async def get_stage_questions(session_id: str, stage_id: int) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT questions_json FROM stage_progress WHERE session_id = ? AND stage_id = ?",
+        (session_id, stage_id),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return []
+    return json.loads(row["questions_json"] or "[]")
+
+
 async def update_current_stage(session_id: str, stage_id: int) -> None:
     db = await get_db()
     await db.execute(

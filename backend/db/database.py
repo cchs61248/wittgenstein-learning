@@ -42,6 +42,20 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass  # 欄位已存在，忽略
 
+    # Migration 003：加入 full_explanation 欄位至 stage_progress（已存在則忽略）
+    try:
+        await _connection.execute("ALTER TABLE stage_progress ADD COLUMN full_explanation TEXT DEFAULT ''")
+        await _connection.commit()
+    except Exception:
+        pass  # 欄位已存在，忽略
+
+    # Migration 004：加入 questions_json 欄位至 stage_progress（已存在則忽略）
+    try:
+        await _connection.execute("ALTER TABLE stage_progress ADD COLUMN questions_json TEXT DEFAULT '[]'")
+        await _connection.commit()
+    except Exception:
+        pass  # 欄位已存在，忽略
+
 
 async def close_db() -> None:
     global _connection

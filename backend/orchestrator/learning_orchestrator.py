@@ -189,6 +189,7 @@ class LearningOrchestrator:
             full_explanation += chunk
             await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
         wm.current_explanation = full_explanation
+        await session_memory.store_stage_explanation(session_id, stage["stage_id"], full_explanation)
 
         # 3. 生成問題
         q_ctx = AgentContext(
@@ -204,6 +205,7 @@ class LearningOrchestrator:
         q_result = await self.questioner.run(q_ctx)
         questions: list[dict] = q_result.get("questions", [])
         wm.pending_questions = questions
+        await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
 
         # 4. 問題區塊
         questions_md = self._build_questions_section(questions)
@@ -571,4 +573,74 @@ class LearningOrchestrator:
             },
         })
 
-        await self.run_stage(session_id, user_id, stages, current_idx, emit)
+        current_stage = stages[current_idx]
+        stored_explanation = await session_memory.get_stage_explanation(
+            session_id, current_stage["stage_id"]
+        )
+
+        if stored_explanation:
+            # 直接還原已儲存的講解，跳過 TeacherAgent
+            await self._resume_from_stored(
+                session_id, user_id, stages, current_idx, stored_explanation, emit
+            )
+        else:
+            await self.run_stage(session_id, user_id, stages, current_idx, emit)
+
+    async def _resume_from_stored(
+        self,
+        session_id: str,
+        user_id: str,
+        stages: list[dict],
+        stage_index: int,
+        stored_explanation: str,
+        emit: WSEmitter,
+    ) -> None:
+        wm = get_working_memory(session_id)
+        wm.reset_for_new_stage(stages[stage_index]["stage_id"])
+        stage = stages[stage_index]
+
+        await session_memory.update_current_stage(session_id, stage["stage_id"])
+        await session_memory.upsert_stage_progress(
+            session_id, stage["stage_id"], "in_progress", 0, 0.0, {}
+        )
+
+        progress_md = self._build_progress_table(stages, stage_index)
+        full_text = progress_md + stored_explanation
+        await emit({"type": "explanation_chunk", "payload": {"chunk": full_text, "is_final": False}})
+        wm.current_explanation = stored_explanation
+
+        # 從 DB 還原已儲存的問題，完全跳過 LLM
+        questions: list[dict] = await session_memory.get_stage_questions(session_id, stage["stage_id"])
+        wm.pending_questions = questions
+
+        questions_md = self._build_questions_section(questions)
+        if questions_md:
+            await emit({"type": "explanation_chunk", "payload": {"chunk": questions_md, "is_final": False}})
+
+        await emit({"type": "explanation_chunk", "payload": {"chunk": "", "is_final": True}})
+        await emit({
+            "type": "explanation_complete",
+            "payload": {
+                "stage_id": stage["stage_id"],
+                "stage_title": stage["title"],
+                "full_explanation": full_text + questions_md,
+            },
+        })
+
+        if questions:
+            q = questions[0]
+            wm.current_turn = TurnContext(
+                turn_id=str(uuid.uuid4()),
+                question_id=q["question_id"],
+                question_text=q["text"],
+            )
+            await emit({
+                "type": "question",
+                "payload": {
+                    "question_id": q["question_id"],
+                    "text": q["text"],
+                    "type": q.get("type", "understand"),
+                    "stage_id": stage["stage_id"],
+                    "attempt_number": 1,
+                },
+            })
