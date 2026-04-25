@@ -596,3 +596,87 @@ textarea:focus {
   margin-top: -10px;
   margin-bottom: 12px;
 }
+
+/* ── Markdown 表格 ── */
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 14px;
+}
+
+.markdown-content th {
+  background: var(--bg-hover);
+  color: var(--accent-light);
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 2px solid var(--border);
+}
+
+.markdown-content td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.markdown-content tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── 知識地圖 Modal ── */
+.km-modal {
+  max-width: 680px;
+}
+
+.km-summary {
+  color: var(--accent-light);
+  font-size: 14px;
+  font-style: italic;
+  margin-bottom: 12px !important;
+}
+
+.km-desc {
+  margin-bottom: 16px !important;
+}
+
+.km-table-wrap {
+  overflow-y: auto;
+  max-height: 360px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+}
+
+.km-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.km-table th {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  padding: 8px 16px;
+  text-align: left;
+  position: sticky;
+  top: 0;
+}
+
+.km-table td {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+}
+
+.km-node-id {
+  font-weight: 700;
+  color: var(--accent-light);
+  white-space: nowrap;
+  width: 80px;
+}
+
+.km-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px !important;
+}

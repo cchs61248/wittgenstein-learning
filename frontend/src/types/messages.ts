@@ -2,6 +2,17 @@ export type ProviderType = 'claude' | 'openai' | 'gemini';
 export type DepthType = 'beginner' | 'intermediate' | 'advanced';
 export type DecisionType = 'advance' | 'retry' | 'remediate' | 'reteach';
 
+export interface KnowledgeMapNode {
+  node_id: string;
+  stage_id: number;
+  title: string;
+}
+
+export interface KnowledgeMapPayload {
+  nodes: KnowledgeMapNode[];
+  summary: string;
+}
+
 export interface StageInfo {
   stage_id: number;
   title: string;
@@ -53,9 +64,11 @@ export interface ErrorPayload {
 }
 
 export type ServerMessage =
+  | { type: 'knowledge_map'; payload: KnowledgeMapPayload }
   | { type: 'session_started'; payload: SessionStartedPayload }
   | { type: 'explanation_chunk'; payload: ExplanationChunkPayload }
   | { type: 'explanation_complete'; payload: ExplanationCompletePayload }
+  | { type: 'explanation_reset'; payload: Record<string, never> }
   | { type: 'question'; payload: QuestionPayload }
   | { type: 'feedback'; payload: FeedbackPayload }
   | { type: 'stage_decision'; payload: StageDecisionPayload }

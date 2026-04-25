@@ -130,6 +130,18 @@ async def websocket_endpoint(
                 except Exception as e:
                     await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
 
+            elif msg_type == "confirm_map":
+                orch = _orchestrators.get(session_id)
+                if orch:
+                    try:
+                        await orch.confirm_session(
+                            session_id=session_id,
+                            user_id=user_id,
+                            emit=emit,
+                        )
+                    except Exception as e:
+                        await emit({"type": "error", "payload": {"message": f"確認知識地圖失敗：{e}"}})
+
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)
                 if orch:

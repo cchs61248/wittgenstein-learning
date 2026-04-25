@@ -28,9 +28,17 @@ class ContentSplitterAgent(BaseAgent):
         for idx, s in enumerate(stages[:max_stages]):
             if not isinstance(s, dict):
                 continue
+            raw_node_id = s.get("node_id")
+            if raw_node_id:
+                node_id = str(raw_node_id)
+            else:
+                chapter = (idx // 3) + 1
+                section = (idx % 3) + 1
+                node_id = f"{chapter}.{section}"
             normalized_stages.append(
                 {
                     "stage_id": int(s.get("stage_id", idx + 1)),
+                    "node_id": node_id,
                     "title": str(s.get("title", f"階段 {idx + 1}")),
                     "content": str(s.get("content", "")),
                     "key_concepts": [

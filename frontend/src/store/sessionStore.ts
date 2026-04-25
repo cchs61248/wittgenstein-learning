@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload } from '../types/messages';
+import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode } from '../types/messages';
 
 export type StageStatus = 'pending' | 'current' | 'completed';
 
@@ -36,11 +36,16 @@ interface SessionState {
   setDecision: (d: StageDecisionPayload) => void;
   advanceStage: (nextStageId: number | null) => void;
 
+  // 知識地圖確認
+  pendingMap: { nodes: KnowledgeMapNode[]; summary: string } | null;
+  setPendingMap: (map: { nodes: KnowledgeMapNode[]; summary: string } | null) => void;
+
   // UI 狀態
   isConnected: boolean;
   setConnected: (v: boolean) => void;
   courseCompleted: boolean;
   setCourseCompleted: () => void;
+  resetExplanation: () => void;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -105,8 +110,12 @@ export const useSessionStore = create<SessionState>((set) => ({
       lastFeedback: null,
     })),
 
+  pendingMap: null,
+  setPendingMap: (map) => set({ pendingMap: map }),
+
   isConnected: false,
   setConnected: (v) => set({ isConnected: v }),
   courseCompleted: false,
   setCourseCompleted: () => set({ courseCompleted: true }),
+  resetExplanation: () => set({ explanationText: '', isStreaming: false, currentQuestion: null, lastFeedback: null }),
 }));

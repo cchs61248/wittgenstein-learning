@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSessionStore } from './store/sessionStore';
 import { AuthForm } from './components/AuthForm';
 import { UploadModal } from './components/UploadModal';
+import { KnowledgeMapModal } from './components/KnowledgeMapModal';
 import { StageMap } from './components/StageMap';
 import { ExplanationPanel } from './components/ExplanationPanel';
 import { QuestionPanel } from './components/QuestionPanel';
@@ -25,6 +26,9 @@ export default function App() {
     advanceStage,
     setConnected,
     setCourseCompleted,
+    setPendingMap,
+    pendingMap,
+    resetExplanation,
     stages,
   } = useSessionStore();
 
@@ -40,6 +44,9 @@ export default function App() {
 
   const handleMessage = (msg: ServerMessage) => {
     switch (msg.type) {
+      case 'knowledge_map':
+        setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
+        break;
       case 'session_started':
         setSession(msg.payload.session_id, msg.payload.stages);
         break;
@@ -49,6 +56,9 @@ export default function App() {
         break;
       case 'explanation_complete':
         setExplanationComplete();
+        break;
+      case 'explanation_reset':
+        resetExplanation();
         break;
       case 'question':
         setQuestion(msg.payload);
@@ -140,8 +150,20 @@ export default function App() {
         </main>
       </div>
 
-      {showUpload && stages.length === 0 && (
+      {showUpload && stages.length === 0 && !pendingMap && (
         <UploadModal onStart={handleStart} />
+      )}
+
+      {pendingMap && (
+        <KnowledgeMapModal
+          nodes={pendingMap.nodes}
+          summary={pendingMap.summary}
+          onConfirm={() => {
+            setPendingMap(null);
+            setShowUpload(false);
+            wsRef.current?.send({ type: 'confirm_map', payload: {} });
+          }}
+        />
       )}
     </div>
   );
