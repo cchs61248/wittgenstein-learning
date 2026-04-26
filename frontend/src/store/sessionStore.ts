@@ -176,6 +176,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   }),
   clearSession: () => {
     localStorage.removeItem('wl_session_id');
+    localStorage.removeItem('wl_provider');
+    localStorage.removeItem('wl_model');
     set({
       sessionId: null,
       stages: [],

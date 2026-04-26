@@ -57,9 +57,11 @@ export default function App() {
         onMessage: handleMessage,
         onOpen: () => {
           setConnected(true);
+          const savedProvider = localStorage.getItem('wl_provider') || 'claude';
+          const savedModel = localStorage.getItem('wl_model') || undefined;
           ws.send({
             type: 'resume_session',
-            payload: { session_id: savedSessionId, provider: 'claude' },
+            payload: { session_id: savedSessionId, provider: savedProvider, model: savedModel },
           });
         },
         onClose: () => setConnected(false),
@@ -127,6 +129,9 @@ export default function App() {
     content?: string
   ) => {
     if (!token) return;
+
+    localStorage.setItem('wl_provider', provider);
+    localStorage.setItem('wl_model', model);
 
     wsRef.current?.close();
     const newSid = generateSessionId();
