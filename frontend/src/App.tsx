@@ -32,6 +32,8 @@ export default function App() {
     resetExplanation,
     clearSession,
     stages,
+    setAwaitingFeedback,
+    storeStageExplanation,
   } = useSessionStore();
 
   const [showUpload, setShowUpload] = useState(false);
@@ -87,6 +89,7 @@ export default function App() {
         break;
       case 'explanation_complete':
         setExplanationComplete();
+        storeStageExplanation(msg.payload.stage_id, msg.payload.full_explanation);
         break;
       case 'explanation_reset':
         resetExplanation();
@@ -146,6 +149,7 @@ export default function App() {
   };
 
   const handleSubmitAnswer = (questionId: string, answer: string) => {
+    setAwaitingFeedback(true);
     wsRef.current?.send({
       type: 'submit_answer',
       payload: {

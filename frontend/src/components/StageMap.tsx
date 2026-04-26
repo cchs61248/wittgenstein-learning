@@ -8,6 +8,9 @@ const statusLabel: Record<StageStatus, string> = {
 
 export function StageMap() {
   const stages = useSessionStore((s) => s.stages);
+  const selectedStageId = useSessionStore((s) => s.selectedStageId);
+  const setSelectedStage = useSessionStore((s) => s.setSelectedStage);
+  const stageExplanations = useSessionStore((s) => s.stageExplanations);
   const total = stages.length;
   const completed = stages.filter((s) => s.status === 'completed').length;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -20,14 +23,32 @@ export function StageMap() {
       </div>
       <p className="progress-label">{pct}% 完成</p>
 
+      {selectedStageId !== null && (
+        <button className="btn-ghost btn-sm stage-map-back" onClick={() => setSelectedStage(null)}>
+          ← 返回當前
+        </button>
+      )}
+
       <ul className="stage-list">
-        {stages.map((stage) => (
-          <li key={stage.stage_id} className={`stage-item stage-${stage.status}`}>
-            <span className="stage-dot" />
-            <span className="stage-title">{stage.title}</span>
-            <span className="stage-status-label">{statusLabel[stage.status]}</span>
-          </li>
-        ))}
+        {stages.map((stage) => {
+          const canReview = stage.status === 'completed' && stageExplanations[stage.stage_id];
+          const isSelected = selectedStageId === stage.stage_id;
+          return (
+            <li
+              key={stage.stage_id}
+              className={`stage-item stage-${stage.status}${isSelected ? ' stage-selected' : ''}${canReview ? ' stage-clickable' : ''}`}
+              onClick={canReview ? () => setSelectedStage(stage.stage_id) : undefined}
+            >
+              <span className="stage-dot" />
+              <div className="stage-info">
+                <span className="stage-title">{stage.title}</span>
+                <span className="stage-status-label">
+                  {isSelected ? '回顧中' : statusLabel[stage.status]}
+                </span>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </aside>
   );

@@ -112,6 +112,7 @@ body {
   padding: 8px 10px;
   border-radius: 8px;
   font-size: 13px;
+  transition: background 0.15s;
 }
 
 .stage-pending { color: var(--text-muted); }
@@ -132,14 +133,12 @@ body {
 }
 
 .stage-title {
-  flex: 1;
   line-height: 1.4;
 }
 
 .stage-status-label {
   font-size: 11px;
   color: var(--text-muted);
-  flex-shrink: 0;
 }
 
 /* ── 主內容 ── */
@@ -679,4 +678,123 @@ textarea:focus {
   font-size: 12px;
   color: var(--text-muted);
   margin-bottom: 4px !important;
+}
+
+/* ── 回饋卡片 ── */
+.feedback-card {
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  border-left: 4px solid;
+}
+
+.feedback-good {
+  background: rgba(74, 222, 128, 0.07);
+  border-color: var(--green);
+}
+
+.feedback-low {
+  background: rgba(250, 204, 21, 0.07);
+  border-color: var(--yellow);
+}
+
+.feedback-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.feedback-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.score-badge {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.score-pass { color: var(--green); }
+.score-fail { color: var(--yellow); }
+
+.feedback-text {
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  margin-bottom: 0;
+}
+
+.feedback-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.feedback-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.btn-proceed {
+  padding: 8px 20px;
+}
+
+/* ── 回顧模式 Banner ── */
+.review-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(124, 106, 247, 0.1);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--accent-light);
+}
+
+.btn-sm {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+/* ── 側邊欄可點擊 ── */
+.stage-clickable {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.stage-clickable:hover {
+  background: var(--bg-hover);
+}
+
+.stage-selected {
+  background: rgba(124, 106, 247, 0.12);
+  border-left: 3px solid var(--accent);
+  color: var(--accent-light);
+}
+
+.stage-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.stage-map-back {
+  width: 100%;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

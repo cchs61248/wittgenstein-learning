@@ -26,14 +26,22 @@ interface SessionState {
   isStreaming: boolean;
   appendExplanationChunk: (chunk: string) => void;
   setExplanationComplete: () => void;
+  stageExplanations: Record<number, string>;
+  storeStageExplanation: (stageId: number, text: string) => void;
+  selectedStageId: number | null;
+  setSelectedStage: (id: number | null) => void;
 
   // 問答
   currentQuestion: QuestionPayload | null;
   lastFeedback: FeedbackPayload | null;
   lastDecision: StageDecisionPayload | null;
+  isAwaitingFeedback: boolean;
+  pendingNextQuestion: QuestionPayload | null;
   setQuestion: (q: QuestionPayload) => void;
   setFeedback: (f: FeedbackPayload) => void;
   setDecision: (d: StageDecisionPayload) => void;
+  setAwaitingFeedback: (v: boolean) => void;
+  proceedToNextQuestion: () => void;
   advanceStage: (nextStageId: number | null) => void;
 
   // 知識地圖確認
@@ -92,6 +100,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       currentQuestion: null,
       lastFeedback: null,
       lastDecision: null,
+      pendingNextQuestion: null,
+      isAwaitingFeedback: false,
       courseCompleted: false,
     });
   },
@@ -101,13 +111,34 @@ export const useSessionStore = create<SessionState>((set) => ({
   appendExplanationChunk: (chunk) =>
     set((s) => ({ explanationText: s.explanationText + chunk, isStreaming: true })),
   setExplanationComplete: () => set({ isStreaming: false }),
+  stageExplanations: {},
+  storeStageExplanation: (stageId, text) =>
+    set((s) => ({ stageExplanations: { ...s.stageExplanations, [stageId]: text } })),
+  selectedStageId: null,
+  setSelectedStage: (id) => set({ selectedStageId: id }),
 
   currentQuestion: null,
   lastFeedback: null,
   lastDecision: null,
-  setQuestion: (q) => set({ currentQuestion: q, lastFeedback: null }),
-  setFeedback: (f) => set({ lastFeedback: f }),
+  isAwaitingFeedback: false,
+  pendingNextQuestion: null,
+  setQuestion: (q) =>
+    set((s) => {
+      if (s.lastFeedback) {
+        // 先顯示 feedback，暫存下一題
+        return { pendingNextQuestion: q, isAwaitingFeedback: false };
+      }
+      return { currentQuestion: q, lastFeedback: null, pendingNextQuestion: null, isAwaitingFeedback: false };
+    }),
+  setFeedback: (f) => set({ lastFeedback: f, isAwaitingFeedback: false }),
   setDecision: (d) => set({ lastDecision: d }),
+  setAwaitingFeedback: (v) => set({ isAwaitingFeedback: v }),
+  proceedToNextQuestion: () =>
+    set((s) => ({
+      currentQuestion: s.pendingNextQuestion ?? s.currentQuestion,
+      pendingNextQuestion: null,
+      lastFeedback: null,
+    })),
   advanceStage: (nextStageId) =>
     set((s) => ({
       stages: s.stages.map((st) => ({
@@ -123,6 +154,9 @@ export const useSessionStore = create<SessionState>((set) => ({
       explanationText: '',
       currentQuestion: null,
       lastFeedback: null,
+      pendingNextQuestion: null,
+      isAwaitingFeedback: false,
+      selectedStageId: null,
     })),
 
   pendingMap: null,
@@ -132,7 +166,14 @@ export const useSessionStore = create<SessionState>((set) => ({
   setConnected: (v) => set({ isConnected: v }),
   courseCompleted: false,
   setCourseCompleted: () => set({ courseCompleted: true }),
-  resetExplanation: () => set({ explanationText: '', isStreaming: false, currentQuestion: null, lastFeedback: null }),
+  resetExplanation: () => set({
+    explanationText: '',
+    isStreaming: false,
+    currentQuestion: null,
+    lastFeedback: null,
+    pendingNextQuestion: null,
+    isAwaitingFeedback: false,
+  }),
   clearSession: () => {
     localStorage.removeItem('wl_session_id');
     set({
@@ -144,7 +185,11 @@ export const useSessionStore = create<SessionState>((set) => ({
       currentQuestion: null,
       lastFeedback: null,
       lastDecision: null,
+      pendingNextQuestion: null,
+      isAwaitingFeedback: false,
       courseCompleted: false,
+      stageExplanations: {},
+      selectedStageId: null,
     });
   },
 }));
