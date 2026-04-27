@@ -24,6 +24,7 @@ class WorkingMemory:
     pending_questions: list[dict] = field(default_factory=list)
     current_explanation: str = ""
     stage_evaluations: list[dict] = field(default_factory=list)
+    current_attempt: int = 1
 
     def get_compressed_history(self, max_turns: int = 3) -> list[dict]:
         recent = self.stage_turns[-max_turns:]
@@ -47,6 +48,7 @@ class WorkingMemory:
         self.pending_questions = []
         self.current_explanation = ""
         self.stage_evaluations = []
+        self.current_attempt = 1
 
 
 _store: dict[str, WorkingMemory] = {}

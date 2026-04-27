@@ -365,7 +365,7 @@ class LearningOrchestrator:
                     "text": q["text"],
                     "type": q.get("type", "understand"),
                     "stage_id": current_stage_id,
-                    "attempt_number": len(wm.stage_turns) + 1,
+                    "attempt_number": wm.current_attempt,
                 },
             })
         else:
@@ -430,7 +430,7 @@ class LearningOrchestrator:
                 await emit({"type": "course_completed", "payload": {"message": "恭喜！你已完成所有學習階段。"}})
 
         elif d in ("retry", "remediate"):
-            attempt = len(wm.stage_turns) + 1
+            wm.current_attempt += 1
 
             # 清除並重建畫面：顯示進度表 + 補強說明 + 新問題
             await emit({"type": "explanation_reset", "payload": {}})
@@ -453,12 +453,18 @@ class LearningOrchestrator:
                 task_payload={
                     "stage": stage,
                     "num_questions": 2,
-                    "attempt_number": attempt,
+                    "attempt_number": wm.current_attempt,
                     "previous_question_ids": [t.question_id for t in wm.stage_turns],
                 },
             )
             q_result = await self.questioner.run(q_ctx)
             questions: list[dict] = q_result.get("questions", [])
+            # 確保問題 ID 在 stage_turns 中唯一，避免與前次嘗試碰撞
+            used_ids = {t.question_id for t in wm.stage_turns}
+            for q in questions:
+                if not q.get("question_id") or q["question_id"] in used_ids:
+                    q["question_id"] = f"q_{stage['stage_id']}_{wm.current_attempt}_{uuid.uuid4().hex[:8]}"
+                used_ids.add(q["question_id"])
             wm.pending_questions = questions
             wm.stage_evaluations = []
 
@@ -482,11 +488,12 @@ class LearningOrchestrator:
                         "text": q["text"],
                         "type": q.get("type", "understand"),
                         "stage_id": stage["stage_id"],
-                        "attempt_number": attempt,
+                        "attempt_number": wm.current_attempt,
                     },
                 })
 
         elif d == "reteach":
+            wm.current_attempt += 1
             await emit({"type": "explanation_reset", "payload": {}})
 
             progress_md = self._build_progress_table(stages, current_idx)
@@ -522,12 +529,17 @@ class LearningOrchestrator:
                 task_payload={
                     "stage": stage,
                     "num_questions": 2,
-                    "attempt_number": len(wm.stage_turns) + 1,
+                    "attempt_number": wm.current_attempt,
                     "previous_question_ids": [t.question_id for t in wm.stage_turns],
                 },
             )
             q_result = await self.questioner.run(q_ctx)
             questions = q_result.get("questions", [])
+            used_ids = {t.question_id for t in wm.stage_turns}
+            for q in questions:
+                if not q.get("question_id") or q["question_id"] in used_ids:
+                    q["question_id"] = f"q_{stage['stage_id']}_{wm.current_attempt}_{uuid.uuid4().hex[:8]}"
+                used_ids.add(q["question_id"])
             wm.pending_questions = questions
 
             questions_md = self._build_questions_section(questions)
@@ -550,7 +562,7 @@ class LearningOrchestrator:
                         "text": q["text"],
                         "type": q.get("type", "understand"),
                         "stage_id": stage["stage_id"],
-                        "attempt_number": len(wm.stage_turns) + 1,
+                        "attempt_number": wm.current_attempt,
                     },
                 })
 

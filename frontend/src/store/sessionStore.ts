@@ -172,7 +172,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setQaHistory: (records) => set({ qaHistory: records }),
   proceedToNextQuestion: () =>
     set((s) => ({
-      currentQuestion: s.pendingNextQuestion ?? s.currentQuestion,
+      currentQuestion: s.pendingNextQuestion ?? null,
       pendingNextQuestion: null,
       lastFeedback: null,
     })),
