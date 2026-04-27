@@ -88,6 +88,7 @@ export type ServerMessage =
   | { type: 'stage_decision'; payload: StageDecisionPayload }
   | { type: 'qa_history'; payload: QaHistoryPayload }
   | { type: 'course_completed'; payload: { message: string } }
+  | { type: 'kicked'; payload: { message: string } }
   | { type: 'error'; payload: ErrorPayload };
 
 // 客戶端 → 伺服器

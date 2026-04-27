@@ -39,6 +39,7 @@ export default function App() {
   } = useSessionStore();
 
   const [showUpload, setShowUpload] = useState(false);
+  const [kickedMessage, setKickedMessage] = useState<string | null>(null);
   const wsRef = useRef<LearningWebSocket | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
 
@@ -136,6 +137,11 @@ export default function App() {
           score: r.score,
           feedbackText: r.feedback_text,
         })));
+        break;
+      case 'kicked':
+        wsRef.current?.close();
+        wsRef.current = null;
+        setKickedMessage(msg.payload.message);
         break;
       case 'course_completed':
         setCourseCompleted();
@@ -258,6 +264,24 @@ export default function App() {
             });
           }}
         />
+      )}
+
+      {kickedMessage && (
+        <div className="modal-overlay kicked-overlay">
+          <div className="modal-card kicked-card">
+            <h2>連線已中斷</h2>
+            <p>{kickedMessage}</p>
+            <button
+              className="btn-primary btn-large"
+              onClick={() => {
+                setKickedMessage(null);
+                window.location.reload();
+              }}
+            >
+              重新整理
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

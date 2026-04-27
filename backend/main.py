@@ -16,7 +16,7 @@ from .auth.utils import decode_token
 from .llm.provider_factory import create_provider
 from .llm.file_adapter import create_provider_file_ref
 from .orchestrator.learning_orchestrator import LearningOrchestrator
-from .memory.working_memory import get_working_memory
+from .memory.working_memory import get_working_memory, delete_working_memory
 from .files.upload_store import load_upload
 
 
@@ -44,19 +44,45 @@ app.include_router(session_router)
 
 class WebSocketManager:
     def __init__(self):
-        self._active: dict[str, WebSocket] = {}
+        self._sid_to_ws: dict[str, WebSocket] = {}   # session_id → WebSocket
+        self._uid_to_sid: dict[str, str] = {}          # user_id → 當前 session_id
 
-    async def connect(self, session_id: str, ws: WebSocket) -> None:
+    async def connect(self, session_id: str, user_id: str, ws: WebSocket) -> str | None:
+        """接受新連線，踢掉同 user_id 的舊連線。回傳被踢掉的舊 session_id（若不同），否則 None。"""
         await ws.accept()
-        self._active[session_id] = ws
+
+        old_session_id = self._uid_to_sid.get(user_id)
+        evicted_session_id: str | None = None
+
+        if old_session_id:
+            old_ws = self._sid_to_ws.pop(old_session_id, None)
+            if old_ws:
+                try:
+                    await old_ws.send_text(json.dumps(
+                        {"type": "kicked", "payload": {"message": "你已在其他裝置或視窗登入，此連線已中斷。"}},
+                        ensure_ascii=False,
+                    ))
+                    await old_ws.close(code=4002)
+                except Exception:
+                    pass
+            # 只有 session 不同才需要外部清理舊 orchestrator
+            if old_session_id != session_id:
+                evicted_session_id = old_session_id
+
+        self._sid_to_ws[session_id] = ws
+        self._uid_to_sid[user_id] = session_id
+        return evicted_session_id
 
     async def send(self, session_id: str, message: dict) -> None:
-        ws = self._active.get(session_id)
+        ws = self._sid_to_ws.get(session_id)
         if ws:
             await ws.send_text(json.dumps(message, ensure_ascii=False))
 
-    def disconnect(self, session_id: str) -> None:
-        self._active.pop(session_id, None)
+    def disconnect(self, session_id: str, user_id: str) -> None:
+        self._sid_to_ws.pop(session_id, None)
+        # 只在 uid_to_sid 仍指向此 session 時才移除（避免覆蓋新連線的映射）
+        if self._uid_to_sid.get(user_id) == session_id:
+            self._uid_to_sid.pop(user_id, None)
 
 
 ws_manager = WebSocketManager()
@@ -74,7 +100,10 @@ async def websocket_endpoint(
         return
 
     user_id: str = payload["sub"]
-    await ws_manager.connect(session_id, websocket)
+    evicted_sid = await ws_manager.connect(session_id, user_id, websocket)
+    if evicted_sid:
+        _orchestrators.pop(evicted_sid, None)
+        delete_working_memory(evicted_sid)
 
     async def emit(msg: dict) -> None:
         try:
@@ -188,8 +217,9 @@ async def websocket_endpoint(
                 })
 
     except WebSocketDisconnect:
-        ws_manager.disconnect(session_id)
+        ws_manager.disconnect(session_id, user_id)
         _orchestrators.pop(session_id, None)
+        delete_working_memory(session_id)
 
 
 # 會話級 orchestrator 暫存（單 process 內有效）

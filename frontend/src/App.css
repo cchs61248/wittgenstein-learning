@@ -725,7 +725,9 @@ textarea:focus {
 .feedback-text {
   font-size: 14px;
   line-height: 1.7;
-  white-space: pre-wrap;
+}
+
+.feedback-text.markdown-content p:last-child {
   margin-bottom: 0;
 }
 
@@ -913,4 +915,28 @@ textarea:disabled {
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--text-muted);
+}
+
+/* ── 被踢掉的連線遮罩 ── */
+.kicked-overlay {
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.kicked-card {
+  max-width: 400px;
+  text-align: center;
+  border-color: var(--red);
+}
+
+.kicked-card h2 {
+  color: var(--red);
+  font-size: 20px;
+  margin-bottom: 12px;
+}
+
+.kicked-card p {
+  color: var(--text);
+  font-size: 14px;
+  margin-bottom: 0;
 }
