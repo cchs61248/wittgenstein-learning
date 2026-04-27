@@ -37,4 +37,6 @@ class EvaluatorAgent(BaseAgent):
             if raw_json.startswith("json"):
                 raw_json = raw_json[4:]
         data = json.loads(raw_json.strip())
+        if isinstance(data.get("feedback"), str):
+            data["feedback"] = data["feedback"].replace("\\n", "\n")
         return data

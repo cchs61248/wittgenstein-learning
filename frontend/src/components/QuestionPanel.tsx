@@ -1,10 +1,14 @@
 import { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useSessionStore } from '../store/sessionStore';
 import type { QaHistoryItem } from '../store/sessionStore';
 
 interface Props {
   onSubmit: (questionId: string, answer: string) => void;
 }
+
+const normalizeText = (text: string) => text.replace(/\\n/g, '\n');
 
 const typeLabel: Record<string, string> = {
   apply: '應用型',
@@ -30,7 +34,9 @@ function HistoryDetail({ item }: { item: QaHistoryItem }) {
             {(item.score * 100).toFixed(0)} 分
           </span>
         </div>
-        <p className="feedback-text">{item.feedbackText}</p>
+        <div className="feedback-text markdown-content">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeText(item.feedbackText)}</ReactMarkdown>
+        </div>
         {item.clarificationQuestion && (
           <p className="clarification">💬 {item.clarificationQuestion}</p>
         )}
@@ -137,7 +143,9 @@ export function QuestionPanel({ onSubmit }: Props) {
               {(lastFeedback.score * 100).toFixed(0)} 分
             </span>
           </div>
-          <p className="feedback-text">{lastFeedback.feedback_text}</p>
+          <div className="feedback-text markdown-content">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeText(lastFeedback.feedback_text)}</ReactMarkdown>
+          </div>
           {lastFeedback.clarification_question && (
             <p className="clarification">💬 {lastFeedback.clarification_question}</p>
           )}
