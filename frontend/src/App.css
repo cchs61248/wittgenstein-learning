@@ -798,3 +798,119 @@ textarea:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── 歷史回答選單 ── */
+.qa-history-section {
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.qa-history-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.qa-history-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.qa-history-list {
+  border-top: 1px solid var(--border);
+}
+
+.qa-history-item {
+  display: grid;
+  grid-template-columns: 20px 52px 1fr 48px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.qa-history-item:first-child {
+  border-top: none;
+}
+
+.qa-history-item:hover {
+  background: var(--bg-hover);
+}
+
+.qa-history-item-selected {
+  background: rgba(124, 106, 247, 0.08);
+}
+
+.history-idx {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.history-question-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.qa-history-detail {
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.qa-history-detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qa-history-detail-block p {
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.qa-history-feedback {
+  border-radius: 8px;
+  padding: 10px 14px;
+  border-left: 3px solid;
+}
+
+.qa-history-feedback-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.detail-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+}

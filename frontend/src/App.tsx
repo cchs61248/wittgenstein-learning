@@ -34,6 +34,7 @@ export default function App() {
     stages,
     setAwaitingFeedback,
     storeStageExplanation,
+    setPendingAnswer,
   } = useSessionStore();
 
   const [showUpload, setShowUpload] = useState(false);
@@ -171,6 +172,7 @@ export default function App() {
   };
 
   const handleSubmitAnswer = (questionId: string, answer: string) => {
+    setPendingAnswer(answer);
     setAwaitingFeedback(true);
     wsRef.current?.send({
       type: 'submit_answer',

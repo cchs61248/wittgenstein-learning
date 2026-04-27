@@ -7,6 +7,16 @@ interface StageWithStatus extends StageInfo {
   status: StageStatus;
 }
 
+export interface QaHistoryItem {
+  questionId: string;
+  questionText: string;
+  questionType: 'apply' | 'understand' | 'create';
+  userAnswer: string;
+  score: number;
+  feedbackText: string;
+  clarificationQuestion?: string | null;
+}
+
 interface SessionState {
   // 認證
   token: string | null;
@@ -37,10 +47,13 @@ interface SessionState {
   lastDecision: StageDecisionPayload | null;
   isAwaitingFeedback: boolean;
   pendingNextQuestion: QuestionPayload | null;
+  pendingAnswer: string | null;
+  qaHistory: QaHistoryItem[];
   setQuestion: (q: QuestionPayload) => void;
   setFeedback: (f: FeedbackPayload) => void;
   setDecision: (d: StageDecisionPayload) => void;
   setAwaitingFeedback: (v: boolean) => void;
+  setPendingAnswer: (answer: string) => void;
   proceedToNextQuestion: () => void;
   advanceStage: (nextStageId: number | null) => void;
 
@@ -122,17 +135,39 @@ export const useSessionStore = create<SessionState>((set) => ({
   lastDecision: null,
   isAwaitingFeedback: false,
   pendingNextQuestion: null,
+  pendingAnswer: null,
+  qaHistory: [],
   setQuestion: (q) =>
     set((s) => {
       if (s.lastFeedback) {
-        // 先顯示 feedback，暫存下一題
         return { pendingNextQuestion: q, isAwaitingFeedback: false };
       }
       return { currentQuestion: q, lastFeedback: null, pendingNextQuestion: null, isAwaitingFeedback: false };
     }),
-  setFeedback: (f) => set({ lastFeedback: f, isAwaitingFeedback: false }),
+  setFeedback: (f) =>
+    set((s) => {
+      const item: QaHistoryItem | null =
+        s.currentQuestion && s.pendingAnswer !== null
+          ? {
+              questionId: s.currentQuestion.question_id,
+              questionText: s.currentQuestion.text,
+              questionType: s.currentQuestion.type,
+              userAnswer: s.pendingAnswer,
+              score: f.score,
+              feedbackText: f.feedback_text,
+              clarificationQuestion: f.clarification_question,
+            }
+          : null;
+      return {
+        lastFeedback: f,
+        isAwaitingFeedback: false,
+        pendingAnswer: null,
+        qaHistory: item ? [...s.qaHistory, item] : s.qaHistory,
+      };
+    }),
   setDecision: (d) => set({ lastDecision: d }),
   setAwaitingFeedback: (v) => set({ isAwaitingFeedback: v }),
+  setPendingAnswer: (answer) => set({ pendingAnswer: answer }),
   proceedToNextQuestion: () =>
     set((s) => ({
       currentQuestion: s.pendingNextQuestion ?? s.currentQuestion,
@@ -157,6 +192,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingNextQuestion: null,
       isAwaitingFeedback: false,
       selectedStageId: null,
+      qaHistory: [],
+      pendingAnswer: null,
     })),
 
   pendingMap: null,
@@ -192,6 +229,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       courseCompleted: false,
       stageExplanations: {},
       selectedStageId: null,
+      qaHistory: [],
+      pendingAnswer: null,
     });
   },
 }));

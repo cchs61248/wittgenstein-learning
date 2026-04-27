@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useSessionStore } from '../store/sessionStore';
+import type { QaHistoryItem } from '../store/sessionStore';
 
 interface Props {
   onSubmit: (questionId: string, answer: string) => void;
@@ -11,6 +12,33 @@ const typeLabel: Record<string, string> = {
   create: '創作型',
 };
 
+function HistoryDetail({ item }: { item: QaHistoryItem }) {
+  return (
+    <div className="qa-history-detail">
+      <div className="qa-history-detail-block">
+        <span className="detail-label">題目</span>
+        <p>{item.questionText}</p>
+      </div>
+      <div className="qa-history-detail-block">
+        <span className="detail-label">你的回答</span>
+        <p>{item.userAnswer}</p>
+      </div>
+      <div className={`qa-history-detail-block qa-history-feedback ${item.score >= 0.75 ? 'feedback-good' : 'feedback-low'}`}>
+        <div className="qa-history-feedback-header">
+          <span className="detail-label">評語</span>
+          <span className={`score-badge ${item.score >= 0.75 ? 'score-pass' : 'score-fail'}`}>
+            {(item.score * 100).toFixed(0)} 分
+          </span>
+        </div>
+        <p className="feedback-text">{item.feedbackText}</p>
+        {item.clarificationQuestion && (
+          <p className="clarification">💬 {item.clarificationQuestion}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function QuestionPanel({ onSubmit }: Props) {
   const currentQuestion = useSessionStore((s) => s.currentQuestion);
   const lastFeedback = useSessionStore((s) => s.lastFeedback);
@@ -19,7 +47,10 @@ export function QuestionPanel({ onSubmit }: Props) {
   const isAwaitingFeedback = useSessionStore((s) => s.isAwaitingFeedback);
   const pendingNextQuestion = useSessionStore((s) => s.pendingNextQuestion);
   const proceedToNextQuestion = useSessionStore((s) => s.proceedToNextQuestion);
+  const qaHistory = useSessionStore((s) => s.qaHistory);
   const [answer, setAnswer] = useState('');
+  const [showHistory, setShowHistory] = useState(false);
+  const [selectedHistoryIdx, setSelectedHistoryIdx] = useState<number | null>(null);
 
   if (courseCompleted) {
     return (
@@ -44,8 +75,54 @@ export function QuestionPanel({ onSubmit }: Props) {
     setAnswer('');
   };
 
+  const toggleHistoryItem = (idx: number) => {
+    setSelectedHistoryIdx(selectedHistoryIdx === idx ? null : idx);
+  };
+
   return (
     <div className="question-panel">
+      {qaHistory.length > 0 && (
+        <div className="qa-history-section">
+          <button
+            className="qa-history-toggle"
+            onClick={() => {
+              setShowHistory(!showHistory);
+              if (showHistory) setSelectedHistoryIdx(null);
+            }}
+          >
+            <span>已回答 {qaHistory.length} 題</span>
+            <span>{showHistory ? '▲' : '▼'}</span>
+          </button>
+
+          {showHistory && (
+            <div className="qa-history-list">
+              {qaHistory.map((item, idx) => (
+                <div key={item.questionId}>
+                  <button
+                    className={`qa-history-item ${selectedHistoryIdx === idx ? 'qa-history-item-selected' : ''}`}
+                    onClick={() => toggleHistoryItem(idx)}
+                  >
+                    <span className="history-idx">{idx + 1}</span>
+                    <span className="question-type" style={{ fontSize: '11px' }}>
+                      {typeLabel[item.questionType] ?? '問題'}
+                    </span>
+                    <span className="history-question-text">
+                      {item.questionText.length > 45
+                        ? item.questionText.slice(0, 45) + '…'
+                        : item.questionText}
+                    </span>
+                    <span className={`score-badge ${item.score >= 0.75 ? 'score-pass' : 'score-fail'}`} style={{ fontSize: '13px' }}>
+                      {(item.score * 100).toFixed(0)} 分
+                    </span>
+                  </button>
+                  {selectedHistoryIdx === idx && <HistoryDetail item={item} />}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {lastDecision && !lastFeedback && (
         <div className={`decision-banner decision-${lastDecision.decision}`}>
           {lastDecision.message}
