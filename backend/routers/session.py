@@ -24,21 +24,27 @@ async def get_active_session(token: str = Query(...)):
         # 舊的 session 沒有 stages_json，視為無效
         return {"session": None}
 
-    statuses = await session_memory.get_stage_statuses(session["session_id"])
-
-    return {
-        "session": {
-            "session_id": session["session_id"],
-            "current_stage_id": session["current_stage_id"],
-            "total_stages": session["total_stages"],
-            "stages": [
-                {
-                    "stage_id": s["stage_id"],
-                    "node_id": s.get("node_id", ""),
-                    "title": s["title"],
-                }
-                for s in stages
-            ],
-            "stage_statuses": {str(k): v for k, v in statuses.items()},
-        }
+    status: str = session["status"]
+    result: dict = {
+        "session_id": session["session_id"],
+        "status": status,
+        "current_stage_id": session["current_stage_id"],
+        "total_stages": session["total_stages"],
+        "stages": [
+            {
+                "stage_id": s["stage_id"],
+                "node_id": s.get("node_id", ""),
+                "title": s["title"],
+            }
+            for s in stages
+        ],
     }
+
+    if status == "pending_confirmation":
+        raw_map = session.get("pending_map_json")
+        result["pending_map"] = json.loads(raw_map) if raw_map else None
+    else:
+        statuses = await session_memory.get_stage_statuses(session["session_id"])
+        result["stage_statuses"] = {str(k): v for k, v in statuses.items()}
+
+    return {"session": result}

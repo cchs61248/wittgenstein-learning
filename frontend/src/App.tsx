@@ -51,23 +51,40 @@ export default function App() {
         setShowUpload(true);
         return;
       }
-      const savedSessionId = localStorage.getItem('wl_session_id') || session.session_id;
+
+      const savedSessionId = session.session_id;
       sessionIdRef.current = savedSessionId;
-      const ws = new LearningWebSocket(savedSessionId, token, {
-        onMessage: handleMessage,
-        onOpen: () => {
-          setConnected(true);
-          const savedProvider = localStorage.getItem('wl_provider') || 'claude';
-          const savedModel = localStorage.getItem('wl_model') || undefined;
-          ws.send({
-            type: 'resume_session',
-            payload: { session_id: savedSessionId, provider: savedProvider, model: savedModel },
-          });
-        },
-        onClose: () => setConnected(false),
-      });
-      ws.connect();
-      wsRef.current = ws;
+      localStorage.setItem('wl_session_id', savedSessionId);
+
+      if (session.status === 'pending_confirmation' && session.pending_map) {
+        // 知識地圖已生成但用戶尚未確認，直接顯示地圖讓用戶確認
+        setPendingMap(session.pending_map);
+        // 建立 WebSocket 連線，等待用戶確認後發送 confirm_map
+        const ws = new LearningWebSocket(savedSessionId, token, {
+          onMessage: handleMessage,
+          onOpen: () => setConnected(true),
+          onClose: () => setConnected(false),
+        });
+        ws.connect();
+        wsRef.current = ws;
+      } else {
+        // 正常恢復進行中的學習
+        const ws = new LearningWebSocket(savedSessionId, token, {
+          onMessage: handleMessage,
+          onOpen: () => {
+            setConnected(true);
+            const savedProvider = localStorage.getItem('wl_provider') || 'claude';
+            const savedModel = localStorage.getItem('wl_model') || undefined;
+            ws.send({
+              type: 'resume_session',
+              payload: { session_id: savedSessionId, provider: savedProvider, model: savedModel },
+            });
+          },
+          onClose: () => setConnected(false),
+        });
+        ws.connect();
+        wsRef.current = ws;
+      }
     });
 
     return () => {
@@ -220,7 +237,12 @@ export default function App() {
           onConfirm={() => {
             setPendingMap(null);
             setShowUpload(false);
-            wsRef.current?.send({ type: 'confirm_map', payload: {} });
+            const savedProvider = localStorage.getItem('wl_provider') || 'claude';
+            const savedModel = localStorage.getItem('wl_model') || undefined;
+            wsRef.current?.send({
+              type: 'confirm_map',
+              payload: { provider: savedProvider, model: savedModel },
+            });
           }}
         />
       )}

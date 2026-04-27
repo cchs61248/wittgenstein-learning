@@ -138,15 +138,21 @@ async def websocket_endpoint(
 
             elif msg_type == "confirm_map":
                 orch = _orchestrators.get(session_id)
-                if orch:
-                    try:
-                        await orch.confirm_session(
-                            session_id=session_id,
-                            user_id=user_id,
-                            emit=emit,
-                        )
-                    except Exception as e:
-                        await emit({"type": "error", "payload": {"message": f"確認知識地圖失敗：{e}"}})
+                if not orch:
+                    # 重整後 in-memory orchestrator 遺失，新建一個並從 DB 恢復
+                    provider_name: str = p.get("provider", DEFAULT_PROVIDER)
+                    model: str | None = p.get("model") or None
+                    llm = create_provider(provider_name, model=model)
+                    orch = LearningOrchestrator(llm)
+                    _orchestrators[session_id] = orch
+                try:
+                    await orch.confirm_session(
+                        session_id=session_id,
+                        user_id=user_id,
+                        emit=emit,
+                    )
+                except Exception as e:
+                    await emit({"type": "error", "payload": {"message": f"確認知識地圖失敗：{e}"}})
 
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)

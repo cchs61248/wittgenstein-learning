@@ -8,10 +8,12 @@ export interface ActiveSessionStage {
 
 export interface ActiveSession {
   session_id: string;
+  status: 'active' | 'pending_confirmation';
   current_stage_id: number;
   total_stages: number;
   stages: ActiveSessionStage[];
-  stage_statuses: Record<string, string>;
+  stage_statuses?: Record<string, string>;
+  pending_map?: { nodes: { node_id: string; stage_id: number; title: string }[]; summary: string } | null;
 }
 
 export async function getActiveSession(token: string): Promise<ActiveSession | null> {

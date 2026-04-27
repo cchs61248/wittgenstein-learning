@@ -56,6 +56,13 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass  # 欄位已存在，忽略
 
+    # Migration 005：加入 pending_map_json 欄位至 sessions（已存在則忽略）
+    try:
+        await _connection.execute("ALTER TABLE sessions ADD COLUMN pending_map_json TEXT DEFAULT NULL")
+        await _connection.commit()
+    except Exception:
+        pass  # 欄位已存在，忽略
+
 
 async def close_db() -> None:
     global _connection

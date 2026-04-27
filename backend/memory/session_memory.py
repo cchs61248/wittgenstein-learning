@@ -39,11 +39,52 @@ async def get_session(session_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+async def create_pending_session(
+    session_id: str,
+    user_id: str,
+    content_hash: str,
+    summary: str,
+    stages: list[dict],
+    nodes: list[dict],
+) -> None:
+    db = await get_db()
+    # 清除同用戶舊的 pending session（避免累積）
+    await db.execute(
+        "UPDATE sessions SET status = 'abandoned' WHERE user_id = ? AND status = 'pending_confirmation'",
+        (user_id,),
+    )
+    pending_map = {"nodes": nodes, "summary": summary}
+    await db.execute(
+        """INSERT INTO sessions
+           (session_id, user_id, content_hash, total_stages, raw_content_summary,
+            status, stages_json, pending_map_json)
+           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?)""",
+        (
+            session_id, user_id, content_hash, len(stages),
+            summary,
+            json.dumps(stages, ensure_ascii=False),
+            json.dumps(pending_map, ensure_ascii=False),
+        ),
+    )
+    await db.commit()
+
+
+async def activate_pending_session(session_id: str) -> None:
+    db = await get_db()
+    await db.execute(
+        """UPDATE sessions
+           SET status = 'active', pending_map_json = NULL, updated_at = ?
+           WHERE session_id = ?""",
+        (datetime.utcnow(), session_id),
+    )
+    await db.commit()
+
+
 async def get_user_active_session(user_id: str) -> Optional[dict]:
     db = await get_db()
     async with db.execute(
         """SELECT * FROM sessions
-           WHERE user_id = ? AND status = 'active'
+           WHERE user_id = ? AND status IN ('active', 'pending_confirmation')
            ORDER BY updated_at DESC LIMIT 1""",
         (user_id,),
     ) as cur:

@@ -90,6 +90,11 @@ class LearningOrchestrator:
         stages: list[dict] = split_result["stages"]
         summary: str = split_result.get("summary", "")
 
+        nodes = [
+            {"node_id": s["node_id"], "stage_id": s["stage_id"], "title": s["title"]}
+            for s in stages
+        ]
+
         self._pending_stages = stages
         self._pending_start_args = {
             "session_id": session_id,
@@ -98,13 +103,20 @@ class LearningOrchestrator:
             "summary": summary,
         }
 
+        # 立即存入 DB，讓重整後能恢復此狀態
+        await session_memory.create_pending_session(
+            session_id=session_id,
+            user_id=user_id,
+            content_hash=content_hash,
+            summary=summary,
+            stages=stages,
+            nodes=nodes,
+        )
+
         await emit({
             "type": "knowledge_map",
             "payload": {
-                "nodes": [
-                    {"node_id": s["node_id"], "stage_id": s["stage_id"], "title": s["title"]}
-                    for s in stages
-                ],
+                "nodes": nodes,
                 "summary": summary,
             },
         })
@@ -114,17 +126,25 @@ class LearningOrchestrator:
     async def confirm_session(self, session_id: str, user_id: str, emit: WSEmitter) -> None:
         stages = self._pending_stages
         args = self._pending_start_args
-        if not stages or not args:
-            await emit({"type": "error", "payload": {"message": "無法確認學習路線，請重新上傳材料"}})
-            return
 
-        await session_memory.create_session(
-            session_id=session_id,
-            user_id=user_id,
-            content_hash=args["content_hash"],
-            total_stages=len(stages),
-            raw_content_summary=args["summary"],
-        )
+        if not stages or not args:
+            # in-memory 遺失（例如重整後），嘗試從 DB 恢復
+            session_row = await session_memory.get_session(session_id)
+            if not session_row or session_row.get("status") != "pending_confirmation":
+                await emit({"type": "error", "payload": {"message": "無法確認學習路線，請重新上傳材料"}})
+                return
+            stages = json.loads(session_row.get("stages_json") or "[]")
+            if not stages:
+                await emit({"type": "error", "payload": {"message": "無法確認學習路線，請重新上傳材料"}})
+                return
+            args = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "content_hash": session_row["content_hash"],
+                "summary": session_row.get("raw_content_summary") or "",
+            }
+
+        await session_memory.activate_pending_session(session_id)
         await session_memory.store_stages(session_id, stages)
         for s in stages:
             await session_memory.upsert_stage_progress(
