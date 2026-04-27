@@ -17,4 +17,18 @@ else:
 DEFAULT_PROVIDER: str = os.getenv("DEFAULT_PROVIDER", "claude")
 PASS_THRESHOLD: float = float(os.getenv("PASS_THRESHOLD", "0.75"))
 MAX_STAGE_ATTEMPTS: int = int(os.getenv("MAX_STAGE_ATTEMPTS", "3"))
-CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+_cors_env = os.getenv("CORS_ORIGINS", "")
+if _cors_env:
+    CORS_ORIGINS: list[str] = [o.strip() for o in _cors_env.split(",") if o.strip()]
+else:
+    # 開發預設：允許 Vite dev server 常用埠號範圍
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
