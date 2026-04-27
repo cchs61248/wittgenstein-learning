@@ -210,7 +210,7 @@ export default function App() {
       <header className="app-header">
         <h1>維特根斯坦學習系統</h1>
         <div className="header-right">
-          <span>{email}</span>
+          <span className="header-email">{email}</span>
           <button
             onClick={() => {
               wsRef.current?.close();

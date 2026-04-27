@@ -5,9 +5,9 @@ html, body, #root {
 }
 
 body {
-  background: #0f1117;
-  color: #c9d1e8;
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #F9F8F6;
+  color: #1C1917;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 

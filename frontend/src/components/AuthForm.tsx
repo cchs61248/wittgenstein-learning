@@ -28,7 +28,10 @@ export function AuthForm() {
   return (
     <div className="auth-container">
       <div className="auth-card">
-        <h1>維特根斯坦學習系統</h1>
+        <div className="auth-brand">
+          <span className="auth-brand-icon">📖</span>
+          <h1>維特根斯坦學習系統</h1>
+        </div>
         <p className="auth-subtitle">透過蘇格拉底式問答，確保真正理解每個概念</p>
 
         <div className="auth-tabs">
