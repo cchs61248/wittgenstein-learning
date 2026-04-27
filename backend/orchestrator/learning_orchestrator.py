@@ -652,6 +652,25 @@ class LearningOrchestrator:
         answered_ids = {r["question_id"] for r in qa_records}
         unanswered = [q for q in questions if q["question_id"] not in answered_ids]
 
+        # 還原歷史答題記錄給前端
+        if qa_records:
+            await emit({
+                "type": "qa_history",
+                "payload": {
+                    "records": [
+                        {
+                            "question_id": r["question_id"],
+                            "question_text": r["question_text"],
+                            "question_type": r["question_type"],
+                            "user_answer": r["user_answer"],
+                            "score": r["score"],
+                            "feedback_text": r["feedback"],
+                        }
+                        for r in qa_records
+                    ]
+                },
+            })
+
         if unanswered:
             q = unanswered[0]
             wm.current_turn = TurnContext(

@@ -64,6 +64,19 @@ export interface ErrorPayload {
   message: string;
 }
 
+export interface QaHistoryRecord {
+  question_id: string;
+  question_text: string;
+  question_type: 'apply' | 'understand' | 'create';
+  user_answer: string;
+  score: number;
+  feedback_text: string;
+}
+
+export interface QaHistoryPayload {
+  records: QaHistoryRecord[];
+}
+
 export type ServerMessage =
   | { type: 'knowledge_map'; payload: KnowledgeMapPayload }
   | { type: 'session_started'; payload: SessionStartedPayload }
@@ -73,6 +86,7 @@ export type ServerMessage =
   | { type: 'question'; payload: QuestionPayload }
   | { type: 'feedback'; payload: FeedbackPayload }
   | { type: 'stage_decision'; payload: StageDecisionPayload }
+  | { type: 'qa_history'; payload: QaHistoryPayload }
   | { type: 'course_completed'; payload: { message: string } }
   | { type: 'error'; payload: ErrorPayload };
 

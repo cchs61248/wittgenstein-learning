@@ -35,6 +35,7 @@ export default function App() {
     setAwaitingFeedback,
     storeStageExplanation,
     setPendingAnswer,
+    setQaHistory,
   } = useSessionStore();
 
   const [showUpload, setShowUpload] = useState(false);
@@ -125,6 +126,16 @@ export default function App() {
         if (msg.payload.decision === 'advance' && msg.payload.next_stage_id !== null) {
           advanceStage(msg.payload.next_stage_id);
         }
+        break;
+      case 'qa_history':
+        setQaHistory(msg.payload.records.map((r) => ({
+          questionId: r.question_id,
+          questionText: r.question_text,
+          questionType: r.question_type,
+          userAnswer: r.user_answer,
+          score: r.score,
+          feedbackText: r.feedback_text,
+        })));
         break;
       case 'course_completed':
         setCourseCompleted();

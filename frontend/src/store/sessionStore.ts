@@ -54,6 +54,7 @@ interface SessionState {
   setDecision: (d: StageDecisionPayload) => void;
   setAwaitingFeedback: (v: boolean) => void;
   setPendingAnswer: (answer: string) => void;
+  setQaHistory: (records: QaHistoryItem[]) => void;
   proceedToNextQuestion: () => void;
   advanceStage: (nextStageId: number | null) => void;
 
@@ -168,6 +169,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setDecision: (d) => set({ lastDecision: d }),
   setAwaitingFeedback: (v) => set({ isAwaitingFeedback: v }),
   setPendingAnswer: (answer) => set({ pendingAnswer: answer }),
+  setQaHistory: (records) => set({ qaHistory: records }),
   proceedToNextQuestion: () =>
     set((s) => ({
       currentQuestion: s.pendingNextQuestion ?? s.currentQuestion,
