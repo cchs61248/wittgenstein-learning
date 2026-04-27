@@ -193,6 +193,18 @@ async def upsert_stage_progress(
     await db.commit()
 
 
+async def get_stage_qa_records(session_id: str, stage_id: int) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        """SELECT question_id, question_text, question_type, user_answer, score, feedback
+           FROM qa_records WHERE session_id = ? AND stage_id = ?
+           ORDER BY id""",
+        (session_id, stage_id),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
 async def insert_qa_record(
     session_id: str,
     stage_id: int,

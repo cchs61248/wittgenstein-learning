@@ -647,8 +647,13 @@ class LearningOrchestrator:
             },
         })
 
-        if questions:
-            q = questions[0]
+        # 從 DB 查出已回答過的題目，跳過不再重複發送
+        qa_records = await session_memory.get_stage_qa_records(session_id, stage["stage_id"])
+        answered_ids = {r["question_id"] for r in qa_records}
+        unanswered = [q for q in questions if q["question_id"] not in answered_ids]
+
+        if unanswered:
+            q = unanswered[0]
             wm.current_turn = TurnContext(
                 turn_id=str(uuid.uuid4()),
                 question_id=q["question_id"],
@@ -661,6 +666,15 @@ class LearningOrchestrator:
                     "text": q["text"],
                     "type": q.get("type", "understand"),
                     "stage_id": stage["stage_id"],
-                    "attempt_number": 1,
+                    "attempt_number": len(qa_records) + 1,
                 },
             })
+        elif qa_records:
+            # 所有題目都已回答，從 DB 重建評估結果並做進度決策
+            wm.stage_evaluations = [
+                {"score": r["score"], "feedback": r["feedback"]}
+                for r in qa_records
+            ]
+            await self._make_progress_decision(
+                session_id, user_id, stages, stage, stage_index, wm, emit
+            )
