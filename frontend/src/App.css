@@ -1737,6 +1737,32 @@ textarea:disabled {
   margin-bottom: 0;
 }
 
+/* ── Session 載入畫面 ── */
+.session-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 100dvh;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.session-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── 按鈕尺寸補丁 ── */
 .btn-sm {
   padding: 5px 12px;

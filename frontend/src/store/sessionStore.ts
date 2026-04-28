@@ -86,7 +86,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_user_id');
     localStorage.removeItem('wl_email');
     localStorage.removeItem('wl_session_id');
-    set({ token: null, userId: null, email: null, sessionId: null, stages: [] });
+    set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null });
   },
 
   sessionId: localStorage.getItem('wl_session_id'),

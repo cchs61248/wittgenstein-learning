@@ -42,8 +42,11 @@ export default function App() {
   const [kickedMessage, setKickedMessage] = useState<string | null>(null);
   const [isStageSidebarCollapsed, setIsStageSidebarCollapsed] = useState(false);
   const [isQuestionPanelCollapsed, setIsQuestionPanelCollapsed] = useState(false);
+  const [isSessionLoading, setIsSessionLoading] = useState(false);
   const wsRef = useRef<LearningWebSocket | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
+  const stagesRef = useRef(stages);
+  stagesRef.current = stages;
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 768px)');
@@ -58,9 +61,11 @@ export default function App() {
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
+    setIsSessionLoading(true);
 
     getActiveSession(token).then((session) => {
       if (cancelled) return;
+      setIsSessionLoading(false);
       if (!session) {
         setShowUpload(true);
         return;
@@ -106,6 +111,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      setIsSessionLoading(false);
       wsRef.current?.close();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,7 +169,7 @@ export default function App() {
       case 'error':
         console.error('Server error:', msg.payload.message);
         // resume 或啟動失敗且尚未進入任何 stage，退回上傳畫面
-        if (!stages.length) {
+        if (!stagesRef.current.length) {
           setShowUpload(true);
         }
         break;
@@ -217,6 +223,15 @@ export default function App() {
 
   if (!token) {
     return <AuthForm />;
+  }
+
+  if (isSessionLoading) {
+    return (
+      <div className="session-loading">
+        <div className="session-loading-spinner" />
+        <p>正在載入學習進度…</p>
+      </div>
+    );
   }
 
   return (
