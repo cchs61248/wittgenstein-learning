@@ -8,7 +8,7 @@ from ..agents.content_splitter import ContentSplitterAgent
 from ..agents.teacher import TeacherAgent
 from ..agents.question_generator import QuestionGeneratorAgent
 from ..agents.evaluator import EvaluatorAgent
-from ..agents.progress_manager import ProgressManagerAgent
+from ..agents.progress_manager import ProgressManagerAgent, correct_mc_score
 from ..agents.drift_verifier import DriftVerifierAgent
 from ..memory.working_memory import get_working_memory, TurnContext
 from ..memory import session_memory, longterm_memory
@@ -649,11 +649,15 @@ class LearningOrchestrator:
             },
         })
 
+        raw_score = eval_result.get("score", 0.0)
+        mastery_score = (
+            correct_mc_score(raw_score) if wm.question_mode == "multiple_choice" else raw_score
+        )
         for concept in stage.get("key_concepts", []):
             await longterm_memory.update_concept_mastery(
                 user_id=user_id,
                 concept_name=concept,
-                new_score=eval_result.get("score", 0.0),
+                new_score=mastery_score,
                 confused_concepts=eval_result.get("confused_concepts", []),
                 successful_analogies=[],
             )
@@ -714,6 +718,7 @@ class LearningOrchestrator:
                 "max_attempts": 3,
                 "total_stages": len(stages),
                 "current_stage_id": stage["stage_id"],
+                "question_mode": wm.question_mode,
             },
         )
         decision = await self.progress.run(prog_ctx)
