@@ -835,6 +835,59 @@ body {
   color: var(--red);
 }
 
+/* ── 學習教練面板 ── */
+.coach-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-xs);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.coach-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.coach-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.coach-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  padding: 8px 10px;
+}
+
+.coach-block p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.coach-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.coach-candidate-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text);
+}
+
 /* ── 輸入元件 ── */
 textarea {
   width: 100%;
@@ -1285,6 +1338,31 @@ textarea:disabled {
   max-width: 600px;
   box-shadow: var(--shadow-xl);
   position: relative;
+}
+
+.modal-close-btn {
+  position: sticky;
+  top: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-border);
+  background: var(--bg-card);
+  color: var(--accent);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 3;
+  box-shadow: var(--shadow-sm);
+}
+
+.modal-close-btn:hover {
+  filter: brightness(1.03);
+  background: #fff7ed;
 }
 
 .modal-card::before {
@@ -2072,6 +2150,10 @@ textarea:disabled {
     gap: 10px;
   }
 
+  .coach-grid {
+    grid-template-columns: 1fr;
+  }
+
   .review-banner .btn-ghost {
     width: 100%;
     min-height: 44px;
@@ -2121,6 +2203,13 @@ textarea:disabled {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     padding: 24px 18px 22px;
+  }
+
+  .modal-close-btn {
+    top: 2px;
+    width: 40px;
+    height: 40px;
+    font-size: 26px;
   }
 
   .km-modal {

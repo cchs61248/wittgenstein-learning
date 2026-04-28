@@ -63,6 +63,38 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass  # 欄位已存在，忽略
 
+    # Migration 007：記錄每個 session 使用的 provider/model
+    try:
+        await _connection.execute("ALTER TABLE sessions ADD COLUMN provider_name TEXT DEFAULT NULL")
+        await _connection.commit()
+    except Exception:
+        pass
+    try:
+        await _connection.execute("ALTER TABLE sessions ADD COLUMN model_name TEXT DEFAULT NULL")
+        await _connection.commit()
+    except Exception:
+        pass
+
+    # Migration 006：建立決策歷史表（跨裝置恢復教練趨勢）
+    await _connection.execute(
+        """CREATE TABLE IF NOT EXISTS decision_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            stage_id INTEGER NOT NULL,
+            decision TEXT NOT NULL,
+            best_score REAL NOT NULL,
+            next_stage_id INTEGER NULL,
+            next_stage_score REAL NULL,
+            reason_lines_json TEXT DEFAULT '[]',
+            strategy_snapshot_json TEXT DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    await _connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_decision_records_session_id ON decision_records(session_id)"
+    )
+    await _connection.commit()
+
 
 async def close_db() -> None:
     global _connection

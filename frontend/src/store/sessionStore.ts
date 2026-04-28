@@ -45,17 +45,43 @@ interface SessionState {
   currentQuestion: QuestionPayload | null;
   lastFeedback: FeedbackPayload | null;
   lastDecision: StageDecisionPayload | null;
+  decisionHistory: Array<{
+    at: string;
+    decision: StageDecisionPayload['decision'];
+    stageId: number | null;
+    stageTitle: string;
+    bestScore: number;
+    nextStageId: number | null;
+    nextStageScore?: number | null;
+    candidates?: { stage_id: number; title: string; score: number; is_dynamic?: boolean }[];
+  }>;
   isAwaitingFeedback: boolean;
   pendingNextQuestion: QuestionPayload | null;
   pendingAnswer: string | null;
   qaHistory: QaHistoryItem[];
   stageQaHistories: Record<number, QaHistoryItem[]>;
+  tutorReply: { question: string; answer: string; in_scope?: boolean } | null;
   setQuestion: (q: QuestionPayload) => void;
+  setQuestionImmediate: (q: QuestionPayload | null) => void;
   setFeedback: (f: FeedbackPayload) => void;
+  setRecoveredFeedback: (f: FeedbackPayload | null) => void;
   setDecision: (d: StageDecisionPayload) => void;
+  pushDecisionHistory: (d: StageDecisionPayload) => void;
   setAwaitingFeedback: (v: boolean) => void;
   setPendingAnswer: (answer: string) => void;
   setQaHistory: (records: QaHistoryItem[]) => void;
+  setTutorReply: (reply: { question: string; answer: string; in_scope?: boolean } | null) => void;
+  hydrateSnapshot: (snapshot: { stageExplanations: Record<number, string>; stageQaHistories: Record<number, QaHistoryItem[]> }) => void;
+  hydrateDecisionHistory: (history: Array<{
+    at: string;
+    decision: StageDecisionPayload['decision'];
+    stageId: number | null;
+    stageTitle: string;
+    bestScore: number;
+    nextStageId: number | null;
+    nextStageScore?: number | null;
+    candidates?: { stage_id: number; title: string; score: number; is_dynamic?: boolean }[];
+  }>) => void;
   proceedToNextQuestion: () => void;
   advanceStage: (nextStageId: number | null) => void;
 
@@ -90,6 +116,17 @@ function loadStageQaHistories(): Record<number, QaHistoryItem[]> {
   }
 }
 
+function loadDecisionHistory() {
+  try {
+    const raw = localStorage.getItem('wl_decision_history');
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+const DECISION_HISTORY_MAX = 200;
+
 export const useSessionStore = create<SessionState>((set) => ({
   token: localStorage.getItem('wl_token'),
   userId: localStorage.getItem('wl_user_id'),
@@ -107,6 +144,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_session_id');
     localStorage.removeItem('wl_stage_explanations');
     localStorage.removeItem('wl_stage_qa_histories');
+    localStorage.removeItem('wl_decision_history');
     set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null });
   },
 
@@ -115,7 +153,12 @@ export const useSessionStore = create<SessionState>((set) => ({
   currentStageId: null,
   setSession: (sessionId, stages, stageStatuses?) => {
     localStorage.setItem('wl_session_id', sessionId);
-    set({
+    set((s) => {
+      const isNewSession = s.sessionId !== sessionId;
+      if (isNewSession) {
+        localStorage.removeItem('wl_decision_history');
+      }
+      return {
       sessionId,
       stages: stages.map((s, i) => {
         const dbStatus = stageStatuses?.[String(s.stage_id)];
@@ -135,9 +178,12 @@ export const useSessionStore = create<SessionState>((set) => ({
       currentQuestion: null,
       lastFeedback: null,
       lastDecision: null,
+      decisionHistory: isNewSession ? [] : s.decisionHistory,
       pendingNextQuestion: null,
       isAwaitingFeedback: false,
       courseCompleted: false,
+      tutorReply: null,
+      };
     });
   },
 
@@ -159,17 +205,25 @@ export const useSessionStore = create<SessionState>((set) => ({
   currentQuestion: null,
   lastFeedback: null,
   lastDecision: null,
+  decisionHistory: loadDecisionHistory(),
   isAwaitingFeedback: false,
   pendingNextQuestion: null,
   pendingAnswer: null,
   qaHistory: [],
   stageQaHistories: loadStageQaHistories(),
+  tutorReply: null,
   setQuestion: (q) =>
     set((s) => {
       if (s.lastFeedback) {
         return { pendingNextQuestion: q, isAwaitingFeedback: false };
       }
       return { currentQuestion: q, lastFeedback: null, pendingNextQuestion: null, isAwaitingFeedback: false };
+    }),
+  setQuestionImmediate: (q) =>
+    set({
+      currentQuestion: q,
+      pendingNextQuestion: null,
+      isAwaitingFeedback: false,
     }),
   setFeedback: (f) =>
     set((s) => {
@@ -192,10 +246,45 @@ export const useSessionStore = create<SessionState>((set) => ({
         qaHistory: item ? [...s.qaHistory, item] : s.qaHistory,
       };
     }),
+  setRecoveredFeedback: (f) =>
+    set({
+      lastFeedback: f,
+      isAwaitingFeedback: false,
+      pendingAnswer: null,
+    }),
   setDecision: (d) => set({ lastDecision: d }),
+  pushDecisionHistory: (d) =>
+    set((s) => {
+      const item = {
+        at: new Date().toISOString(),
+        decision: d.decision,
+        stageId: d.strategy_snapshot?.current_stage_id ?? null,
+        stageTitle: d.strategy_snapshot?.current_stage_title ?? '',
+        bestScore: d.best_score,
+        nextStageId: d.next_stage_id,
+        nextStageScore: d.next_stage_score,
+        candidates: d.strategy_snapshot?.next_stage_candidates ?? [],
+      };
+      const updated = [...s.decisionHistory, item].slice(-DECISION_HISTORY_MAX);
+      localStorage.setItem('wl_decision_history', JSON.stringify(updated));
+      return { decisionHistory: updated };
+    }),
   setAwaitingFeedback: (v) => set({ isAwaitingFeedback: v }),
   setPendingAnswer: (answer) => set({ pendingAnswer: answer }),
   setQaHistory: (records) => set({ qaHistory: records }),
+  setTutorReply: (reply) => set({ tutorReply: reply }),
+  hydrateSnapshot: ({ stageExplanations, stageQaHistories }) =>
+    set(() => {
+      localStorage.setItem('wl_stage_explanations', JSON.stringify(stageExplanations));
+      localStorage.setItem('wl_stage_qa_histories', JSON.stringify(stageQaHistories));
+      return { stageExplanations, stageQaHistories };
+    }),
+  hydrateDecisionHistory: (history) =>
+    set(() => {
+      const limited = history.slice(-DECISION_HISTORY_MAX);
+      localStorage.setItem('wl_decision_history', JSON.stringify(limited));
+      return { decisionHistory: limited };
+    }),
   proceedToNextQuestion: () =>
     set((s) => ({
       currentQuestion: s.pendingNextQuestion ?? null,
@@ -247,6 +336,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     lastFeedback: null,
     pendingNextQuestion: null,
     isAwaitingFeedback: false,
+    tutorReply: null,
   }),
   clearSession: () => {
     localStorage.removeItem('wl_session_id');
@@ -254,6 +344,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_model');
     localStorage.removeItem('wl_stage_explanations');
     localStorage.removeItem('wl_stage_qa_histories');
+    localStorage.removeItem('wl_decision_history');
     set({
       sessionId: null,
       stages: [],
@@ -271,6 +362,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       selectedStageId: null,
       qaHistory: [],
       pendingAnswer: null,
+      tutorReply: null,
+      decisionHistory: [],
     });
   },
 }));

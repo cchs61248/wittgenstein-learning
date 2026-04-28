@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import type { DragEvent, ChangeEvent } from 'react';
 import { useSessionStore } from '../store/sessionStore';
 import { uploadFile } from '../api/upload';
@@ -9,9 +9,11 @@ interface Props {
     provider: ProviderType,
     depth: DepthType,
     model: string,
+    questionMode: 'short_answer' | 'multiple_choice',
     uploadedFileId?: string,
     content?: string
   ) => void;
+  onClose?: () => void;
 }
 
 function IconDoc({ className }: { className?: string }) {
@@ -70,18 +72,27 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
   ],
 };
 
-export function UploadModal({ onStart }: Props) {
+export function UploadModal({ onStart, onClose }: Props) {
   const { token } = useSessionStore();
   const [content, setContent] = useState('');
   const [provider, setProvider] = useState<ProviderType>('claude');
   const [model, setModel] = useState(PROVIDER_MODELS.claude[0].id);
   const [depth, setDepth] = useState<DepthType>('intermediate');
+  const [questionMode, setQuestionMode] = useState<'short_answer' | 'multiple_choice'>('short_answer');
   const [uploading, setUploading] = useState(false);
   const [uploadedFilename, setUploadedFilename] = useState<string | null>(null);
   const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose?.();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   const handleProviderChange = (p: ProviderType) => {
     setProvider(p);
@@ -121,7 +132,7 @@ export function UploadModal({ onStart }: Props) {
   const handleStart = () => {
     const text = content.trim();
     if (!uploadedFileId && text.length < 50) return;
-    onStart(provider, depth, model, uploadedFileId ?? undefined, text || undefined);
+    onStart(provider, depth, model, questionMode, uploadedFileId ?? undefined, text || undefined);
   };
 
   const models = PROVIDER_MODELS[provider];
@@ -129,6 +140,16 @@ export function UploadModal({ onStart }: Props) {
   return (
     <div className="modal-overlay">
       <div className="modal-card">
+        {onClose && (
+          <button
+            className="modal-close-btn"
+            onClick={onClose}
+            aria-label="關閉上傳視窗"
+            type="button"
+          >
+            ×
+          </button>
+        )}
         <h2>上傳學習材料</h2>
         <p>上傳檔案或貼上文字，系統將自動切割成學習階段</p>
 
@@ -202,6 +223,14 @@ export function UploadModal({ onStart }: Props) {
               <option value="beginner">入門</option>
               <option value="intermediate">進階</option>
               <option value="advanced">深度</option>
+            </select>
+          </div>
+
+          <div className="option-group">
+            <label>答題模式</label>
+            <select value={questionMode} onChange={(e) => setQuestionMode(e.target.value as 'short_answer' | 'multiple_choice')}>
+              <option value="short_answer">簡答模式</option>
+              <option value="multiple_choice">選擇題模式（題數較多）</option>
             </select>
           </div>
         </div>

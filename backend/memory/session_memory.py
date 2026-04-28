@@ -3,6 +3,8 @@ from datetime import datetime
 from typing import Optional
 from ..db.database import get_db
 
+DECISION_HISTORY_MAX_PER_SESSION = 200
+
 
 async def create_session(
     session_id: str,
@@ -46,6 +48,8 @@ async def create_pending_session(
     summary: str,
     stages: list[dict],
     nodes: list[dict],
+    provider_name: str | None = None,
+    model_name: str | None = None,
 ) -> None:
     db = await get_db()
     # 清除同用戶舊的 pending session（避免累積）
@@ -57,13 +61,15 @@ async def create_pending_session(
     await db.execute(
         """INSERT INTO sessions
            (session_id, user_id, content_hash, total_stages, raw_content_summary,
-            status, stages_json, pending_map_json)
-           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?)""",
+            status, stages_json, pending_map_json, provider_name, model_name)
+           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?)""",
         (
             session_id, user_id, content_hash, len(stages),
             summary,
             json.dumps(stages, ensure_ascii=False),
             json.dumps(pending_map, ensure_ascii=False),
+            provider_name,
+            model_name,
         ),
     )
     await db.commit()
@@ -203,6 +209,108 @@ async def get_stage_qa_records(session_id: str, stage_id: int) -> list[dict]:
     ) as cur:
         rows = await cur.fetchall()
     return [dict(row) for row in rows]
+
+
+async def get_all_stage_qa_records(session_id: str) -> dict[int, list[dict]]:
+    db = await get_db()
+    async with db.execute(
+        """SELECT stage_id, question_id, question_text, question_type, user_answer, score, feedback
+           FROM qa_records WHERE session_id = ?
+           ORDER BY stage_id, id""",
+        (session_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    grouped: dict[int, list[dict]] = {}
+    for row in rows:
+        r = dict(row)
+        sid = int(r["stage_id"])
+        grouped.setdefault(sid, []).append(r)
+    return grouped
+
+
+async def get_all_stage_explanations(session_id: str) -> dict[int, str]:
+    db = await get_db()
+    async with db.execute(
+        """SELECT stage_id, full_explanation FROM stage_progress
+           WHERE session_id = ? AND full_explanation IS NOT NULL AND full_explanation != ''""",
+        (session_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return {int(row["stage_id"]): row["full_explanation"] for row in rows}
+
+
+async def insert_decision_record(
+    session_id: str,
+    stage_id: int,
+    decision: str,
+    best_score: float,
+    next_stage_id: int | None,
+    next_stage_score: float | None,
+    reason_lines: list[str],
+    strategy_snapshot: dict,
+) -> None:
+    db = await get_db()
+    await db.execute(
+        """INSERT INTO decision_records
+           (session_id, stage_id, decision, best_score, next_stage_id, next_stage_score,
+            reason_lines_json, strategy_snapshot_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            session_id,
+            stage_id,
+            decision,
+            best_score,
+            next_stage_id,
+            next_stage_score,
+            json.dumps(reason_lines, ensure_ascii=False),
+            json.dumps(strategy_snapshot, ensure_ascii=False),
+        ),
+    )
+    # 每個 session 只保留最近 N 筆決策歷史，避免表無限成長
+    await db.execute(
+        """DELETE FROM decision_records
+           WHERE session_id = ?
+             AND id NOT IN (
+               SELECT id FROM decision_records
+               WHERE session_id = ?
+               ORDER BY id DESC
+               LIMIT ?
+             )""",
+        (session_id, session_id, DECISION_HISTORY_MAX_PER_SESSION),
+    )
+    await db.commit()
+
+
+async def get_decision_records(
+    session_id: str,
+    limit: int = DECISION_HISTORY_MAX_PER_SESSION,
+) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        """SELECT stage_id, decision, best_score, next_stage_id, next_stage_score,
+                  reason_lines_json, strategy_snapshot_json, created_at
+           FROM decision_records
+           WHERE session_id = ?
+           ORDER BY id ASC
+           LIMIT ?""",
+        (session_id, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    records: list[dict] = []
+    for row in rows:
+        records.append(
+            {
+                "stage_id": row["stage_id"],
+                "decision": row["decision"],
+                "best_score": row["best_score"],
+                "next_stage_id": row["next_stage_id"],
+                "next_stage_score": row["next_stage_score"],
+                "reason_lines": json.loads(row["reason_lines_json"] or "[]"),
+                "strategy_snapshot": json.loads(row["strategy_snapshot_json"] or "{}"),
+                "created_at": row["created_at"],
+            }
+        )
+    return records
 
 
 async def insert_qa_record(

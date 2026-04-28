@@ -41,6 +41,8 @@ export interface QuestionPayload {
   question_id: string;
   text: string;
   type: 'apply' | 'understand' | 'create';
+  answer_mode?: 'short_answer' | 'multiple_choice';
+  options?: { id: string; text: string }[];
   stage_id: number;
   attempt_number: number;
 }
@@ -57,7 +59,20 @@ export interface StageDecisionPayload {
   decision: DecisionType;
   message: string;
   next_stage_id: number | null;
+  next_stage_score?: number | null;
   best_score: number;
+  reason_lines?: string[];
+  strategy_snapshot?: {
+    current_stage_id: number;
+    current_stage_title: string;
+    stable_high: boolean;
+    weak_concepts?: string[];
+    mastery_map?: Record<string, number>;
+    score_trend?: number[];
+    next_stage_candidates?: { stage_id: number; title: string; score: number; is_dynamic?: boolean }[];
+    remediation_focus: string[];
+    dynamic_stage_inserted: boolean;
+  };
 }
 
 export interface ErrorPayload {
@@ -77,6 +92,32 @@ export interface QaHistoryPayload {
   records: QaHistoryRecord[];
 }
 
+export interface TutorReplyPayload {
+  question: string;
+  answer: string;
+  in_scope?: boolean;
+}
+
+export interface SessionSnapshotPayload {
+  stage_explanations: Record<string, string>;
+  stage_qa_histories: Record<string, QaHistoryRecord[]>;
+  decision_history?: Array<{
+    stage_id: number;
+    decision: DecisionType;
+    best_score: number;
+    next_stage_id: number | null;
+    next_stage_score?: number | null;
+    reason_lines: string[];
+    strategy_snapshot: StageDecisionPayload['strategy_snapshot'];
+    created_at: string;
+  }>;
+}
+
+export interface ResumeStatePayload {
+  current_question?: QuestionPayload | null;
+  last_feedback?: FeedbackPayload | null;
+}
+
 export type ServerMessage =
   | { type: 'knowledge_map'; payload: KnowledgeMapPayload }
   | { type: 'session_started'; payload: SessionStartedPayload }
@@ -87,6 +128,9 @@ export type ServerMessage =
   | { type: 'feedback'; payload: FeedbackPayload }
   | { type: 'stage_decision'; payload: StageDecisionPayload }
   | { type: 'qa_history'; payload: QaHistoryPayload }
+  | { type: 'session_snapshot'; payload: SessionSnapshotPayload }
+  | { type: 'resume_state'; payload: ResumeStatePayload }
+  | { type: 'tutor_reply'; payload: TutorReplyPayload }
   | { type: 'course_completed'; payload: { message: string } }
   | { type: 'kicked'; payload: { message: string } }
   | { type: 'error'; payload: ErrorPayload };
@@ -99,6 +143,7 @@ export interface StartSessionMessage {
     uploaded_file_id?: string;
     provider: ProviderType;
     target_depth: DepthType;
+    question_mode?: 'short_answer' | 'multiple_choice';
     model?: string;
   };
 }

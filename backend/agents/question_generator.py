@@ -13,11 +13,13 @@ class QuestionGeneratorAgent(BaseAgent):
         num_questions: int = payload.get("num_questions", 2)
         attempt_number: int = payload.get("attempt_number", 1)
         previous_question_ids: list[str] = payload.get("previous_question_ids", [])
+        question_mode: str = payload.get("question_mode", "short_answer")
 
         system = SYSTEM_PROMPTS["question_generator"].format(
             num_questions=num_questions,
             attempt_number=attempt_number,
             stage_id=stage["stage_id"],
+            question_mode=question_mode,
         )
         avoid_note = ""
         if previous_question_ids:
@@ -40,4 +42,9 @@ class QuestionGeneratorAgent(BaseAgent):
             if raw_json.startswith("json"):
                 raw_json = raw_json[4:]
         data = json.loads(raw_json.strip())
+        for q in data.get("questions", []):
+            q["answer_mode"] = q.get("answer_mode") or question_mode
+            if q["answer_mode"] != "multiple_choice":
+                q["options"] = []
+                q["correct_option_id"] = None
         return data

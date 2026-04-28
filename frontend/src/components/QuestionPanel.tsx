@@ -3,9 +3,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSessionStore } from '../store/sessionStore';
 import type { QaHistoryItem } from '../store/sessionStore';
+import { LearningCoachPanel } from './LearningCoachPanel';
 
 interface Props {
   onSubmit: (questionId: string, answer: string) => void;
+  onAskTutor: (question: string) => void;
 }
 
 const normalizeText = (text: string) => text.replace(/\\n/g, '\n');
@@ -45,7 +47,7 @@ function HistoryDetail({ item }: { item: QaHistoryItem }) {
   );
 }
 
-export function QuestionPanel({ onSubmit }: Props) {
+export function QuestionPanel({ onSubmit, onAskTutor }: Props) {
   const currentQuestion = useSessionStore((s) => s.currentQuestion);
   const lastFeedback = useSessionStore((s) => s.lastFeedback);
   const lastDecision = useSessionStore((s) => s.lastDecision);
@@ -56,7 +58,10 @@ export function QuestionPanel({ onSubmit }: Props) {
   const qaHistory = useSessionStore((s) => s.qaHistory);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const stageQaHistories = useSessionStore((s) => s.stageQaHistories);
+  const tutorReply = useSessionStore((s) => s.tutorReply);
   const [answer, setAnswer] = useState('');
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [tutorQuestion, setTutorQuestion] = useState('');
   const [showHistory, setShowHistory] = useState(false);
   const [selectedHistoryIdx, setSelectedHistoryIdx] = useState<number | null>(null);
 
@@ -123,9 +128,13 @@ export function QuestionPanel({ onSubmit }: Props) {
   }
 
   const handleSubmit = () => {
-    if (!answer.trim() || !currentQuestion || isAwaitingFeedback) return;
-    onSubmit(currentQuestion.question_id, answer.trim());
+    if (!currentQuestion || isAwaitingFeedback) return;
+    const isMultipleChoice = currentQuestion.answer_mode === 'multiple_choice';
+    const finalAnswer = isMultipleChoice ? (selectedOption ?? '') : answer.trim();
+    if (!finalAnswer) return;
+    onSubmit(currentQuestion.question_id, finalAnswer);
     setAnswer('');
+    setSelectedOption(null);
   };
 
   const toggleHistoryItem = (idx: number) => {
@@ -177,9 +186,20 @@ export function QuestionPanel({ onSubmit }: Props) {
       )}
 
       {lastDecision && !lastFeedback && (
-        <div className={`decision-banner decision-${lastDecision.decision}`}>
-          {lastDecision.message}
-        </div>
+        <>
+          <div className={`decision-banner decision-${lastDecision.decision}`}>
+            <p>{lastDecision.message}</p>
+            {(lastDecision.reason_lines ?? []).length > 0 && (
+              <div className="qa-history-detail-block" style={{ marginTop: 8 }}>
+                <span className="detail-label">路徑判斷依據</span>
+                {(lastDecision.reason_lines ?? []).map((line, idx) => (
+                  <p key={`${idx}-${line}`}>- {line}</p>
+                ))}
+              </div>
+            )}
+          </div>
+          <LearningCoachPanel decision={lastDecision} />
+        </>
       )}
 
       {lastFeedback ? (
@@ -213,17 +233,59 @@ export function QuestionPanel({ onSubmit }: Props) {
             <span className="attempt-badge">第 {currentQuestion.attempt_number} 次</span>
           </div>
           <div className="question-text">{currentQuestion.text}</div>
+          {currentQuestion.answer_mode === 'multiple_choice' ? (
+            <div className="choice-list">
+              {(currentQuestion.options ?? []).map((opt) => (
+                <button
+                  key={opt.id}
+                  className={`qa-history-item ${selectedOption === opt.id ? 'qa-history-item-selected' : ''}`}
+                  onClick={() => setSelectedOption(opt.id)}
+                  disabled={isAwaitingFeedback}
+                >
+                  <span className="history-idx">{opt.id}</span>
+                  <span className="history-question-text">{opt.text}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <textarea
+              value={answer}
+              onChange={(e) => setAnswer(e.target.value)}
+              placeholder="請用自己的話回答..."
+              rows={4}
+              disabled={isAwaitingFeedback}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.ctrlKey) handleSubmit();
+              }}
+            />
+          )}
 
-          <textarea
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            placeholder="請用自己的話回答..."
-            rows={4}
-            disabled={isAwaitingFeedback}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && e.ctrlKey) handleSubmit();
-            }}
-          />
+          <div className="qa-history-detail-block">
+            <span className="detail-label">想追問老師</span>
+            <textarea
+              value={tutorQuestion}
+              onChange={(e) => setTutorQuestion(e.target.value)}
+              placeholder="可詢問教材內容，超出教材會標註並以外部知識補充"
+              rows={2}
+            />
+            <div className="answer-actions">
+              <button
+                className="btn-ghost"
+                onClick={() => {
+                  if (!tutorQuestion.trim()) return;
+                  onAskTutor(tutorQuestion.trim());
+                }}
+                disabled={!tutorQuestion.trim()}
+              >
+                發問
+              </button>
+            </div>
+            {tutorReply && (
+              <div className="feedback-text markdown-content">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeText(tutorReply.answer)}</ReactMarkdown>
+              </div>
+            )}
+          </div>
 
           <div className="answer-actions">
             <span className="hint-text">
@@ -232,7 +294,12 @@ export function QuestionPanel({ onSubmit }: Props) {
             <button
               className="btn-primary"
               onClick={handleSubmit}
-              disabled={!answer.trim() || isAwaitingFeedback}
+              disabled={
+                isAwaitingFeedback ||
+                (currentQuestion.answer_mode === 'multiple_choice'
+                  ? !selectedOption
+                  : !answer.trim())
+              }
             >
               {isAwaitingFeedback ? '評估中...' : '提交答案'}
             </button>

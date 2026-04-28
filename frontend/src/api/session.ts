@@ -11,6 +11,8 @@ export interface ActiveSession {
   status: 'active' | 'pending_confirmation';
   current_stage_id: number;
   total_stages: number;
+  provider?: string | null;
+  model?: string | null;
   stages: ActiveSessionStage[];
   stage_statuses?: Record<string, string>;
   pending_map?: { nodes: { node_id: string; stage_id: number; title: string }[]; summary: string } | null;

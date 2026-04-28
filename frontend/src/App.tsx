@@ -22,20 +22,25 @@ export default function App() {
     appendExplanationChunk,
     setExplanationComplete,
     setQuestion,
+    setQuestionImmediate,
     setFeedback,
+    setRecoveredFeedback,
     setDecision,
+    pushDecisionHistory,
     advanceStage,
     setConnected,
     setCourseCompleted,
     setPendingMap,
     pendingMap,
     resetExplanation,
-    clearSession,
     stages,
     setAwaitingFeedback,
     storeStageExplanation,
     setPendingAnswer,
     setQaHistory,
+    setTutorReply,
+    hydrateSnapshot,
+    hydrateDecisionHistory,
   } = useSessionStore();
 
   const [showUpload, setShowUpload] = useState(false);
@@ -45,6 +50,8 @@ export default function App() {
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const wsRef = useRef<LearningWebSocket | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
+  const activeProviderRef = useRef<string>('claude');
+  const activeModelRef = useRef<string | undefined>(undefined);
   const stagesRef = useRef(stages);
   stagesRef.current = stages;
 
@@ -72,6 +79,8 @@ export default function App() {
       }
 
       const savedSessionId = session.session_id;
+      activeProviderRef.current = session.provider || localStorage.getItem('wl_provider') || 'claude';
+      activeModelRef.current = session.model || localStorage.getItem('wl_model') || undefined;
       sessionIdRef.current = savedSessionId;
       localStorage.setItem('wl_session_id', savedSessionId);
 
@@ -95,11 +104,9 @@ export default function App() {
           onMessage: handleMessage,
           onOpen: () => {
             setConnected(true);
-            const savedProvider = localStorage.getItem('wl_provider') || 'claude';
-            const savedModel = localStorage.getItem('wl_model') || undefined;
             ws.send({
               type: 'resume_session',
-              payload: { session_id: savedSessionId, provider: savedProvider, model: savedModel },
+              payload: { session_id: savedSessionId, provider: activeProviderRef.current, model: activeModelRef.current },
             });
           },
           onClose: () => setConnected(false),
@@ -142,7 +149,16 @@ export default function App() {
       case 'feedback':
         setFeedback(msg.payload);
         break;
+      case 'resume_state':
+        if (msg.payload.last_feedback) {
+          setRecoveredFeedback(msg.payload.last_feedback);
+        }
+        if (msg.payload.current_question) {
+          setQuestionImmediate(msg.payload.current_question);
+        }
+        break;
       case 'stage_decision':
+        pushDecisionHistory(msg.payload);
         setDecision(msg.payload);
         if (msg.payload.decision === 'advance' && msg.payload.next_stage_id !== null) {
           advanceStage(msg.payload.next_stage_id);
@@ -157,6 +173,43 @@ export default function App() {
           score: r.score,
           feedbackText: r.feedback_text,
         })));
+        break;
+      case 'session_snapshot':
+        hydrateSnapshot({
+          stageExplanations: Object.fromEntries(
+            Object.entries(msg.payload.stage_explanations).map(([k, v]) => [Number(k), v])
+          ),
+          stageQaHistories: Object.fromEntries(
+            Object.entries(msg.payload.stage_qa_histories).map(([stageId, records]) => [
+              Number(stageId),
+              records.map((r) => ({
+                questionId: r.question_id,
+                questionText: r.question_text,
+                questionType: r.question_type,
+                userAnswer: r.user_answer,
+                score: r.score,
+                feedbackText: r.feedback_text,
+              })),
+            ])
+          ),
+        });
+        if (msg.payload.decision_history) {
+          hydrateDecisionHistory(
+            msg.payload.decision_history.map((h) => ({
+              at: h.created_at,
+              decision: h.decision,
+              stageId: h.stage_id,
+              stageTitle: h.strategy_snapshot?.current_stage_title ?? '',
+              bestScore: h.best_score,
+              nextStageId: h.next_stage_id,
+              nextStageScore: h.next_stage_score,
+              candidates: h.strategy_snapshot?.next_stage_candidates ?? [],
+            }))
+          );
+        }
+        break;
+      case 'tutor_reply':
+        setTutorReply(msg.payload);
         break;
       case 'kicked':
         wsRef.current?.close();
@@ -180,6 +233,7 @@ export default function App() {
     provider: ProviderType,
     depth: DepthType,
     model: string,
+    questionMode: 'short_answer' | 'multiple_choice',
     uploadedFileId?: string,
     content?: string
   ) => {
@@ -187,6 +241,8 @@ export default function App() {
 
     localStorage.setItem('wl_provider', provider);
     localStorage.setItem('wl_model', model);
+    activeProviderRef.current = provider;
+    activeModelRef.current = model || undefined;
 
     wsRef.current?.close();
     const newSid = generateSessionId();
@@ -198,7 +254,7 @@ export default function App() {
         setConnected(true);
         ws.send({
           type: 'start_session',
-          payload: { content, uploaded_file_id: uploadedFileId, provider, target_depth: depth, model },
+          payload: { content, uploaded_file_id: uploadedFileId, provider, target_depth: depth, question_mode: questionMode, model },
         });
       },
       onClose: () => setConnected(false),
@@ -218,6 +274,13 @@ export default function App() {
         question_id: questionId,
         answer,
       },
+    });
+  };
+
+  const handleAskTutor = (question: string) => {
+    wsRef.current?.send({
+      type: 'ask_tutor',
+      payload: { session_id: sessionIdRef.current, question },
     });
   };
 
@@ -248,10 +311,6 @@ export default function App() {
           <span className="header-email">{email}</span>
           <button
             onClick={() => {
-              wsRef.current?.close();
-              wsRef.current = null;
-              sessionIdRef.current = generateSessionId();
-              clearSession();
               setShowUpload(true);
             }}
             className="btn-ghost"
@@ -307,12 +366,12 @@ export default function App() {
               {isQuestionPanelCollapsed ? '展開答題區' : '收起答題區'}
             </button>
           </div>
-          {!isQuestionPanelCollapsed && <QuestionPanel onSubmit={handleSubmitAnswer} />}
+          {!isQuestionPanelCollapsed && <QuestionPanel onSubmit={handleSubmitAnswer} onAskTutor={handleAskTutor} />}
         </main>
       </div>
 
-      {showUpload && stages.length === 0 && !pendingMap && (
-        <UploadModal onStart={handleStart} />
+      {showUpload && !pendingMap && (
+        <UploadModal onStart={handleStart} onClose={() => setShowUpload(false)} />
       )}
 
       {pendingMap && (
@@ -322,11 +381,9 @@ export default function App() {
           onConfirm={() => {
             setPendingMap(null);
             setShowUpload(false);
-            const savedProvider = localStorage.getItem('wl_provider') || 'claude';
-            const savedModel = localStorage.getItem('wl_model') || undefined;
             wsRef.current?.send({
               type: 'confirm_map',
-              payload: { provider: savedProvider, model: savedModel },
+              payload: { provider: activeProviderRef.current, model: activeModelRef.current },
             });
           }}
         />

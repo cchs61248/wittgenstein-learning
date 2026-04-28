@@ -25,6 +25,9 @@ class WorkingMemory:
     current_explanation: str = ""
     stage_evaluations: list[dict] = field(default_factory=list)
     current_attempt: int = 1
+    source_corpus: str = ""
+    question_mode: str = "short_answer"
+    enrichment_stage_added: bool = False
 
     def get_compressed_history(self, max_turns: int = 3) -> list[dict]:
         recent = self.stage_turns[-max_turns:]

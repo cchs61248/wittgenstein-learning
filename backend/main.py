@@ -17,6 +17,7 @@ from .llm.provider_factory import create_provider
 from .llm.file_adapter import create_provider_file_ref
 from .orchestrator.learning_orchestrator import LearningOrchestrator
 from .memory.working_memory import get_working_memory, delete_working_memory
+from .memory import session_memory
 from .files.upload_store import load_upload
 
 
@@ -166,6 +167,9 @@ async def websocket_endpoint(
                         raw_content=raw_content,
                         provider_file_ref=provider_file_ref,
                         target_depth=p.get("target_depth", "intermediate"),
+                        question_mode=p.get("question_mode", "short_answer"),
+                        provider_name=provider_name,
+                        model_name=model,
                         emit=emit,
                     )
                 except Exception as e:
@@ -175,8 +179,17 @@ async def websocket_endpoint(
                 orch = _orchestrators.get(session_id)
                 if not orch:
                     # 重整後 in-memory orchestrator 遺失，新建一個並從 DB 恢復
-                    provider_name: str = p.get("provider", DEFAULT_PROVIDER)
-                    model: str | None = p.get("model") or None
+                    session_row = await session_memory.get_session(session_id)
+                    provider_name: str = (
+                        p.get("provider")
+                        or (session_row.get("provider_name") if session_row else None)
+                        or DEFAULT_PROVIDER
+                    )
+                    model: str | None = (
+                        p.get("model")
+                        or (session_row.get("model_name") if session_row else None)
+                        or None
+                    )
                     llm = create_provider(provider_name, model=model)
                     orch = LearningOrchestrator(llm)
                     _orchestrators[session_id] = orch
@@ -202,9 +215,18 @@ async def websocket_endpoint(
 
             elif msg_type == "resume_session":
                 try:
-                    provider_name: str = p.get("provider", DEFAULT_PROVIDER)
-                    model: str | None = p.get("model") or None
                     session_id_to_resume: str = p.get("session_id", session_id)
+                    session_row = await session_memory.get_session(session_id_to_resume)
+                    provider_name: str = (
+                        p.get("provider")
+                        or (session_row.get("provider_name") if session_row else None)
+                        or DEFAULT_PROVIDER
+                    )
+                    model: str | None = (
+                        p.get("model")
+                        or (session_row.get("model_name") if session_row else None)
+                        or None
+                    )
                     llm = create_provider(provider_name, model=model)
                     orchestrator = LearningOrchestrator(llm)
                     _orchestrators[session_id_to_resume] = orchestrator
@@ -221,6 +243,15 @@ async def websocket_endpoint(
                     "type": "hint",
                     "payload": {"text": "提示功能即將開放"},
                 })
+
+            elif msg_type == "ask_tutor":
+                orch = _orchestrators.get(session_id)
+                if orch:
+                    await orch.handle_student_question(
+                        session_id=session_id,
+                        question=p.get("question", "").strip(),
+                        emit=emit,
+                    )
 
     except WebSocketDisconnect:
         ws_manager.disconnect(session_id, user_id, websocket)

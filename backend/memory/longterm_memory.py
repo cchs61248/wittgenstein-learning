@@ -36,6 +36,21 @@ async def get_weak_concepts(user_id: str, limit: int = 5) -> str:
     return "、".join(row[0] for row in rows)
 
 
+async def get_concept_mastery_map(user_id: str, concepts: list[str]) -> dict[str, float]:
+    if not concepts:
+        return {}
+    db = await get_db()
+    placeholders = ",".join("?" for _ in concepts)
+    params = [user_id, *concepts]
+    async with db.execute(
+        f"""SELECT concept_name, mastery_score FROM concept_mastery
+            WHERE user_id = ? AND concept_name IN ({placeholders})""",
+        params,
+    ) as cur:
+        rows = await cur.fetchall()
+    return {row["concept_name"]: float(row["mastery_score"]) for row in rows}
+
+
 async def update_concept_mastery(
     user_id: str,
     concept_name: str,
