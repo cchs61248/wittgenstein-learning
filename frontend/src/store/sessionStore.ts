@@ -49,6 +49,7 @@ interface SessionState {
   pendingNextQuestion: QuestionPayload | null;
   pendingAnswer: string | null;
   qaHistory: QaHistoryItem[];
+  stageQaHistories: Record<number, QaHistoryItem[]>;
   setQuestion: (q: QuestionPayload) => void;
   setFeedback: (f: FeedbackPayload) => void;
   setDecision: (d: StageDecisionPayload) => void;
@@ -80,6 +81,15 @@ function loadStageExplanations(): Record<number, string> {
   }
 }
 
+function loadStageQaHistories(): Record<number, QaHistoryItem[]> {
+  try {
+    const raw = localStorage.getItem('wl_stage_qa_histories');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 export const useSessionStore = create<SessionState>((set) => ({
   token: localStorage.getItem('wl_token'),
   userId: localStorage.getItem('wl_user_id'),
@@ -96,6 +106,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_email');
     localStorage.removeItem('wl_session_id');
     localStorage.removeItem('wl_stage_explanations');
+    localStorage.removeItem('wl_stage_qa_histories');
     set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null });
   },
 
@@ -152,6 +163,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   pendingNextQuestion: null,
   pendingAnswer: null,
   qaHistory: [],
+  stageQaHistories: loadStageQaHistories(),
   setQuestion: (q) =>
     set((s) => {
       if (s.lastFeedback) {
@@ -191,26 +203,35 @@ export const useSessionStore = create<SessionState>((set) => ({
       lastFeedback: null,
     })),
   advanceStage: (nextStageId) =>
-    set((s) => ({
-      stages: s.stages.map((st) => ({
-        ...st,
-        status:
-          st.stage_id === s.currentStageId
-            ? 'completed'
-            : st.stage_id === nextStageId
-            ? 'current'
-            : st.status,
-      })),
-      currentStageId: nextStageId,
-      explanationText: '',
-      currentQuestion: null,
-      lastFeedback: null,
-      pendingNextQuestion: null,
-      isAwaitingFeedback: false,
-      selectedStageId: null,
-      qaHistory: [],
-      pendingAnswer: null,
-    })),
+    set((s) => {
+      const updatedStageQaHistories = s.currentStageId !== null && s.qaHistory.length > 0
+        ? { ...s.stageQaHistories, [s.currentStageId]: s.qaHistory }
+        : s.stageQaHistories;
+      if (updatedStageQaHistories !== s.stageQaHistories) {
+        localStorage.setItem('wl_stage_qa_histories', JSON.stringify(updatedStageQaHistories));
+      }
+      return {
+        stages: s.stages.map((st) => ({
+          ...st,
+          status:
+            st.stage_id === s.currentStageId
+              ? 'completed'
+              : st.stage_id === nextStageId
+              ? 'current'
+              : st.status,
+        })),
+        currentStageId: nextStageId,
+        explanationText: '',
+        currentQuestion: null,
+        lastFeedback: null,
+        pendingNextQuestion: null,
+        isAwaitingFeedback: false,
+        selectedStageId: null,
+        qaHistory: [],
+        pendingAnswer: null,
+        stageQaHistories: updatedStageQaHistories,
+      };
+    }),
 
   pendingMap: null,
   setPendingMap: (map) => set({ pendingMap: map }),
@@ -232,6 +253,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_provider');
     localStorage.removeItem('wl_model');
     localStorage.removeItem('wl_stage_explanations');
+    localStorage.removeItem('wl_stage_qa_histories');
     set({
       sessionId: null,
       stages: [],
@@ -245,6 +267,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       isAwaitingFeedback: false,
       courseCompleted: false,
       stageExplanations: {},
+      stageQaHistories: {},
       selectedStageId: null,
       qaHistory: [],
       pendingAnswer: null,

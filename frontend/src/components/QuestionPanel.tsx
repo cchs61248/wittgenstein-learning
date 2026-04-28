@@ -54,9 +54,56 @@ export function QuestionPanel({ onSubmit }: Props) {
   const pendingNextQuestion = useSessionStore((s) => s.pendingNextQuestion);
   const proceedToNextQuestion = useSessionStore((s) => s.proceedToNextQuestion);
   const qaHistory = useSessionStore((s) => s.qaHistory);
+  const selectedStageId = useSessionStore((s) => s.selectedStageId);
+  const stageQaHistories = useSessionStore((s) => s.stageQaHistories);
   const [answer, setAnswer] = useState('');
   const [showHistory, setShowHistory] = useState(false);
   const [selectedHistoryIdx, setSelectedHistoryIdx] = useState<number | null>(null);
+
+  const reviewHistory = selectedStageId !== null ? (stageQaHistories[selectedStageId] ?? []) : null;
+
+  if (reviewHistory !== null) {
+    if (reviewHistory.length === 0) {
+      return (
+        <div className="question-panel waiting">
+          <p>此節點無答題記錄</p>
+        </div>
+      );
+    }
+    return (
+      <div className="question-panel">
+        <div className="qa-history-section">
+          <div className="qa-history-toggle" style={{ cursor: 'default' }}>
+            <span>答題記錄（共 {reviewHistory.length} 題）</span>
+          </div>
+          <div className="qa-history-list">
+            {reviewHistory.map((item, idx) => (
+              <div key={item.questionId}>
+                <button
+                  className={`qa-history-item ${selectedHistoryIdx === idx ? 'qa-history-item-selected' : ''}`}
+                  onClick={() => setSelectedHistoryIdx(selectedHistoryIdx === idx ? null : idx)}
+                >
+                  <span className="history-idx">{idx + 1}</span>
+                  <span className="question-type" style={{ fontSize: '11px' }}>
+                    {typeLabel[item.questionType] ?? '問題'}
+                  </span>
+                  <span className="history-question-text">
+                    {item.questionText.length > 45
+                      ? item.questionText.slice(0, 45) + '…'
+                      : item.questionText}
+                  </span>
+                  <span className={`score-badge ${item.score >= 0.75 ? 'score-pass' : 'score-fail'}`} style={{ fontSize: '13px' }}>
+                    {(item.score * 100).toFixed(0)} 分
+                  </span>
+                </button>
+                {selectedHistoryIdx === idx && <HistoryDetail item={item} />}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (courseCompleted) {
     return (
