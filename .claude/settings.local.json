@@ -5,7 +5,15 @@
       "Bash(git commit *)",
       "Bash(npm run *)",
       "Bash(curl -s http://localhost:5173)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(backend/.venv/Scripts/python.exe -c ' *)",
+      "PowerShell(head *)",
+      "PowerShell(& \"C:\\\\Users\\\\cchs6\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe\" -c $script)",
+      "Bash(json\\\\n{\\\\\"aligned\\\\\": false}\\\\n)",
+      "Bash(json\\\\n{\\\\\"aligned\\\\\": false, \\\\\"issues\\\\\": []}\\\\n)",
+      "Bash('C:\\\\Users\\\\cchs6\\\\Documents\\\\aaron\\\\wittgenstein-learning\\\\backend\\\\.venv\\\\Scripts\\\\python.exe' -c ' *)",
+      "PowerShell(py -3 -c $script)",
+      "PowerShell(& \"C:\\\\Users\\\\cchs6\\\\Documents\\\\aaron\\\\wittgenstein-learning\\\\.venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\cchs6\\\\Documents\\\\aaron\\\\wittgenstein-learning\\\\_test_extract.py\")"
     ]
   }
 }

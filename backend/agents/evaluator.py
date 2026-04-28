@@ -3,6 +3,7 @@ from typing import Any
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
+from ..utils import extract_json
 
 
 class EvaluatorAgent(BaseAgent):
@@ -112,12 +113,7 @@ class EvaluatorAgent(BaseAgent):
         response = await self.llm.chat(self._messages, system_prompt=SYSTEM_PROMPTS["evaluator"])
         self._reset()
 
-        raw_json = response.content.strip()
-        if raw_json.startswith("```"):
-            raw_json = raw_json.split("```")[1]
-            if raw_json.startswith("json"):
-                raw_json = raw_json[4:]
-        data = json.loads(raw_json.strip())
+        data = json.loads(extract_json(response.content))
         if isinstance(data.get("feedback"), str):
             data["feedback"] = data["feedback"].replace("\\n", "\n")
         return data
@@ -161,12 +157,7 @@ class EvaluatorAgent(BaseAgent):
         response = await self.llm.chat(self._messages, system_prompt=SYSTEM_PROMPTS["evaluator"])
         self._reset()
 
-        raw_json = response.content.strip()
-        if raw_json.startswith("```"):
-            raw_json = raw_json.split("```")[1]
-            if raw_json.startswith("json"):
-                raw_json = raw_json[4:]
-        data = json.loads(raw_json.strip())
+        data = json.loads(extract_json(response.content))
         if isinstance(data.get("feedback"), str):
             data["feedback"] = data["feedback"].replace("\\n", "\n")
         # 安全夾緊：確保答錯分數不超過 0.6

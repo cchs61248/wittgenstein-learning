@@ -3,6 +3,7 @@ from typing import Any
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
+from ..utils import extract_json
 
 
 class DriftVerifierAgent(BaseAgent):
@@ -22,12 +23,7 @@ class DriftVerifierAgent(BaseAgent):
         response = await self.llm.chat(self._messages, system_prompt=SYSTEM_PROMPTS["drift_verifier"])
         self._reset()
 
-        raw_json = response.content.strip()
-        if raw_json.startswith("```"):
-            raw_json = raw_json.split("```")[1]
-            if raw_json.startswith("json"):
-                raw_json = raw_json[4:]
-        data = json.loads(raw_json.strip())
+        data = json.loads(extract_json(response.content))
         return {
             "aligned": bool(data.get("aligned", False)),
             "issues": data.get("issues") or [],

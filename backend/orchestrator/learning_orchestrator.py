@@ -14,6 +14,7 @@ from ..memory.working_memory import get_working_memory, TurnContext
 from ..memory import session_memory, longterm_memory
 from ..llm.base_provider import BaseLLMProvider
 from ..llm.base_provider import MessageRole, LLMMessage
+from ..utils import extract_json
 from ..utils.token_counter import TokenCounter
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..tools.web_search import search_web
@@ -1116,13 +1117,8 @@ class LearningOrchestrator:
         judge_resp = await self.teacher.llm.chat(
             judge_messages, system_prompt=SYSTEM_PROMPTS["scope_judge"]
         )
-        raw = judge_resp.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
         try:
-            judge_data = json.loads(raw.strip())
+            judge_data = json.loads(extract_json(judge_resp.content))
             in_scope = bool(judge_data.get("in_scope", False))
         except Exception:
             in_scope = True

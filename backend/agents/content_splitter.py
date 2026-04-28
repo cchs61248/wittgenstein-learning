@@ -3,6 +3,7 @@ from typing import Any
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import LLMMessage, MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
+from ..utils import extract_json
 
 
 class ContentSplitterAgent(BaseAgent):
@@ -29,18 +30,7 @@ class ContentSplitterAgent(BaseAgent):
         return []
 
     def _extract_json_candidate(self, text: str) -> str:
-        s = text.strip()
-        if s.startswith("```"):
-            parts = s.split("```")
-            if len(parts) >= 2:
-                s = parts[1]
-                if s.startswith("json"):
-                    s = s[4:]
-        start = s.find("{")
-        end = s.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            return s[start : end + 1].strip()
-        return s
+        return extract_json(text)
 
     def _normalize_splitter_output(self, data: dict[str, Any], max_stages: int) -> dict[str, Any]:
         stages_raw = data.get("stages")
