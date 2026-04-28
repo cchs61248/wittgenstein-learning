@@ -33,6 +33,7 @@ export default function App() {
     setPendingMap,
     pendingMap,
     resetExplanation,
+    clearSession,
     stages,
     setAwaitingFeedback,
     storeStageExplanation,
@@ -245,6 +246,7 @@ export default function App() {
     activeModelRef.current = model || undefined;
 
     wsRef.current?.close();
+    clearSession();
     const newSid = generateSessionId();
     sessionIdRef.current = newSid;
 
