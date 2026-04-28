@@ -215,6 +215,7 @@ body {
   box-shadow: var(--shadow-md);
   overflow: hidden;
   transition: width var(--press-duration) var(--ease-out);
+  z-index: 8;
 }
 
 .stage-sidebar-toggle {
@@ -273,7 +274,11 @@ body {
 }
 
 .stage-sidebar.is-collapsed .stage-sidebar-toggle-icon {
-  transform: rotate(-90deg);
+  transform: none;
+}
+
+.stage-sidebar-backdrop {
+  display: none;
 }
 
 /* ── 左側進度側欄（書脊感） ── */
@@ -431,6 +436,36 @@ body {
   flex-shrink: 0;
   background: linear-gradient(90deg, transparent, var(--border) 15%, var(--border) 85%, transparent);
   opacity: 0.85;
+}
+
+.content-splitter {
+  height: 44px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #fffdf4 0%, #fffbeb 100%);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 12px;
+}
+
+.question-panel-toggle {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.question-panel-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
 }
 
 /* ── 講解面板（閱讀欄） ── */
@@ -1823,7 +1858,7 @@ textarea:disabled {
   }
 
   .stage-sidebar.is-collapsed .stage-sidebar-toggle-icon {
-    transform: rotate(-90deg);
+    transform: rotate(0deg);
   }
 
   .stage-sidebar.is-collapsed .stage-sidebar-toggle-label,
@@ -1836,6 +1871,16 @@ textarea:disabled {
     padding: 12px 10px 10px;
     max-height: none;
     animation: none;
+  }
+
+  .stage-sidebar-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    border: none;
+    background: rgba(66, 32, 6, 0.2);
+    backdrop-filter: blur(1px);
+    z-index: 20;
   }
 
   .stage-map h3 {
@@ -1934,6 +1979,39 @@ textarea:disabled {
     white-space: pre-wrap;
   }
 
+  /* 手機表格：避免狀態欄被壓成逐字換行 */
+  .markdown-content table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+
+  .markdown-content th,
+  .markdown-content td {
+    white-space: normal;
+    word-break: keep-all;
+  }
+
+  .markdown-content th:first-child,
+  .markdown-content td:first-child {
+    min-width: 64px;
+  }
+
+  .markdown-content th:last-child,
+  .markdown-content td:last-child {
+    min-width: 86px;
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  .km-table th:last-child,
+  .km-table td:last-child {
+    min-width: 86px;
+    white-space: nowrap;
+    text-align: center;
+  }
+
   .question-panel {
     flex: 1 1 42%;
     min-height: 180px;
@@ -1941,6 +2019,18 @@ textarea:disabled {
     padding: 14px 12px max(14px, env(safe-area-inset-bottom, 0px));
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+  }
+
+  .content-splitter {
+    height: 40px;
+    padding: 0 10px;
+  }
+
+  .question-panel-toggle {
+    min-height: 32px;
+    font-size: 12px;
+    padding: 6px 10px;
+    touch-action: manipulation;
   }
 
   .question-text {

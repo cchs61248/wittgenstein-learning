@@ -41,6 +41,7 @@ export default function App() {
   const [showUpload, setShowUpload] = useState(false);
   const [kickedMessage, setKickedMessage] = useState<string | null>(null);
   const [isStageSidebarCollapsed, setIsStageSidebarCollapsed] = useState(false);
+  const [isQuestionPanelCollapsed, setIsQuestionPanelCollapsed] = useState(false);
   const wsRef = useRef<LearningWebSocket | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
 
@@ -264,7 +265,7 @@ export default function App() {
           >
             <span className="stage-sidebar-toggle-label">學習進度</span>
             <span className="stage-sidebar-toggle-value">{stages.filter((s) => s.status === 'completed').length}/{stages.length || 0}</span>
-            <span className="stage-sidebar-toggle-icon" aria-hidden="true">{isStageSidebarCollapsed ? '▾' : '▴'}</span>
+            <span className="stage-sidebar-toggle-icon" aria-hidden="true">{isStageSidebarCollapsed ? '▸' : '◂'}</span>
           </button>
           {!isStageSidebarCollapsed && (
             <div id="stage-map-panel">
@@ -272,11 +273,26 @@ export default function App() {
             </div>
           )}
         </section>
+        {!isStageSidebarCollapsed && (
+          <button
+            className="stage-sidebar-backdrop"
+            aria-label="關閉學習進度側欄"
+            onClick={() => setIsStageSidebarCollapsed(true)}
+          />
+        )}
 
-        <main className="main-content">
+        <main className={`main-content${isQuestionPanelCollapsed ? ' is-question-collapsed' : ''}`}>
           <ExplanationPanel />
-          <div className="divider" />
-          <QuestionPanel onSubmit={handleSubmitAnswer} />
+          <div className="content-splitter">
+            <button
+              className="question-panel-toggle"
+              onClick={() => setIsQuestionPanelCollapsed((v) => !v)}
+              aria-expanded={!isQuestionPanelCollapsed}
+            >
+              {isQuestionPanelCollapsed ? '展開答題區' : '收起答題區'}
+            </button>
+          </div>
+          {!isQuestionPanelCollapsed && <QuestionPanel onSubmit={handleSubmitAnswer} />}
         </main>
       </div>
 
