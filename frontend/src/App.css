@@ -560,6 +560,8 @@ body {
 
 /* 講解區主欄：學術邊注線 */
 .explanation-panel > .markdown-content {
+  width: 100%;
+  max-width: none;
   padding-left: 20px;
   border-left: 3px solid rgba(217, 119, 6, 0.35);
   margin-left: 4px;
