@@ -75,6 +75,13 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
+    # Migration 008：記錄 session 使用的題目模式
+    try:
+        await _connection.execute("ALTER TABLE sessions ADD COLUMN question_mode TEXT DEFAULT 'short_answer'")
+        await _connection.commit()
+    except Exception:
+        pass
+
     # Migration 006：建立決策歷史表（跨裝置恢復教練趨勢）
     await _connection.execute(
         """CREATE TABLE IF NOT EXISTS decision_records (

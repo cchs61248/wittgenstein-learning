@@ -32,6 +32,7 @@ async def get_active_session(token: str = Query(...)):
         "total_stages": session["total_stages"],
         "provider": session.get("provider_name"),
         "model": session.get("model_name"),
+        "question_mode": session.get("question_mode") or "short_answer",
         "stages": [
             {
                 "stage_id": s["stage_id"],

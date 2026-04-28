@@ -50,6 +50,7 @@ async def create_pending_session(
     nodes: list[dict],
     provider_name: str | None = None,
     model_name: str | None = None,
+    question_mode: str = "short_answer",
 ) -> None:
     db = await get_db()
     # 清除同用戶舊的 pending session（避免累積）
@@ -61,8 +62,8 @@ async def create_pending_session(
     await db.execute(
         """INSERT INTO sessions
            (session_id, user_id, content_hash, total_stages, raw_content_summary,
-            status, stages_json, pending_map_json, provider_name, model_name)
-           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?)""",
+            status, stages_json, pending_map_json, provider_name, model_name, question_mode)
+           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?, ?)""",
         (
             session_id, user_id, content_hash, len(stages),
             summary,
@@ -70,6 +71,7 @@ async def create_pending_session(
             json.dumps(pending_map, ensure_ascii=False),
             provider_name,
             model_name,
+            question_mode,
         ),
     )
     await db.commit()

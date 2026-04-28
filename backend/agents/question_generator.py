@@ -59,7 +59,8 @@ class QuestionGeneratorAgent(BaseAgent):
                 raw_json = raw_json[4:]
         data = json.loads(raw_json.strip())
         for q in data.get("questions", []):
-            q["answer_mode"] = q.get("answer_mode") or question_mode
+            # question_mode 是 session 級設定，優先權高於 LLM 回傳的 answer_mode
+            q["answer_mode"] = question_mode or q.get("answer_mode") or "short_answer"
             if not isinstance(q.get("evidence_chunk_ids"), list):
                 q["evidence_chunk_ids"] = []
             if q["answer_mode"] != "multiple_choice":

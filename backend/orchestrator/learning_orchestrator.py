@@ -319,6 +319,7 @@ class LearningOrchestrator:
             nodes=nodes,
             provider_name=provider_name,
             model_name=model_name,
+            question_mode=question_mode,
         )
 
         await emit({
@@ -1187,6 +1188,7 @@ class LearningOrchestrator:
 
         wm = get_working_memory(session_id)
         wm.stages = stages
+        wm.question_mode = session.get("question_mode") or "short_answer"
         wm.enrichment_stage_added = any(s.get("kind") == "enrichment" for s in stages)
         wm.source_corpus = "\n\n".join(
             f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}\n"
