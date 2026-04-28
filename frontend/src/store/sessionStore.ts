@@ -71,6 +71,15 @@ interface SessionState {
   clearSession: () => void;
 }
 
+function loadStageExplanations(): Record<number, string> {
+  try {
+    const raw = localStorage.getItem('wl_stage_explanations');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 export const useSessionStore = create<SessionState>((set) => ({
   token: localStorage.getItem('wl_token'),
   userId: localStorage.getItem('wl_user_id'),
@@ -86,6 +95,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_user_id');
     localStorage.removeItem('wl_email');
     localStorage.removeItem('wl_session_id');
+    localStorage.removeItem('wl_stage_explanations');
     set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null });
   },
 
@@ -125,9 +135,13 @@ export const useSessionStore = create<SessionState>((set) => ({
   appendExplanationChunk: (chunk) =>
     set((s) => ({ explanationText: s.explanationText + chunk, isStreaming: true })),
   setExplanationComplete: () => set({ isStreaming: false }),
-  stageExplanations: {},
+  stageExplanations: loadStageExplanations(),
   storeStageExplanation: (stageId, text) =>
-    set((s) => ({ stageExplanations: { ...s.stageExplanations, [stageId]: text } })),
+    set((s) => {
+      const updated = { ...s.stageExplanations, [stageId]: text };
+      localStorage.setItem('wl_stage_explanations', JSON.stringify(updated));
+      return { stageExplanations: updated };
+    }),
   selectedStageId: null,
   setSelectedStage: (id) => set({ selectedStageId: id }),
 
@@ -217,6 +231,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_session_id');
     localStorage.removeItem('wl_provider');
     localStorage.removeItem('wl_model');
+    localStorage.removeItem('wl_stage_explanations');
     set({
       sessionId: null,
       stages: [],
