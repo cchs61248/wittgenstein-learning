@@ -40,8 +40,18 @@ export default function App() {
 
   const [showUpload, setShowUpload] = useState(false);
   const [kickedMessage, setKickedMessage] = useState<string | null>(null);
+  const [isStageSidebarCollapsed, setIsStageSidebarCollapsed] = useState(false);
   const wsRef = useRef<LearningWebSocket | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 768px)');
+    const applyDefault = (matches: boolean) => setIsStageSidebarCollapsed(matches);
+    applyDefault(media.matches);
+    const onChange = (e: MediaQueryListEvent) => applyDefault(e.matches);
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
 
   // 掛載時：若有 token，先查詢是否有活躍會話；沒有才顯示上傳 modal
   useEffect(() => {
@@ -71,6 +81,9 @@ export default function App() {
         ws.connect();
         wsRef.current = ws;
       } else {
+        // 先從 REST 回應預填 stages，讓新裝置立即看到進度，不卡在空白畫面
+        setSession(savedSessionId, session.stages, session.stage_statuses);
+
         // 正常恢復進行中的學習
         const ws = new LearningWebSocket(savedSessionId, token, {
           onMessage: handleMessage,
@@ -208,7 +221,13 @@ export default function App() {
   return (
     <div className="app-layout">
       <header className="app-header">
-        <h1>維特根斯坦學習系統</h1>
+        <div className="header-brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <div className="header-brand-text">
+            <h1>維特根斯坦學習系統</h1>
+            <p className="header-tagline">蘇格拉底式問答 · 陪你真正讀懂</p>
+          </div>
+        </div>
         <div className="header-right">
           <span className="header-email">{email}</span>
           <button
@@ -236,7 +255,23 @@ export default function App() {
       </header>
 
       <div className="app-body">
-        <StageMap />
+        <section className={`stage-sidebar${isStageSidebarCollapsed ? ' is-collapsed' : ''}`}>
+          <button
+            className="stage-sidebar-toggle"
+            onClick={() => setIsStageSidebarCollapsed((v) => !v)}
+            aria-expanded={!isStageSidebarCollapsed}
+            aria-controls="stage-map-panel"
+          >
+            <span className="stage-sidebar-toggle-label">學習進度</span>
+            <span className="stage-sidebar-toggle-value">{stages.filter((s) => s.status === 'completed').length}/{stages.length || 0}</span>
+            <span className="stage-sidebar-toggle-icon" aria-hidden="true">{isStageSidebarCollapsed ? '▾' : '▴'}</span>
+          </button>
+          {!isStageSidebarCollapsed && (
+            <div id="stage-map-panel">
+              <StageMap hideHeading />
+            </div>
+          )}
+        </section>
 
         <main className="main-content">
           <ExplanationPanel />
@@ -275,10 +310,10 @@ export default function App() {
               className="btn-primary btn-large"
               onClick={() => {
                 setKickedMessage(null);
-                window.location.reload();
+                clearAuth();
               }}
             >
-              重新整理
+              前往登入頁面
             </button>
           </div>
         </div>

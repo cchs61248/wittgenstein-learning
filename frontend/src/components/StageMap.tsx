@@ -6,7 +6,11 @@ const statusLabel: Record<StageStatus, string> = {
   completed: '已完成',
 };
 
-export function StageMap() {
+interface StageMapProps {
+  hideHeading?: boolean;
+}
+
+export function StageMap({ hideHeading = false }: StageMapProps) {
   const stages = useSessionStore((s) => s.stages);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const setSelectedStage = useSessionStore((s) => s.setSelectedStage);
@@ -17,7 +21,7 @@ export function StageMap() {
 
   return (
     <aside className="stage-map">
-      <h3>學習進度</h3>
+      {!hideHeading && <h3>學習進度</h3>}
       <div className="progress-bar">
         <div className="progress-fill" style={{ width: `${pct}%` }} />
       </div>

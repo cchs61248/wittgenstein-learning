@@ -17,6 +17,8 @@ C:\Windows\py.exe -3 -m venv .venv
 uvicorn run:app --reload --port 8000
 ```
 
+**Python 虛擬環境（僅此倉庫）**：本專案的 `.venv` 建立在 **`backend/.venv`**。執行任何與此 repo 相關的 Python（含從上層 `learn` 呼叫的工具腳本）請使用 `backend/.venv/Scripts/python.exe`，勿假設倉庫根目錄或上層 `learn` 根目錄有 `.venv`。其他路徑下的專案各自有其慣例，不適用此路徑。
+
 **注意**：入口點是 `run.py`，而不是 `main.py`。`run.py` 將上層目錄加入 `sys.path`，讓 `backend.*` 的相對匯入正常運作。不能用 `uvicorn main:app`，否則出現 `ImportError: attempted relative import with no known parent package`。
 
 ### Frontend

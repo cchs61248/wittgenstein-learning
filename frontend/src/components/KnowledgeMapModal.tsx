@@ -10,7 +10,7 @@ export function KnowledgeMapModal({ nodes, summary, onConfirm }: Props) {
   return (
     <div className="modal-overlay">
       <div className="modal-card km-modal">
-        <h2>📋 知識地圖</h2>
+        <h2>知識地圖</h2>
         {summary && <p className="km-summary">{summary}</p>}
 
         <p className="km-desc">

@@ -1,14 +1,22 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html, body, #root {
+  min-height: 100%;
+  min-height: 100dvh;
   height: 100%;
 }
 
 body {
-  background: #F9F8F6;
-  color: #1C1917;
-  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg, #fffbeb);
+  color: var(--text, #422006);
+  font-family: 'Crimson Text', 'Noto Serif TC', 'Iowan Old Style', 'Palatino Linotype', serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 #root {

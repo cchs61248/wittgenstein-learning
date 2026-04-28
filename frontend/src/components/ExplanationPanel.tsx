@@ -15,7 +15,9 @@ export function ExplanationPanel() {
   if (!displayText && !isStreaming) {
     return (
       <div className="explanation-panel empty">
-        <p>等待學習開始...</p>
+        <div className="empty-ornament" aria-hidden="true" />
+        <p className="empty-lead">等待學習開始</p>
+        <p className="empty-hint">上傳材料後，講解與提問會依序出現在這裡</p>
       </div>
     );
   }
