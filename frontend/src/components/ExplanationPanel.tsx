@@ -6,11 +6,19 @@ export function ExplanationPanel() {
   const explanationText = useSessionStore((s) => s.explanationText);
   const isStreaming = useSessionStore((s) => s.isStreaming);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
+  const currentStageId = useSessionStore((s) => s.currentStageId);
   const stageExplanations = useSessionStore((s) => s.stageExplanations);
+  const stageSourceChunks = useSessionStore((s) => s.stageSourceChunks);
   const setSelectedStage = useSessionStore((s) => s.setSelectedStage);
 
   const reviewText = selectedStageId !== null ? (stageExplanations[selectedStageId] ?? null) : null;
   const displayText = reviewText ?? explanationText;
+  const stageIdForDisplay = selectedStageId ?? currentStageId;
+  const chunks = stageIdForDisplay !== null ? (stageSourceChunks[stageIdForDisplay] ?? []) : [];
+  const refs = Array.from(new Set((displayText.match(/\[([A-Za-z0-9_.:-]+)\]/g) ?? []).map((m) => m.slice(1, -1))));
+  const referencedChunks = refs
+    .map((id) => ({ id, chunk: chunks.find((c) => c.chunk_id === id) }))
+    .filter((x) => x.chunk);
 
   if (!displayText && !isStreaming) {
     return (
@@ -36,6 +44,19 @@ export function ExplanationPanel() {
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayText}</ReactMarkdown>
         {isStreaming && reviewText === null && <span className="cursor-blink">▋</span>}
       </div>
+      {referencedChunks.length > 0 && (
+        <div className="source-reference-panel">
+          <div className="source-reference-title">來源追溯（滑鼠移上查看原文）</div>
+          <div className="source-reference-list">
+            {referencedChunks.map(({ id, chunk }) => (
+              <span key={id} className="source-chip">
+                [{id}]
+                <span className="source-tooltip">{chunk?.quote}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

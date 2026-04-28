@@ -6,6 +6,28 @@ from ..utils.prompt_templates import SYSTEM_PROMPTS
 
 
 class ContentSplitterAgent(BaseAgent):
+    def _normalize_source_chunks(self, stage: dict[str, Any], idx: int) -> list[dict[str, str]]:
+        raw_chunks = stage.get("source_chunks")
+        normalized: list[dict[str, str]] = []
+        if isinstance(raw_chunks, list):
+            for c_idx, chunk in enumerate(raw_chunks):
+                if not isinstance(chunk, dict):
+                    continue
+                quote = str(chunk.get("quote", "")).strip()
+                if not quote:
+                    continue
+                chunk_id = str(chunk.get("chunk_id") or f"s{idx + 1}_c{c_idx + 1}")
+                note = str(chunk.get("note", "")).strip()
+                normalized.append({"chunk_id": chunk_id, "quote": quote, "note": note})
+        if normalized:
+            return normalized
+
+        # 後備：若模型未回 source_chunks，至少保留本 stage 的可追溯引用片段
+        fallback_quote = str(stage.get("content", "")).strip()[:500]
+        if fallback_quote:
+            return [{"chunk_id": f"s{idx + 1}_c1", "quote": fallback_quote, "note": "fallback"}]
+        return []
+
     def _extract_json_candidate(self, text: str) -> str:
         s = text.strip()
         if s.startswith("```"):
@@ -41,6 +63,7 @@ class ContentSplitterAgent(BaseAgent):
                     "node_id": node_id,
                     "title": str(s.get("title", f"階段 {idx + 1}")),
                     "content": str(s.get("content", "")),
+                    "source_chunks": self._normalize_source_chunks(s, idx),
                     "key_concepts": [
                         str(c) for c in (s.get("key_concepts") or []) if isinstance(c, (str, int, float))
                     ],
@@ -79,6 +102,7 @@ class ContentSplitterAgent(BaseAgent):
                     "請將下列內容修正為合法 JSON，保持原本語意與欄位。\n"
                     "必要欄位：stages(array), summary(string)。\n"
                     "stage 欄位：stage_id,title,content,key_concepts,prerequisites,estimated_questions。\n"
+                    "stage 欄位中若有 source_chunks，元素需含 chunk_id,quote,note。\n"
                     f"目前錯誤：{e}\n\n"
                     f"{candidate}"
                 )

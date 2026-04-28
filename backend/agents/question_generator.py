@@ -6,6 +6,21 @@ from ..utils.prompt_templates import SYSTEM_PROMPTS
 
 
 class QuestionGeneratorAgent(BaseAgent):
+    def _format_source_chunks(self, stage: dict[str, Any]) -> str:
+        chunks = stage.get("source_chunks") or []
+        if not isinstance(chunks, list) or not chunks:
+            return "（無 source_chunks，可用內容僅限內容摘要）"
+        lines: list[str] = []
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            chunk_id = str(chunk.get("chunk_id", "")).strip() or "unknown"
+            quote = str(chunk.get("quote", "")).strip()
+            if not quote:
+                continue
+            lines.append(f"[{chunk_id}] {quote}")
+        return "\n".join(lines) if lines else "（source_chunks 格式不完整）"
+
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
         self._reset()
         payload = ctx.task_payload
@@ -29,7 +44,8 @@ class QuestionGeneratorAgent(BaseAgent):
             MessageRole.USER,
             f"階段：{stage['title']}\n"
             f"關鍵概念：{', '.join(stage.get('key_concepts', []))}\n"
-            f"內容摘要：{stage['content'][:800]}"
+            f"內容摘要：{stage['content'][:800]}\n\n"
+            f"source_chunks（每題要附 evidence_chunk_ids）：\n{self._format_source_chunks(stage)}"
             f"{avoid_note}",
         )
 
@@ -44,6 +60,8 @@ class QuestionGeneratorAgent(BaseAgent):
         data = json.loads(raw_json.strip())
         for q in data.get("questions", []):
             q["answer_mode"] = q.get("answer_mode") or question_mode
+            if not isinstance(q.get("evidence_chunk_ids"), list):
+                q["evidence_chunk_ids"] = []
             if q["answer_mode"] != "multiple_choice":
                 q["options"] = []
                 q["correct_option_id"] = None

@@ -16,6 +16,13 @@ export interface KnowledgeMapPayload {
 export interface StageInfo {
   stage_id: number;
   title: string;
+  source_chunks?: SourceChunk[];
+}
+
+export interface SourceChunk {
+  chunk_id: string;
+  quote: string;
+  note?: string;
 }
 
 // 伺服器 → 客戶端
@@ -43,6 +50,7 @@ export interface QuestionPayload {
   type: 'apply' | 'understand' | 'create';
   answer_mode?: 'short_answer' | 'multiple_choice';
   options?: { id: string; text: string }[];
+  evidence_chunk_ids?: string[];
   stage_id: number;
   attempt_number: number;
 }

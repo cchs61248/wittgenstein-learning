@@ -4,6 +4,7 @@ export interface ActiveSessionStage {
   stage_id: number;
   node_id: string;
   title: string;
+  source_chunks?: { chunk_id: string; quote: string; note?: string }[];
 }
 
 export interface ActiveSession {

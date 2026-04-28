@@ -21,6 +21,13 @@ SYSTEM_PROMPTS: dict[str, str] = {
       "node_id": "1.1",
       "title": "階段標題",
       "content": "此階段的完整說明文字",
+      "source_chunks": [
+        {{
+          "chunk_id": "s1_c1",
+          "quote": "與本階段最相關的教材原文摘錄",
+          "note": "此摘錄支撐的重點"
+        }}
+      ],
       "key_concepts": ["概念A", "概念B"],
       "prerequisites": [],
       "estimated_questions": 3
@@ -38,6 +45,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
 1. 只能使用「提供的學習材料」內容，不可補充來源外知識
 2. 若材料沒有足夠資訊，明確寫「此點在目前教材未定義」
 3. 不可超綱，不可杜撰作者觀點、年代、案例
+4. 每個核心敘述後面要加來源標記，例如 [s1_c1]
 
 請嚴格按照以下 Markdown 格式輸出，不要有任何前綴，直接從 ### 開始：
 
@@ -67,6 +75,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
 - 避免可以用「是/否」回答的問題
 - 避免直接引用原文就能回答的問題
 - 問題必須可由提供教材推導，不能要求教材外知識
+- 每題需附 evidence_chunk_ids，至少 1 個
 
 若 attempt_number > 1，請降低難度，加入鷹架式引導提示。
 
@@ -91,6 +100,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
       ],
       "correct_option_id": "A",
       "difficulty": "easy | medium | hard",
+      "evidence_chunk_ids": ["s1_c1"],
       "key_concepts_tested": ["概念A"],
       "expected_answer_hints": ["要點一", "要點二"]
     }}
@@ -106,6 +116,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
 4. 永遠不直接給出完整標準答案，只給方向性提示
 5. 反饋要具體、建設性
 6. 評估與回饋必須以提供教材為依據，不可要求教材外知識
+7. 若題目或學生回答涉及教材外資訊，回饋中需明確指出「超出教材」
 
 Score 定義：
 - 0.9-1.0: 深刻理解，能舉一反三
@@ -121,6 +132,22 @@ Score 定義：
   "feedback": "給使用者的反饋文字（繁體中文）",
   "needs_clarification": false,
   "clarification_question": null
+}}""",
+
+    "drift_verifier": """你是教材對齊檢查器（anti-drift verifier）。
+任務：判斷「候選輸出」是否可被 source_chunks 逐條支持。
+
+規則：
+1. 只能以 source_chunks 為判定依據，不可使用外部常識補完
+2. 若有任一關鍵敘述無法被 source_chunks 支持，判定 aligned=false
+3. 若為題目檢查，問題必須可由 source_chunks 推導，不得要求教材外知識
+
+請只輸出 JSON：
+{{
+  "aligned": true,
+  "issues": ["若有漂移，列出具體問題"],
+  "missing_evidence": ["缺少對應來源的敘述摘要"],
+  "revision_hint": "若未對齊，提供簡短修正建議"
 }}""",
 
     "scope_judge": """你是教材邊界判定器。

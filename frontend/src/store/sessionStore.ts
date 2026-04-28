@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode } from '../types/messages';
+import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode, SourceChunk } from '../types/messages';
 
 export type StageStatus = 'pending' | 'current' | 'completed';
 
@@ -37,6 +37,7 @@ interface SessionState {
   appendExplanationChunk: (chunk: string) => void;
   setExplanationComplete: () => void;
   stageExplanations: Record<number, string>;
+  stageSourceChunks: Record<number, SourceChunk[]>;
   storeStageExplanation: (stageId: number, text: string) => void;
   selectedStageId: number | null;
   setSelectedStage: (id: number | null) => void;
@@ -159,30 +160,33 @@ export const useSessionStore = create<SessionState>((set) => ({
         localStorage.removeItem('wl_decision_history');
       }
       return {
-      sessionId,
-      stages: stages.map((s, i) => {
-        const dbStatus = stageStatuses?.[String(s.stage_id)];
-        let status: StageStatus;
-        if (dbStatus === 'completed') {
-          status = 'completed';
-        } else if (dbStatus === 'in_progress') {
-          status = 'current';
-        } else {
-          status = i === 0 ? 'current' : 'pending';
-        }
-        return { ...s, status };
-      }),
-      currentStageId: stages[0]?.stage_id ?? null,
-      explanationText: '',
-      isStreaming: false,
-      currentQuestion: null,
-      lastFeedback: null,
-      lastDecision: null,
-      decisionHistory: isNewSession ? [] : s.decisionHistory,
-      pendingNextQuestion: null,
-      isAwaitingFeedback: false,
-      courseCompleted: false,
-      tutorReply: null,
+        sessionId,
+        stages: stages.map((s, i) => {
+          const dbStatus = stageStatuses?.[String(s.stage_id)];
+          let status: StageStatus;
+          if (dbStatus === 'completed') {
+            status = 'completed';
+          } else if (dbStatus === 'in_progress') {
+            status = 'current';
+          } else {
+            status = i === 0 ? 'current' : 'pending';
+          }
+          return { ...s, status };
+        }),
+        currentStageId: stages[0]?.stage_id ?? null,
+        stageSourceChunks: Object.fromEntries(
+          stages.map((stage) => [stage.stage_id, stage.source_chunks ?? []])
+        ),
+        explanationText: '',
+        isStreaming: false,
+        currentQuestion: null,
+        lastFeedback: null,
+        lastDecision: null,
+        decisionHistory: isNewSession ? [] : s.decisionHistory,
+        pendingNextQuestion: null,
+        isAwaitingFeedback: false,
+        courseCompleted: false,
+        tutorReply: null,
       };
     });
   },
@@ -193,6 +197,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     set((s) => ({ explanationText: s.explanationText + chunk, isStreaming: true })),
   setExplanationComplete: () => set({ isStreaming: false }),
   stageExplanations: loadStageExplanations(),
+  stageSourceChunks: {},
   storeStageExplanation: (stageId, text) =>
     set((s) => {
       const updated = { ...s.stageExplanations, [stageId]: text };
@@ -358,6 +363,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       isAwaitingFeedback: false,
       courseCompleted: false,
       stageExplanations: {},
+      stageSourceChunks: {},
       stageQaHistories: {},
       selectedStageId: null,
       qaHistory: [],

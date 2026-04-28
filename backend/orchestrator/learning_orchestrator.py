@@ -9,6 +9,7 @@ from ..agents.teacher import TeacherAgent
 from ..agents.question_generator import QuestionGeneratorAgent
 from ..agents.evaluator import EvaluatorAgent
 from ..agents.progress_manager import ProgressManagerAgent
+from ..agents.drift_verifier import DriftVerifierAgent
 from ..memory.working_memory import get_working_memory, TurnContext
 from ..memory import session_memory, longterm_memory
 from ..llm.base_provider import BaseLLMProvider
@@ -28,6 +29,7 @@ class LearningOrchestrator:
         self.questioner = QuestionGeneratorAgent(llm, tc)
         self.evaluator = EvaluatorAgent(llm, tc)
         self.progress = ProgressManagerAgent(llm, tc)
+        self.drift_verifier = DriftVerifierAgent(llm, tc)
         self._pending_stages: list[dict] | None = None
         self._pending_start_args: dict | None = None
 
@@ -64,6 +66,38 @@ class LearningOrchestrator:
             "答錯了我們一起釐清，這正是學習的過程。\n"
         )
         return "".join(lines)
+
+    def _normalize_stage_source_chunks(self, stage: dict) -> list[dict]:
+        chunks = stage.get("source_chunks")
+        if isinstance(chunks, list) and chunks:
+            return [c for c in chunks if isinstance(c, dict)]
+        content = str(stage.get("content", "")).strip()
+        if not content:
+            return []
+        return [{
+            "chunk_id": f"s{stage.get('stage_id', 'x')}_c1",
+            "quote": content[:500],
+            "note": "fallback",
+        }]
+
+    async def _verify_grounding(
+        self,
+        session_id: str,
+        user_id: str,
+        stage: dict,
+        content_type: str,
+        candidate_text: str,
+    ) -> dict:
+        verify_ctx = AgentContext(
+            session_id=session_id,
+            user_id=user_id,
+            task_payload={
+                "content_type": content_type,
+                "source_chunks": self._normalize_stage_source_chunks(stage),
+                "candidate_text": candidate_text,
+            },
+        )
+        return await self.drift_verifier.run(verify_ctx)
 
     def _rank_next_stage_candidates(
         self,
@@ -168,6 +202,7 @@ class LearningOrchestrator:
             "key_concepts": remediation_focus[:3] or current.get("key_concepts", [])[:2],
             "prerequisites": [current.get("title", "")],
             "estimated_questions": 3 if remediation_focus else 2,
+            "source_chunks": self._normalize_stage_source_chunks(current),
             "is_dynamic": True,
             "source_stage_id": current.get("stage_id"),
         }
@@ -205,6 +240,13 @@ class LearningOrchestrator:
             "key_concepts": list(dict.fromkeys([c for s in stages[-3:] for c in s.get("key_concepts", [])]))[:5],
             "prerequisites": [s.get("title", "") for s in stages[-2:]],
             "estimated_questions": 4,
+            "source_chunks": [
+                {
+                    "chunk_id": f"s{new_stage_id}_c1",
+                    "quote": "；".join(s.get("content", "")[:240] for s in stages[-3:] if s.get("content")),
+                    "note": "來自最近三個節點的整合摘錄",
+                }
+            ],
             "is_dynamic": True,
             "kind": "enrichment",
         }
@@ -249,6 +291,8 @@ class LearningOrchestrator:
         )
         split_result = await self.splitter.run(ctx)
         stages: list[dict] = split_result["stages"]
+        for stage in stages:
+            stage["source_chunks"] = self._normalize_stage_source_chunks(stage)
         summary: str = split_result.get("summary", "")
 
         nodes = [
@@ -325,7 +369,14 @@ class LearningOrchestrator:
             "payload": {
                 "session_id": session_id,
                 "total_stages": len(stages),
-                "stages": [{"stage_id": s["stage_id"], "title": s["title"]} for s in stages],
+                "stages": [
+                    {
+                        "stage_id": s["stage_id"],
+                        "title": s["title"],
+                        "source_chunks": self._normalize_stage_source_chunks(s),
+                    }
+                    for s in stages
+                ],
             },
         })
 
@@ -353,7 +404,11 @@ class LearningOrchestrator:
         wm.reset_for_new_stage(stages[stage_index]["stage_id"])
         wm.question_mode = question_mode
         wm.source_corpus = "\n\n".join(
-            f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}"
+            f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}\n"
+            + "\n".join(
+                f"- [{c.get('chunk_id', 'unknown')}] {c.get('quote', '')}"
+                for c in self._normalize_stage_source_chunks(s)
+            )
             for s in stages
         )
         stage = stages[stage_index]
@@ -386,6 +441,37 @@ class LearningOrchestrator:
         async for chunk in self.teacher.stream_explanation(ctx):
             full_explanation += chunk
             await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
+        explanation_rewritten = False
+        explain_verify = await self._verify_grounding(
+            session_id=session_id,
+            user_id=user_id,
+            stage=stage,
+            content_type="explanation",
+            candidate_text=full_explanation,
+        )
+        if not explain_verify.get("aligned", False):
+            guidance = explain_verify.get("revision_hint") or "請僅依據 source_chunks 重寫，避免教材外推。"
+            retry_ctx = AgentContext(
+                session_id=session_id,
+                user_id=user_id,
+                task_payload={
+                    "stage": {
+                        **stage,
+                        "content": stage.get("content", "") + f"\n\n（對齊修正要求：{guidance}）",
+                    },
+                    "prev_stage_title": prev_stage["title"] if prev_stage else None,
+                    "user_profile_summary": user_profile_summary,
+                    "weak_concepts": weak_concepts,
+                },
+            )
+            full_explanation = ""
+            async for chunk in self.teacher.stream_explanation(retry_ctx):
+                full_explanation += chunk
+            explanation_rewritten = True
+        if explanation_rewritten:
+            await emit({"type": "explanation_reset", "payload": {}})
+            await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
+            await emit({"type": "explanation_chunk", "payload": {"chunk": full_explanation, "is_final": False}})
         wm.current_explanation = full_explanation
         await session_memory.store_stage_explanation(session_id, stage["stage_id"], full_explanation)
 
@@ -405,6 +491,33 @@ class LearningOrchestrator:
         )
         q_result = await self.questioner.run(q_ctx)
         questions: list[dict] = q_result.get("questions", [])
+        questions_verify = await self._verify_grounding(
+            session_id=session_id,
+            user_id=user_id,
+            stage=stage,
+            content_type="questions",
+            candidate_text=json.dumps(questions, ensure_ascii=False),
+        )
+        if not questions_verify.get("aligned", False):
+            retry_q_ctx = AgentContext(
+                session_id=session_id,
+                user_id=user_id,
+                task_payload={
+                    "stage": {
+                        **stage,
+                        "content": stage.get("content", "")
+                        + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                    },
+                    "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
+                    if question_mode == "multiple_choice"
+                    else stage.get("estimated_questions", 2),
+                    "attempt_number": 1,
+                    "previous_question_ids": [],
+                    "question_mode": question_mode,
+                },
+            )
+            q_result = await self.questioner.run(retry_q_ctx)
+            questions = q_result.get("questions", [])
         wm.pending_questions = questions
         await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
 
@@ -440,6 +553,7 @@ class LearningOrchestrator:
                     "type": q.get("type", "understand"),
                     "answer_mode": q.get("answer_mode", "short_answer"),
                     "options": q.get("options", []),
+                    "evidence_chunk_ids": q.get("evidence_chunk_ids", []),
                     "stage_id": stage["stage_id"],
                     "attempt_number": 1,
                 },
@@ -490,6 +604,7 @@ class LearningOrchestrator:
                 "question": q_obj,
                 "user_answer": answer,
                 "compressed_history": wm.get_compressed_history(max_turns=3),
+                "source_chunks": self._normalize_stage_source_chunks(stage),
             },
         )
         eval_result = await self.evaluator.run(eval_ctx)
@@ -549,6 +664,7 @@ class LearningOrchestrator:
                     "type": q.get("type", "understand"),
                     "answer_mode": q.get("answer_mode", "short_answer"),
                     "options": q.get("options", []),
+                    "evidence_chunk_ids": q.get("evidence_chunk_ids", []),
                     "stage_id": current_stage_id,
                     "attempt_number": wm.current_attempt,
                 },
@@ -723,7 +839,14 @@ class LearningOrchestrator:
                     "payload": {
                         "session_id": session_id,
                         "total_stages": len(stages),
-                        "stages": [{"stage_id": s["stage_id"], "title": s["title"]} for s in stages],
+                        "stages": [
+                            {
+                                "stage_id": s["stage_id"],
+                                "title": s["title"],
+                                "source_chunks": self._normalize_stage_source_chunks(s),
+                            }
+                            for s in stages
+                        ],
                         "stage_statuses": {str(k): v for k, v in refreshed_statuses.items()},
                     },
                 })
@@ -765,6 +888,31 @@ class LearningOrchestrator:
             )
             q_result = await self.questioner.run(q_ctx)
             questions: list[dict] = q_result.get("questions", [])
+            questions_verify = await self._verify_grounding(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                content_type="questions",
+                candidate_text=json.dumps(questions, ensure_ascii=False),
+            )
+            if not questions_verify.get("aligned", False):
+                retry_q_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={
+                        "stage": {
+                            **stage,
+                            "content": stage.get("content", "")
+                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                        },
+                        "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
+                        "attempt_number": wm.current_attempt,
+                        "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                        "question_mode": wm.question_mode,
+                    },
+                )
+                q_result = await self.questioner.run(retry_q_ctx)
+                questions = q_result.get("questions", [])
             # 確保問題 ID 在 stage_turns 中唯一，避免與前次嘗試碰撞
             used_ids = {t.question_id for t in wm.stage_turns}
             for q in questions:
@@ -795,6 +943,7 @@ class LearningOrchestrator:
                         "type": q.get("type", "understand"),
                         "answer_mode": q.get("answer_mode", "short_answer"),
                         "options": q.get("options", []),
+                        "evidence_chunk_ids": q.get("evidence_chunk_ids", []),
                         "stage_id": stage["stage_id"],
                         "attempt_number": wm.current_attempt,
                     },
@@ -828,6 +977,37 @@ class LearningOrchestrator:
             async for chunk in self.teacher.stream_explanation(ctx):
                 full_explanation += chunk
                 await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
+            explanation_rewritten = False
+            explain_verify = await self._verify_grounding(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                content_type="explanation",
+                candidate_text=full_explanation,
+            )
+            if not explain_verify.get("aligned", False):
+                guidance = explain_verify.get("revision_hint") or "請僅依據 source_chunks 重寫，避免教材外推。"
+                retry_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={
+                        "stage": {
+                            **reteach_stage,
+                            "content": reteach_stage.get("content", "") + f"\n\n（對齊修正要求：{guidance}）",
+                        },
+                        "prev_stage_title": prev_stage["title"] if prev_stage else None,
+                        "user_profile_summary": user_profile_summary,
+                        "weak_concepts": weak_concepts or "無",
+                    },
+                )
+                full_explanation = ""
+                async for chunk in self.teacher.stream_explanation(retry_ctx):
+                    full_explanation += chunk
+                explanation_rewritten = True
+            if explanation_rewritten:
+                await emit({"type": "explanation_reset", "payload": {}})
+                await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
+                await emit({"type": "explanation_chunk", "payload": {"chunk": full_explanation, "is_final": False}})
             wm.current_explanation = full_explanation
             wm.stage_evaluations = []
 
@@ -844,6 +1024,31 @@ class LearningOrchestrator:
             )
             q_result = await self.questioner.run(q_ctx)
             questions = q_result.get("questions", [])
+            questions_verify = await self._verify_grounding(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                content_type="questions",
+                candidate_text=json.dumps(questions, ensure_ascii=False),
+            )
+            if not questions_verify.get("aligned", False):
+                retry_q_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={
+                        "stage": {
+                            **stage,
+                            "content": stage.get("content", "")
+                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                        },
+                        "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
+                        "attempt_number": wm.current_attempt,
+                        "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                        "question_mode": wm.question_mode,
+                    },
+                )
+                q_result = await self.questioner.run(retry_q_ctx)
+                questions = q_result.get("questions", [])
             used_ids = {t.question_id for t in wm.stage_turns}
             for q in questions:
                 if not q.get("question_id") or q["question_id"] in used_ids:
@@ -872,6 +1077,7 @@ class LearningOrchestrator:
                         "type": q.get("type", "understand"),
                         "answer_mode": q.get("answer_mode", "short_answer"),
                         "options": q.get("options", []),
+                        "evidence_chunk_ids": q.get("evidence_chunk_ids", []),
                         "stage_id": stage["stage_id"],
                         "attempt_number": wm.current_attempt,
                     },
@@ -983,7 +1189,11 @@ class LearningOrchestrator:
         wm.stages = stages
         wm.enrichment_stage_added = any(s.get("kind") == "enrichment" for s in stages)
         wm.source_corpus = "\n\n".join(
-            f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}"
+            f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}\n"
+            + "\n".join(
+                f"- [{c.get('chunk_id', 'unknown')}] {c.get('quote', '')}"
+                for c in self._normalize_stage_source_chunks(s)
+            )
             for s in stages
         )
 
@@ -997,7 +1207,14 @@ class LearningOrchestrator:
             "payload": {
                 "session_id": session_id,
                 "total_stages": len(stages),
-                "stages": [{"stage_id": s["stage_id"], "title": s["title"]} for s in stages],
+                "stages": [
+                    {
+                        "stage_id": s["stage_id"],
+                        "title": s["title"],
+                        "source_chunks": self._normalize_stage_source_chunks(s),
+                    }
+                    for s in stages
+                ],
                 "stage_statuses": {str(k): v for k, v in statuses.items()},
             },
         })
@@ -1128,6 +1345,7 @@ class LearningOrchestrator:
                 "type": first_unanswered.get("type", "understand"),
                 "answer_mode": first_unanswered.get("answer_mode", "short_answer"),
                 "options": first_unanswered.get("options", []),
+                "evidence_chunk_ids": first_unanswered.get("evidence_chunk_ids", []),
                 "stage_id": stage["stage_id"],
                 "attempt_number": len(qa_records) + 1,
             }
@@ -1148,6 +1366,7 @@ class LearningOrchestrator:
                     "type": q.get("type", "understand"),
                     "answer_mode": q.get("answer_mode", "short_answer"),
                     "options": q.get("options", []),
+                    "evidence_chunk_ids": q.get("evidence_chunk_ids", []),
                     "stage_id": stage["stage_id"],
                     "attempt_number": len(qa_records) + 1,
                 },

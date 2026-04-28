@@ -58,6 +58,7 @@ export function QuestionPanel({ onSubmit, onAskTutor }: Props) {
   const qaHistory = useSessionStore((s) => s.qaHistory);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const stageQaHistories = useSessionStore((s) => s.stageQaHistories);
+  const stageSourceChunks = useSessionStore((s) => s.stageSourceChunks);
   const tutorReply = useSessionStore((s) => s.tutorReply);
   const [answer, setAnswer] = useState('');
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -66,6 +67,11 @@ export function QuestionPanel({ onSubmit, onAskTutor }: Props) {
   const [selectedHistoryIdx, setSelectedHistoryIdx] = useState<number | null>(null);
 
   const reviewHistory = selectedStageId !== null ? (stageQaHistories[selectedStageId] ?? []) : null;
+  const currentStageChunks = currentQuestion ? (stageSourceChunks[currentQuestion.stage_id] ?? []) : [];
+  const evidenceDetails = (currentQuestion?.evidence_chunk_ids ?? []).map((chunkId) => ({
+    chunkId,
+    chunk: currentStageChunks.find((c) => c.chunk_id === chunkId),
+  }));
 
   if (reviewHistory !== null) {
     if (reviewHistory.length === 0) {
@@ -233,17 +239,29 @@ export function QuestionPanel({ onSubmit, onAskTutor }: Props) {
             <span className="attempt-badge">第 {currentQuestion.attempt_number} 次</span>
           </div>
           <div className="question-text">{currentQuestion.text}</div>
+          {evidenceDetails.length > 0 && (
+            <div className="evidence-row">
+              <span className="detail-label">來源依據</span>
+              <div className="evidence-chip-list">
+                {evidenceDetails.map(({ chunkId, chunk }) => (
+                  <span key={chunkId} className="evidence-chip" title={chunk?.quote ?? '此 chunk 尚無摘要'}>
+                    [{chunkId}]
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {currentQuestion.answer_mode === 'multiple_choice' ? (
             <div className="choice-list">
               {(currentQuestion.options ?? []).map((opt) => (
                 <button
                   key={opt.id}
-                  className={`qa-history-item ${selectedOption === opt.id ? 'qa-history-item-selected' : ''}`}
+                  className={`choice-item ${selectedOption === opt.id ? 'choice-item-selected' : ''}`}
                   onClick={() => setSelectedOption(opt.id)}
                   disabled={isAwaitingFeedback}
                 >
-                  <span className="history-idx">{opt.id}</span>
-                  <span className="history-question-text">{opt.text}</span>
+                  <span className="choice-id">{opt.id}</span>
+                  <span className="choice-text">{opt.text}</span>
                 </button>
               ))}
             </div>

@@ -621,6 +621,68 @@ body {
   font-weight: bold;
 }
 
+.source-reference-panel {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.source-reference-title {
+  font-size: 12px;
+  color: var(--text-subtle);
+  margin-bottom: 8px;
+  font-family: var(--font-ui);
+  font-weight: 700;
+}
+
+.source-reference-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  cursor: default;
+}
+
+.source-tooltip {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  min-width: 260px;
+  max-width: 420px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 15;
+}
+
+.source-chip:hover .source-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @keyframes blink {
   50% { opacity: 0; }
 }
@@ -728,6 +790,76 @@ body {
   margin-bottom: 14px;
   line-height: 1.55;
   color: var(--text);
+}
+
+.evidence-row {
+  margin: -4px 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.evidence-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.evidence-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+}
+
+.choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.choice-item {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.choice-item:hover {
+  background: var(--bg-hover);
+}
+
+.choice-item-selected {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+.choice-id {
+  color: var(--text-subtle);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.choice-text {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
 }
 
 /* ── 回饋卡片 ── */

@@ -37,6 +37,7 @@ async def get_active_session(token: str = Query(...)):
                 "stage_id": s["stage_id"],
                 "node_id": s.get("node_id", ""),
                 "title": s["title"],
+                "source_chunks": s.get("source_chunks", []),
             }
             for s in stages
         ],
