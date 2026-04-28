@@ -78,11 +78,17 @@ class WebSocketManager:
         if ws:
             await ws.send_text(json.dumps(message, ensure_ascii=False))
 
-    def disconnect(self, session_id: str, user_id: str) -> None:
-        self._sid_to_ws.pop(session_id, None)
-        # 只在 uid_to_sid 仍指向此 session 時才移除（避免覆蓋新連線的映射）
-        if self._uid_to_sid.get(user_id) == session_id:
-            self._uid_to_sid.pop(user_id, None)
+    def disconnect(self, session_id: str, user_id: str, ws: WebSocket) -> None:
+        # 只在 _sid_to_ws 中儲存的 WS 與傳入的 ws 是同一個物件時才移除，
+        # 避免新連線進來後被舊連線的斷線事件誤刪。
+        current = self._sid_to_ws.get(session_id)
+        if current is ws:
+            self._sid_to_ws.pop(session_id, None)
+            if self._uid_to_sid.get(user_id) == session_id:
+                self._uid_to_sid.pop(user_id, None)
+
+    def has_active_ws(self, session_id: str) -> bool:
+        return session_id in self._sid_to_ws
 
 
 ws_manager = WebSocketManager()
@@ -217,9 +223,12 @@ async def websocket_endpoint(
                 })
 
     except WebSocketDisconnect:
-        ws_manager.disconnect(session_id, user_id)
-        _orchestrators.pop(session_id, None)
-        delete_working_memory(session_id)
+        ws_manager.disconnect(session_id, user_id, websocket)
+        # 只有在此 WS 確實是當前連線（disconnect 後 session 已無 WS）時才清除資源，
+        # 避免把後繼裝置的 orchestrator / working memory 一起清掉。
+        if not ws_manager.has_active_ws(session_id):
+            _orchestrators.pop(session_id, None)
+            delete_working_memory(session_id)
 
 
 # 會話級 orchestrator 暫存（單 process 內有效）
