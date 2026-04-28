@@ -156,6 +156,20 @@ class LearningOrchestrator:
         mastery_map: dict[str, float],
         stable_high: bool,
     ) -> tuple[int | None, list[dict]]:
+        # 優先走順序：若下一個 stage 尚未完成，直接前進，不做排名
+        seq_idx = current_idx + 1
+        if seq_idx < len(stages) and stages[seq_idx]["stage_id"] not in completed_stage_ids:
+            ranked = self._rank_next_stage_candidates(
+                stages=stages,
+                current_idx=current_idx,
+                completed_stage_ids=completed_stage_ids,
+                weak_concepts=weak_concepts,
+                mastery_map=mastery_map,
+                stable_high=stable_high,
+            )
+            return seq_idx, ranked
+
+        # 順序 stage 已完成（或已到末尾），才用排名演算法選最佳待學節點
         ranked = self._rank_next_stage_candidates(
             stages=stages,
             current_idx=current_idx,
