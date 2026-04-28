@@ -6,6 +6,7 @@ import { KnowledgeMapModal } from './components/KnowledgeMapModal';
 import { StageMap } from './components/StageMap';
 import { ExplanationPanel } from './components/ExplanationPanel';
 import { QuestionPanel } from './components/QuestionPanel';
+import { AskTutorPanel } from './components/AskTutorPanel';
 import { LearningWebSocket } from './api/websocket';
 import { getActiveSession } from './api/session';
 import type { ServerMessage, ProviderType, DepthType } from './types/messages';
@@ -47,6 +48,7 @@ export default function App() {
   const [showUpload, setShowUpload] = useState(false);
   const [kickedMessage, setKickedMessage] = useState<string | null>(null);
   const [isStageSidebarCollapsed, setIsStageSidebarCollapsed] = useState(false);
+  const [isAskTutorCollapsed, setIsAskTutorCollapsed] = useState(false);
   const [isQuestionPanelCollapsed, setIsQuestionPanelCollapsed] = useState(false);
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const wsRef = useRef<LearningWebSocket | null>(null);
@@ -357,18 +359,18 @@ export default function App() {
           />
         )}
 
-        <main className={`main-content${isQuestionPanelCollapsed ? ' is-question-collapsed' : ''}`}>
+        <main className="main-content">
           <ExplanationPanel />
-          <div className="content-splitter">
-            <button
-              className="question-panel-toggle"
-              onClick={() => setIsQuestionPanelCollapsed((v) => !v)}
-              aria-expanded={!isQuestionPanelCollapsed}
-            >
-              {isQuestionPanelCollapsed ? '展開答題區' : '收起答題區'}
-            </button>
-          </div>
-          {!isQuestionPanelCollapsed && <QuestionPanel onSubmit={handleSubmitAnswer} onAskTutor={handleAskTutor} />}
+          <AskTutorPanel
+            onAskTutor={handleAskTutor}
+            isCollapsed={isAskTutorCollapsed}
+            onToggle={() => setIsAskTutorCollapsed((v) => !v)}
+          />
+          <QuestionPanel
+            onSubmit={handleSubmitAnswer}
+            isCollapsed={isQuestionPanelCollapsed}
+            onToggle={() => setIsQuestionPanelCollapsed((v) => !v)}
+          />
         </main>
       </div>
 

@@ -687,75 +687,118 @@ body {
   50% { opacity: 0; }
 }
 
-/* ── 問答面板 ── */
-.question-panel {
-  padding: 22px 40px 28px;
-  overflow-y: auto;
-  max-height: 46vh;
-  min-height: 220px;
-  background: linear-gradient(180deg, #ffffff 0%, var(--bg-card) 50%);
-  border-top: 1px solid var(--border);
-  box-shadow: none;
+/* ── 共用：可收折區塊 header ── */
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0 4px;
 }
 
-.question-panel.waiting,
-.question-panel.completed {
+.collapsible-title {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.collapsible-toggle {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.collapsible-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+/* ── 追問老師面板 ── */
+.ask-tutor-panel {
+  flex-shrink: 0;
+  padding: 0 40px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #fffdf4 0%, #fffbeb 100%);
+}
+
+.ask-tutor-panel.is-collapsed {
+  padding-bottom: 0;
+}
+
+.ask-tutor-body textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.ask-tutor-panel .qa-history-detail-block {
+  margin-bottom: 0;
+}
+
+/* ── 問答面板 ── */
+.question-panel {
+  flex-shrink: 0;
+  padding: 0 40px 0;
+  background: linear-gradient(180deg, #ffffff 0%, var(--bg-card) 50%);
+  border-top: 1px solid var(--border);
+}
+
+.question-panel.is-collapsed {
+  padding-bottom: 0;
+}
+
+.question-panel-body {
+  overflow-y: auto;
+  max-height: 46vh;
+  min-height: 200px;
+  padding: 8px 0 28px;
+}
+
+.question-panel-completed {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
-  text-align: center;
   gap: 12px;
+  padding: 32px 0;
+  text-align: center;
 }
 
-.question-panel.waiting::before {
-  content: "";
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  animation: spin-soft 1s linear infinite;
-  opacity: 0.85;
-}
-
-@keyframes spin-soft {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.question-panel.completed {
-  color: var(--green);
-}
-
-.question-panel.completed::before {
-  content: "";
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  background-color: var(--green-bg);
-  border: 2px solid var(--green-border);
-  margin-bottom: 4px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232d6a4f' stroke-width='2.2'%3E%3Cpath d='M5 13l4 4L19 7'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 28px;
-}
-
-.question-panel.completed h3 {
+.question-panel-completed h3 {
   font-family: var(--font-display);
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--green);
 }
 
-.question-panel.completed p {
+.question-panel-completed p {
   color: var(--text-muted);
   font-size: 0.95rem;
   max-width: 400px;
-  line-height: 1.65;
+}
+
+.panel-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+@keyframes spin-soft {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .question-header {
@@ -839,8 +882,14 @@ body {
   text-align: left;
 }
 
-.choice-item:hover {
+.choice-item:hover:not(:disabled) {
   background: var(--bg-hover);
+}
+
+.choice-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .choice-item-selected {
@@ -2250,11 +2299,22 @@ textarea:disabled {
     text-align: center;
   }
 
+  .ask-tutor-panel {
+    padding: 0 12px 10px;
+  }
+
+  .ask-tutor-panel.is-collapsed {
+    padding-bottom: 0;
+  }
+
   .question-panel {
-    flex: 1 1 42%;
-    min-height: 180px;
+    padding: 0 12px 0;
+  }
+
+  .question-panel-body {
     max-height: none;
-    padding: 14px 12px max(14px, env(safe-area-inset-bottom, 0px));
+    min-height: 160px;
+    padding: 6px 0 max(14px, env(safe-area-inset-bottom, 0px));
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
