@@ -106,7 +106,11 @@ async def update_concept_mastery(
         existing_confusion.append(misconception_pattern)
     elif confused_concepts:
         # 舊格式字串列表（相容）
-        existing_confusion = list(dict.fromkeys(existing_confusion + confused_concepts))
+        # dict.fromkeys 要求 hashable，existing_confusion 可能含 Phase 3+ 的 dict，需分開處理
+        existing_dicts = [p for p in existing_confusion if isinstance(p, dict)]
+        existing_strings = [p for p in existing_confusion if isinstance(p, str)]
+        new_strings = [c for c in confused_concepts if isinstance(c, str) and c not in existing_strings]
+        existing_confusion = existing_dicts + existing_strings + new_strings
     existing_confusion = existing_confusion[-5:]
 
     # ── 組裝 successful_analogies ────────────────────────────────

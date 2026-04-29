@@ -969,23 +969,15 @@ class LearningOrchestrator:
                 await session_memory.complete_session(session_id)
                 await emit({"type": "course_completed", "payload": {"message": "恭喜！你已完成所有學習階段。"}})
 
-        elif d in ("retry", "remediate"):
+        elif d == "retry":
             wm.current_attempt += 1
 
-            # 清除並重建畫面：顯示進度表 + 補強說明 + 新問題
-            await emit({"type": "explanation_reset", "payload": {}})
-
-            progress_md = self._build_progress_table(stages, current_idx)
-            await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
-
-            remediation_focus = ", ".join(decision.get("remediation_focus") or [])
-            remediation_md = (
-                f"### 💬 補強說明\n\n"
-                f"{decision['message']}"
-                + (f"\n\n需要特別注意的概念：**{remediation_focus}**" if remediation_focus else "")
-                + "\n\n---\n\n"
+            # retry：不清除原講解，在末尾附加分隔線提示再試
+            retry_separator = (
+                f"\n\n---\n\n### 🔄 第 {wm.current_attempt} 次嘗試\n\n"
+                f"{decision['message']}\n\n"
             )
-            await emit({"type": "explanation_chunk", "payload": {"chunk": remediation_md, "is_final": False}})
+            await emit({"type": "explanation_chunk", "payload": {"chunk": retry_separator, "is_final": False}})
 
             q_ctx = AgentContext(
                 session_id=session_id,
@@ -1025,7 +1017,6 @@ class LearningOrchestrator:
                 )
                 q_result = await self.questioner.run(retry_q_ctx)
                 questions = q_result.get("questions", [])
-            # 確保問題 ID 在 stage_turns 中唯一，避免與前次嘗試碰撞
             used_ids = {t.question_id for t in wm.stage_turns}
             for q in questions:
                 if not q.get("question_id") or q["question_id"] in used_ids:
@@ -1034,11 +1025,160 @@ class LearningOrchestrator:
             wm.pending_questions = questions
             wm.stage_evaluations = []
 
+            # 持久化：讓重整後 resume 直接還原而不重生成
+            combined_explanation_retry = wm.current_explanation + retry_separator
+            await session_memory.store_stage_explanation(session_id, stage["stage_id"], combined_explanation_retry)
+            await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
+            wm.current_explanation = combined_explanation_retry
+
             questions_md = self._build_questions_section(questions)
             if questions_md:
                 await emit({"type": "explanation_chunk", "payload": {"chunk": questions_md, "is_final": False}})
 
             await emit({"type": "explanation_chunk", "payload": {"chunk": "", "is_final": True}})
+            await emit({
+                "type": "explanation_complete",
+                "payload": {
+                    "stage_id": stage["stage_id"],
+                    "full_explanation": combined_explanation_retry + questions_md,
+                },
+            })
+
+            if questions:
+                q = questions[0]
+                wm.current_turn = TurnContext(
+                    turn_id=str(uuid.uuid4()),
+                    question_id=q["question_id"],
+                    question_text=q["text"],
+                )
+                await emit({
+                    "type": "question",
+                    "payload": {
+                        "question_id": q["question_id"],
+                        "text": q["text"],
+                        "type": q.get("type", "understand"),
+                        "answer_mode": q.get("answer_mode", "short_answer"),
+                        "options": q.get("options", []),
+                        "evidence_chunk_ids": q.get("evidence_chunk_ids", []),
+                        "stage_id": stage["stage_id"],
+                        "attempt_number": wm.current_attempt,
+                    },
+                })
+
+        elif d == "remediate":
+            wm.current_attempt += 1
+
+            # remediate：不清除原講解，在末尾插入補強文章（2.1.1 模式）
+            focus = decision.get("remediation_focus") or []
+            focus_str = "、".join(focus[:3]) if focus else "相關概念"
+            remediation_header = (
+                f"\n\n---\n\n### 💬 補強說明：{focus_str}\n\n"
+                f"{decision['message']}\n\n"
+            )
+            await emit({"type": "explanation_chunk", "payload": {"chunk": remediation_header, "is_final": False}})
+
+            # 呼叫 TeacherAgent 生成補強教學文章（另一個角度）
+            user_profile_summary = await longterm_memory.get_user_profile_summary(user_id)
+            prev_stage = stages[current_idx - 1] if current_idx > 0 else None
+            remediation_adaptive_ctx = await build_adaptive_context(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                current_attempt=wm.current_attempt,
+                stages=stages,
+            )
+            remediation_content = (
+                stage["content"]
+                + f"\n\n（補強模式：針對概念「{focus_str}」，從不同角度補充說明或提供具體例子，"
+                f"約 300 字，不重複原講解，著重釐清混淆點）"
+            )
+            rem_stage = {**stage, "content": remediation_content}
+            rem_ctx = AgentContext(
+                session_id=session_id,
+                user_id=user_id,
+                task_payload={
+                    "stage": rem_stage,
+                    "prev_stage_title": prev_stage["title"] if prev_stage else None,
+                    "user_profile_summary": user_profile_summary,
+                    "adaptive_context": remediation_adaptive_ctx,
+                },
+            )
+            remediation_article = ""
+            async for chunk in self.teacher.stream_explanation(rem_ctx):
+                remediation_article += chunk
+                await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
+
+            # 提取補強教學意圖，讓問題對齊補強內容
+            remediation_intent = await self.teacher.extract_teaching_intent(remediation_article, stage)
+            wm.current_teaching_intent = remediation_intent
+
+            # 生成問題
+            q_ctx = AgentContext(
+                session_id=session_id,
+                user_id=user_id,
+                task_payload={
+                    "stage": stage,
+                    "teaching_intent": remediation_intent,
+                    "allowed_evidence": remediation_adaptive_ctx.get("allowed_evidence", []),
+                    "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
+                    "attempt_number": wm.current_attempt,
+                    "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                    "question_mode": wm.question_mode,
+                },
+            )
+            q_result = await self.questioner.run(q_ctx)
+            questions = q_result.get("questions", [])
+            questions_verify = await self._verify_grounding(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                content_type="questions",
+                candidate_text=json.dumps(questions, ensure_ascii=False),
+            )
+            if not questions_verify.get("aligned", False):
+                retry_q_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={
+                        "stage": {
+                            **stage,
+                            "content": stage.get("content", "")
+                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                        },
+                        "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
+                        "attempt_number": wm.current_attempt,
+                        "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                        "question_mode": wm.question_mode,
+                    },
+                )
+                q_result = await self.questioner.run(retry_q_ctx)
+                questions = q_result.get("questions", [])
+            used_ids = {t.question_id for t in wm.stage_turns}
+            for q in questions:
+                if not q.get("question_id") or q["question_id"] in used_ids:
+                    q["question_id"] = f"q_{stage['stage_id']}_{wm.current_attempt}_{uuid.uuid4().hex[:8]}"
+                used_ids.add(q["question_id"])
+            wm.pending_questions = questions
+            wm.stage_evaluations = []
+
+            # 持久化：原講解 + 補強文章；重整後 resume 直接還原
+            combined_explanation_rem = wm.current_explanation + remediation_header + remediation_article
+            await session_memory.store_stage_explanation(session_id, stage["stage_id"], combined_explanation_rem)
+            await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
+            wm.current_explanation = combined_explanation_rem
+
+            questions_md = self._build_questions_section(questions)
+            if questions_md:
+                await emit({"type": "explanation_chunk", "payload": {"chunk": questions_md, "is_final": False}})
+
+            await emit({"type": "explanation_chunk", "payload": {"chunk": "", "is_final": True}})
+            await emit({
+                "type": "explanation_complete",
+                "payload": {
+                    "stage_id": stage["stage_id"],
+                    "full_explanation": combined_explanation_rem + questions_md,
+                },
+            })
 
             if questions:
                 q = questions[0]
@@ -1182,11 +1322,22 @@ class LearningOrchestrator:
                 used_ids.add(q["question_id"])
             wm.pending_questions = questions
 
+            # 持久化：重教後存入新講解與問題，重整後 resume 可直接還原
+            await session_memory.store_stage_explanation(session_id, stage["stage_id"], wm.current_explanation)
+            await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
+
             questions_md = self._build_questions_section(questions)
             if questions_md:
                 await emit({"type": "explanation_chunk", "payload": {"chunk": questions_md, "is_final": False}})
 
             await emit({"type": "explanation_chunk", "payload": {"chunk": "", "is_final": True}})
+            await emit({
+                "type": "explanation_complete",
+                "payload": {
+                    "stage_id": stage["stage_id"],
+                    "full_explanation": wm.current_explanation + questions_md,
+                },
+            })
 
             if questions:
                 q = questions[0]

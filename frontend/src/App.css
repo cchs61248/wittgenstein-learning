@@ -734,6 +734,16 @@ body {
   padding-bottom: 0;
 }
 
+.ask-tutor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
 .ask-tutor-body textarea {
   width: 100%;
   box-sizing: border-box;
@@ -742,6 +752,106 @@ body {
 
 .ask-tutor-panel .qa-history-detail-block {
   margin-bottom: 0;
+}
+
+/* ── 追問筆記列表 ── */
+.tutor-history-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  margin-left: 6px;
+}
+
+.tutor-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.tutor-note {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+
+.tutor-note-header {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 24px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.tutor-note-header:hover {
+  background: var(--border);
+}
+
+.tutor-note-idx {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-subtle);
+  text-align: center;
+}
+
+.tutor-note-question {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tutor-note-scope-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.tutor-note-toggle-icon {
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+
+.tutor-note-body {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg);
+}
+
+.tutor-note-q-full {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  line-height: 1.5;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+  margin: 0;
 }
 
 /* ── 問答面板 ── */
@@ -2240,6 +2350,7 @@ textarea:disabled {
     margin: 6px 8px max(8px, env(safe-area-inset-bottom, 0px));
     display: flex;
     flex-direction: column;
+    overflow-y: auto;
   }
 
   .explanation-panel {
@@ -2335,8 +2446,14 @@ textarea:disabled {
     max-height: none;
     min-height: 160px;
     padding: 6px 0 max(14px, env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+  }
+
+  .ask-tutor-body {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .content-splitter {

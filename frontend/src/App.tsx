@@ -40,7 +40,7 @@ export default function App() {
     storeStageExplanation,
     setPendingAnswer,
     setQaHistory,
-    setTutorReply,
+    addTutorMessage,
     hydrateSnapshot,
     hydrateDecisionHistory,
   } = useSessionStore();
@@ -212,7 +212,7 @@ export default function App() {
         }
         break;
       case 'tutor_reply':
-        setTutorReply(msg.payload);
+        addTutorMessage(msg.payload);
         break;
       case 'kicked':
         wsRef.current?.close();

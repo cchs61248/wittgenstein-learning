@@ -62,6 +62,8 @@ interface SessionState {
   qaHistory: QaHistoryItem[];
   stageQaHistories: Record<number, QaHistoryItem[]>;
   tutorReply: { question: string; answer: string; in_scope?: boolean } | null;
+  tutorHistory: { question: string; answer: string; in_scope?: boolean }[];
+  addTutorMessage: (msg: { question: string; answer: string; in_scope?: boolean }) => void;
   setQuestion: (q: QuestionPayload) => void;
   setQuestionImmediate: (q: QuestionPayload | null) => void;
   setFeedback: (f: FeedbackPayload) => void;
@@ -72,6 +74,7 @@ interface SessionState {
   setPendingAnswer: (answer: string) => void;
   setQaHistory: (records: QaHistoryItem[]) => void;
   setTutorReply: (reply: { question: string; answer: string; in_scope?: boolean } | null) => void;
+  clearTutorHistory: () => void;
   hydrateSnapshot: (snapshot: { stageExplanations: Record<number, string>; stageQaHistories: Record<number, QaHistoryItem[]> }) => void;
   hydrateDecisionHistory: (history: Array<{
     at: string;
@@ -126,6 +129,15 @@ function loadDecisionHistory() {
   }
 }
 
+function loadTutorHistory(): { question: string; answer: string; in_scope?: boolean }[] {
+  try {
+    const raw = localStorage.getItem('wl_tutor_history');
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
 const DECISION_HISTORY_MAX = 200;
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -146,7 +158,8 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_stage_explanations');
     localStorage.removeItem('wl_stage_qa_histories');
     localStorage.removeItem('wl_decision_history');
-    set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null });
+    localStorage.removeItem('wl_tutor_history');
+    set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null, tutorHistory: [], tutorReply: null });
   },
 
   sessionId: localStorage.getItem('wl_session_id'),
@@ -224,6 +237,17 @@ export const useSessionStore = create<SessionState>((set) => ({
   qaHistory: [],
   stageQaHistories: loadStageQaHistories(),
   tutorReply: null,
+  tutorHistory: loadTutorHistory(),
+  addTutorMessage: (msg) =>
+    set((s) => {
+      const updated = [...s.tutorHistory, msg];
+      localStorage.setItem('wl_tutor_history', JSON.stringify(updated));
+      return { tutorReply: msg, tutorHistory: updated };
+    }),
+  clearTutorHistory: () => {
+    localStorage.removeItem('wl_tutor_history');
+    set({ tutorHistory: [], tutorReply: null });
+  },
   setQuestion: (q) =>
     set((s) => {
       if (s.lastFeedback) {
@@ -357,6 +381,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_stage_explanations');
     localStorage.removeItem('wl_stage_qa_histories');
     localStorage.removeItem('wl_decision_history');
+    localStorage.removeItem('wl_tutor_history');
     set({
       sessionId: null,
       stages: [],
@@ -376,6 +401,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       qaHistory: [],
       pendingAnswer: null,
       tutorReply: null,
+      tutorHistory: [],
       decisionHistory: [],
     });
   },
