@@ -90,6 +90,10 @@ interface SessionState {
   }>) => void;
   proceedToNextQuestion: () => void;
   advanceStage: (nextStageId: number | null) => void;
+  pendingAdvanceStageId: number | null;
+  setPendingAdvance: (id: number | null) => void;
+  pendingCourseComplete: boolean;
+  setPendingCourseComplete: (v: boolean) => void;
 
   // 知識地圖確認
   pendingMap: { nodes: KnowledgeMapNode[]; summary: string } | null;
@@ -161,7 +165,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_stage_qa_histories');
     localStorage.removeItem('wl_decision_history');
     localStorage.removeItem('wl_tutor_history');
-    set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null, tutorHistory: [], tutorReply: null });
+    set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null, tutorHistory: [], tutorReply: null, pendingAdvanceStageId: null, pendingCourseComplete: false });
   },
 
   sessionId: localStorage.getItem('wl_session_id'),
@@ -192,6 +196,23 @@ export const useSessionStore = create<SessionState>((set) => ({
         return { ...stage, status };
       });
       const currentStage = mappedStages.find((st) => st.status === 'current');
+      const stageReset = isNewSession ? {
+        explanationText: '',
+        isStreaming: false,
+        currentQuestion: null,
+        lastFeedback: null,
+        lastDecision: null,
+        pendingNextQuestion: null,
+        isAwaitingFeedback: false,
+        courseCompleted: false,
+        tutorReply: null,
+        pendingAdvanceStageId: null,
+        pendingCourseComplete: false,
+      } : {
+        // 同場次 stage advance：只更新 stages 清單，保留 lastFeedback 讓學生看完再繼續
+        explanationText: '',
+        isStreaming: false,
+      };
       return {
         sessionId,
         stages: mappedStages,
@@ -199,16 +220,8 @@ export const useSessionStore = create<SessionState>((set) => ({
         stageSourceChunks: Object.fromEntries(
           stages.map((stage) => [stage.stage_id, stage.source_chunks ?? []])
         ),
-        explanationText: '',
-        isStreaming: false,
-        currentQuestion: null,
-        lastFeedback: null,
-        lastDecision: null,
         decisionHistory: isNewSession ? [] : s.decisionHistory,
-        pendingNextQuestion: null,
-        isAwaitingFeedback: false,
-        courseCompleted: false,
-        tutorReply: null,
+        ...stageReset,
       };
     });
   },
@@ -350,17 +363,24 @@ export const useSessionStore = create<SessionState>((set) => ({
               : st.status,
         })),
         currentStageId: nextStageId,
-        explanationText: '',
+        // explanationText 不重置：下一章已在串流，保留已到達的內容
         currentQuestion: null,
         lastFeedback: null,
+        lastDecision: null,
         pendingNextQuestion: null,
         isAwaitingFeedback: false,
         selectedStageId: null,
         qaHistory: [],
         pendingAnswer: null,
+        pendingAdvanceStageId: null,
+        pendingCourseComplete: false,
         stageQaHistories: updatedStageQaHistories,
       };
     }),
+  pendingAdvanceStageId: null,
+  setPendingAdvance: (id) => set({ pendingAdvanceStageId: id }),
+  pendingCourseComplete: false,
+  setPendingCourseComplete: (v) => set({ pendingCourseComplete: v }),
 
   pendingMap: null,
   setPendingMap: (map) => set({ pendingMap: map }),
@@ -407,6 +427,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       tutorReply: null,
       tutorHistory: [],
       isTutorLoading: false,
+      pendingAdvanceStageId: null,
+      pendingCourseComplete: false,
       decisionHistory: [],
     });
   },

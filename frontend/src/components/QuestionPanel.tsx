@@ -56,6 +56,12 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
   const isAwaitingFeedback = useSessionStore((s) => s.isAwaitingFeedback);
   const pendingNextQuestion = useSessionStore((s) => s.pendingNextQuestion);
   const proceedToNextQuestion = useSessionStore((s) => s.proceedToNextQuestion);
+  const pendingAdvanceStageId = useSessionStore((s) => s.pendingAdvanceStageId);
+  const advanceStage = useSessionStore((s) => s.advanceStage);
+  const setPendingAdvance = useSessionStore((s) => s.setPendingAdvance);
+  const pendingCourseComplete = useSessionStore((s) => s.pendingCourseComplete);
+  const setCourseCompleted = useSessionStore((s) => s.setCourseCompleted);
+  const setPendingCourseComplete = useSessionStore((s) => s.setPendingCourseComplete);
   const qaHistory = useSessionStore((s) => s.qaHistory);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const stageQaHistories = useSessionStore((s) => s.stageQaHistories);
@@ -215,6 +221,20 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
               {pendingNextQuestion ? (
                 <button className="btn-primary btn-proceed" onClick={proceedToNextQuestion}>
                   繼續下一題 →
+                </button>
+              ) : pendingAdvanceStageId !== null ? (
+                <button className="btn-primary btn-proceed" onClick={() => {
+                  advanceStage(pendingAdvanceStageId);
+                  setPendingAdvance(null);
+                }}>
+                  進入下一章節 →
+                </button>
+              ) : pendingCourseComplete ? (
+                <button className="btn-primary btn-proceed" onClick={() => {
+                  setCourseCompleted();
+                  setPendingCourseComplete(false);
+                }}>
+                  完成課程 →
                 </button>
               ) : (
                 <span className="feedback-hint">評估進度中，請稍候...</span>

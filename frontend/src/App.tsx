@@ -28,9 +28,9 @@ export default function App() {
     setRecoveredFeedback,
     setDecision,
     pushDecisionHistory,
-    advanceStage,
+    setPendingAdvance,
+    setPendingCourseComplete,
     setConnected,
-    setCourseCompleted,
     setPendingMap,
     pendingMap,
     resetExplanation,
@@ -165,8 +165,11 @@ export default function App() {
       case 'stage_decision':
         pushDecisionHistory(msg.payload);
         setDecision(msg.payload);
-        if (msg.payload.decision === 'advance' && msg.payload.next_stage_id !== null) {
-          advanceStage(msg.payload.next_stage_id);
+        if (msg.payload.decision === 'advance') {
+          if (msg.payload.next_stage_id !== null) {
+            setPendingAdvance(msg.payload.next_stage_id);
+          }
+          // next_stage_id === null (最後一章) 等 course_completed 處理
         }
         break;
       case 'qa_history':
@@ -222,7 +225,7 @@ export default function App() {
         setKickedMessage(msg.payload.message);
         break;
       case 'course_completed':
-        setCourseCompleted();
+        setPendingCourseComplete(true);
         break;
       case 'error':
         console.error('Server error:', msg.payload.message);
