@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-04 master 分支（Phase 1–4 完整實作，最後更新：2026-04-29）
+> 適用版本：2026-04 master 分支（Phase 1–4 完整實作，最後更新：2026-04-29，含 retry/remediate 分離、補強文章串流、持久化修正、ask_tutor 前端持久化）
 
 ---
 
@@ -651,12 +651,34 @@ _make_progress_decision(...)
     │       → build_adaptive_context → next_lesson_requirements
     │       → TeacherAgent prompt 的 selection_reason_text 欄位
     │
-    ├── 【retry / remediate 後續】
+    ├── 【retry 後續】
     │   wm.current_attempt += 1
-    │   emit: explanation_reset + 補強說明 + 新問題
+    │   ⚠️  不送 explanation_reset（保留原文於前端）
+    │   在 wm.current_explanation 尾端附加「### 🔄 第 N 次嘗試」標題 + decision.message
+    │   QuestionGeneratorAgent 重新出題（新題目）
+    │   session_memory.store_stage_explanation(combined)  ← 累積講解持久化
+    │   session_memory.store_stage_questions(questions)
+    │   emit: explanation_complete（full_explanation = 累積講解文字）
+    │   emit: question（第一道新題）
+    │
+    ├── 【remediate 後續】
+    │   wm.current_attempt += 1
+    │   ⚠️  不送 explanation_reset（保留原文於前端）
+    │   在 wm.current_explanation 尾端附加補強標題（含 focus 概念）
+    │   build_adaptive_context()（重新取 learner_state，current_attempt 已遞增）
+    │   TeacherAgent.stream_explanation（stage.content 附「補強模式」指示）→ 串流補強文章
+    │   extract_teaching_intent → wm.current_teaching_intent（更新）
+    │   QuestionGeneratorAgent（帶新 teaching_intent 與 allowed_evidence）
+    │   session_memory.store_stage_explanation(combined)  ← 原文 + 補強文章一起持久化
+    │   session_memory.store_stage_questions(questions)
+    │   emit: explanation_complete
+    │   emit: question（第一道新題）
     │
     └── 【reteach 後續】
         wm.current_attempt += 1
+        session_memory.store_stage_explanation(current_explanation)  ← 換框架前先存舊版
+        session_memory.store_stage_questions(current_questions)      ← 換框架前先存舊版
+        emit: explanation_complete（將舊版通知前端，防止 resume 重新生成）
         rebuild adaptive_ctx（current_attempt 已遞增）
         TeacherAgent.stream_explanation（附「換框架」指引）
         extract_teaching_intent → wm.current_teaching_intent（更新）
@@ -711,7 +733,14 @@ _make_progress_decision(...)
         ├── 【範疇判斷】LLM（scope_judge prompt）→ {in_scope: bool}
         ├── 若 in_scope=False → search_web(question, max_results=3)（DuckDuckGo）
         └── 【生成回答】LLM（tutor_reply prompt）
-            emit: tutor_reply（answer, in_scope）
+            emit: tutor_reply（question, answer, in_scope）
+
+前端收到 tutor_reply：
+    ├── addTutorMessage(msg) → 追加至 Zustand tutorHistory 陣列
+    ├── localStorage.setItem('wl_tutor_history', JSON.stringify(updated))
+    └── AskTutorPanel 顯示可收縮筆記（HistoryNote 元件，最新展開）
+        ├── 每筆記錄顯示：問題摘要 + in_scope 標籤 + ReactMarkdown 回答
+        └── 整份 tutorHistory 在頁面重整、重新登入後自動恢復
 ```
 
 ---
@@ -800,7 +829,7 @@ stage["source_chunks"] = [{"chunk_id": cid, "quote": db_chunks[cid]["text"]}
 
 **職責**：串流生成講解，並提取教學意圖
 
-**呼叫時機**：`run_stage`（串流）、`reteach` 決策（串流）
+**呼叫時機**：`run_stage`（串流）、`remediate` 決策（串流）、`reteach` 決策（串流）
 
 **輸入（Phase 2 升級）**：stage、adaptive_context（含 allowed_evidence、mastery_map 等）
 
