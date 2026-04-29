@@ -2356,13 +2356,14 @@ textarea:disabled {
     margin: 6px 8px max(8px, env(safe-area-inset-bottom, 0px));
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .explanation-panel {
-    flex: 1 1 58%;
-    min-height: 0;
+    flex: 1 1 0;
+    min-height: 80px;
     padding: 14px 12px 14px;
+    overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
@@ -2449,7 +2450,7 @@ textarea:disabled {
   }
 
   .question-panel-body {
-    max-height: none;
+    max-height: 48dvh;
     min-height: 160px;
     padding: 6px 0 max(14px, env(safe-area-inset-bottom, 0px));
     overflow-y: auto;
@@ -2460,6 +2461,7 @@ textarea:disabled {
   .ask-tutor-body {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
   .content-splitter {
