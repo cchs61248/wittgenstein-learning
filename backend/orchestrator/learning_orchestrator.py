@@ -1546,6 +1546,21 @@ class LearningOrchestrator:
         unanswered = [q for q in questions if q["question_id"] not in answered_ids]
         latest_feedback = qa_records[-1] if qa_records else None
 
+        # 還原 stage_turns：確保 handle_answer 的 remaining_qs 過濾器
+        # 不會把已答過的題目再次發送（reset_for_new_stage 清空了 stage_turns）
+        for r in qa_records:
+            wm.stage_turns.append(TurnContext(
+                turn_id=str(uuid.uuid4()),
+                question_id=r["question_id"],
+                question_text=r["question_text"],
+                user_answer=r.get("user_answer"),
+            ))
+        # 還原 stage_evaluations，讓 ProgressManager 在最後一題後做出正確決策
+        wm.stage_evaluations = [
+            {"score": r["score"], "feedback": r.get("feedback", "")}
+            for r in qa_records
+        ]
+
         # 還原歷史答題記錄給前端
         if qa_records:
             await emit({
