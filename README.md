@@ -14,12 +14,13 @@
 
 ## 功能
 
-- 上傳任意學習材料，系統自動切割為有序學習階段（覆蓋合約：確認後所有節點保證覆蓋）
-- Teacher 串流講解（Markdown，即時渲染），語氣如「懂行朋友耐心講解」，每個概念至少 2 個生活化類比
-- 布魯姆分類法出題（理解型 / 應用型 / 創造型），附鼓勵語引導學生自信作答
-- 評估後即時顯示掌握度標籤（✅ 佳 / ⚠️ 部分不足 / ❌ 明顯不足），四種決策路徑自動調整
-- DriftVerifier 防幻覺機制：所有 LLM 輸出皆驗證是否紮根於原始教材
-- 跨會話長期記憶：追蹤每個概念的掌握度（EMA）與學習風格，智能選擇下一節點
+- 上傳任意學習材料（PDF / DOCX / PPTX / MD / TXT），系統本地解析並建立 source_chunks（後端掌控 source truth），自動切割為有序學習階段
+- Teacher 串流講解（Markdown 即時渲染），根據學生掌握度、混淆模式、選課理由自適應調整重點，每個概念至少 2 個生活化類比
+- 問題生成與 TeacherAgent 的教學意圖（teaching_intent）對齊：直接測試修正目標概念、檢驗類比框架理解
+- EvaluatorAgent 輸出結構化 misconception_patterns（concept / pattern / severity / repair_strategy），供長期診斷使用
+- DriftVerifier Citation Accuracy（Phase 4）：逐條驗證 `[chunk_id]` 引用是否真實支撐對應主張，非僅形式引用檢查
+- ProgressManager 智能決策（Phase 4）：高嚴重度根本誤解或同一錯誤重複 ≥ 2 次，立即觸發換框架重教
+- 跨會話長期記憶：結構化追蹤每個概念的掌握度（EMA）、混淆模式、成功類比，選課時傳遞理由給 TeacherAgent
 - 支援四個 LLM Provider（Claude、OpenAI、Gemini、Monica）
 - 頁面重整、多裝置切換後完整恢復學習進度
 
@@ -95,32 +96,39 @@ backend/
 │   ├── gemini_provider.py
 │   └── provider_factory.py
 ├── agents/                   # 六個功能 Agent
-│   ├── content_splitter.py   # 切割學習材料
-│   ├── teacher.py            # 串流講解生成（懂行朋友語氣 + 生活化類比）
-│   ├── question_generator.py # 出題（布魯姆分類法）
-│   ├── evaluator.py          # 評分（含掌握度標籤注入）
-│   ├── progress_manager.py   # 決策（純規則，不呼叫 LLM）
-│   └── drift_verifier.py     # 防幻覺：驗證輸出是否紮根原文
+│   ├── content_splitter.py   # 語義切分（只回傳 chunk_id，不生成原文）
+│   ├── teacher.py            # 串流講解 + extract_teaching_intent（Phase 3）
+│   ├── question_generator.py # 出題（布魯姆 + teaching_intent 對齊，Phase 3）
+│   ├── evaluator.py          # 評分 + misconception_patterns 結構化診斷（Phase 3）
+│   ├── progress_manager.py   # 決策（純規則 + high_severity/repeated_patterns，Phase 4）
+│   └── drift_verifier.py     # Citation accuracy 驗證（逐條 claim 核對，Phase 4）
 ├── orchestrator/
-│   └── learning_orchestrator.py  # 協調所有 Agent 的主控流程
+│   ├── learning_orchestrator.py  # 協調所有元件的主控流程
+│   └── context_builder.py        # 學生狀態包組裝（Phase 2）
 ├── memory/
-│   ├── working_memory.py     # 當次輪次狀態（in-process）
-│   ├── session_memory.py     # 本次學習進度（SQLite）
-│   └── longterm_memory.py    # 跨會話概念掌握度（SQLite）
+│   ├── working_memory.py     # 當次輪次狀態（含 current_teaching_intent，Phase 3）
+│   ├── session_memory.py     # 本次學習進度 + source_chunks（SQLite，Phase 1）
+│   └── longterm_memory.py    # 跨會話掌握度 + misconceptions（SQLite，Phase 2+3）
+├── utils/
+│   ├── text_extractor.py     # 本地文件解析（PDF/DOCX/PPTX/MD/TXT，Phase 1）
+│   ├── chunker.py            # 機械切分，建立 source_chunks（Phase 1）
+│   └── prompt_templates.py   # 所有 LLM System Prompt
 ├── auth/                     # JWT 帳號系統
-└── db/                       # SQLite 連線與 migrations
+└── db/                       # SQLite 連線與 migrations（含 source_chunks 表，Phase 1）
 ```
 
-**Agent 運作方式**：每個 Agent 擁有獨立的 `_messages` 列表，`run()` 結束後呼叫 `_reset()` 清除，避免跨呼叫上下文累積。各 Agent 有各自的 token 預算（800–4000 tokens）。
+**Agent 運作方式**：每個 Agent 擁有獨立的 `_messages` 列表，`run()` 開始與結束時都呼叫 `_reset()` 清除，避免跨呼叫上下文累積。各 Agent 有各自的 token 預算（800–4000 tokens）。
 
-**四種進度決策**（remediate/reteach 時附加覆蓋保護說明）：
+**五種進度決策（Phase 4 更新）**：
 
-| 決策 | 觸發條件 | 行為 |
-|------|---------|------|
-| `advance` | best_score ≥ 0.75 | 依掌握度/弱點排名選擇下一節點（可能插入整合挑戰節點） |
-| `retry` | attempts < 3 且 best_score < 0.75 | 降低難度重新出題（同框架） |
-| `remediate` | attempts ≥ 3 且 latest_score ≥ 0.5 | 補充說明後重試（可能動態插入補強節點） |
-| `reteach` | attempts == 3 且 latest_score < 0.5 | Teacher 換比喻框架全新講解 + 新題 |
+| 決策 | 觸發條件 | 優先序 | 行為 |
+|------|---------|--------|------|
+| `advance` | best_score ≥ 0.75 | 1（最高） | 依掌握度/弱點/新知排名選下一節點（可插入整合挑戰節點） |
+| `reteach` | high severity misconception（任何嘗試次數） | 2 | 立即換框架重教，不等到 max_attempts |
+| `reteach` | 同一 pattern 重複 ≥ 2 次 | 3 | 換比喻框架全新講解 + 新題 |
+| `retry` | attempts < 3 且 best_score < 0.75 | 4 | 降低難度重新出題（同框架） |
+| `reteach` | attempts == 3 且 latest_score < 0.5 | 5 | 換框架重教 |
+| `remediate` | 其餘情況 | 6（最低） | 補充說明後重試（可插入動態補強節點） |
 
 ### 前端（React + TypeScript + Vite）
 
