@@ -979,6 +979,8 @@ class LearningOrchestrator:
             )
             await emit({"type": "explanation_chunk", "payload": {"chunk": retry_separator, "is_final": False}})
 
+            prev_q_ids = [t.question_id for t in wm.stage_turns]
+            prev_q_texts = [t.question_text for t in wm.stage_turns]
             q_ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
@@ -986,7 +988,8 @@ class LearningOrchestrator:
                     "stage": stage,
                     "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                     "attempt_number": wm.current_attempt,
-                    "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                    "previous_question_ids": prev_q_ids,
+                    "previous_question_texts": prev_q_texts,
                     "question_mode": wm.question_mode,
                 },
             )
@@ -1011,7 +1014,8 @@ class LearningOrchestrator:
                         },
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                         "attempt_number": wm.current_attempt,
-                        "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                        "previous_question_ids": prev_q_ids,
+                        "previous_question_texts": prev_q_texts,
                         "question_mode": wm.question_mode,
                     },
                 )
@@ -1104,6 +1108,8 @@ class LearningOrchestrator:
                 wm.current_attempt += 1
                 remediation_note = f"\n\n---\n\n💬 {decision['message']}\n\n"
                 await emit({"type": "explanation_chunk", "payload": {"chunk": remediation_note, "is_final": False}})
+                rem_prev_q_ids = [t.question_id for t in wm.stage_turns]
+                rem_prev_q_texts = [t.question_text for t in wm.stage_turns]
                 q_ctx = AgentContext(
                     session_id=session_id,
                     user_id=user_id,
@@ -1111,7 +1117,8 @@ class LearningOrchestrator:
                         "stage": stage,
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                         "attempt_number": wm.current_attempt,
-                        "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                        "previous_question_ids": rem_prev_q_ids,
+                        "previous_question_texts": rem_prev_q_texts,
                         "question_mode": wm.question_mode,
                     },
                 )
@@ -1231,6 +1238,8 @@ class LearningOrchestrator:
             wm.current_teaching_intent = reteach_teaching_intent
             wm.stage_evaluations = []
 
+            reteach_prev_q_ids = [t.question_id for t in wm.stage_turns]
+            reteach_prev_q_texts = [t.question_text for t in wm.stage_turns]
             q_ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
@@ -1240,7 +1249,8 @@ class LearningOrchestrator:
                     "allowed_evidence": reteach_adaptive_ctx.get("allowed_evidence", []),
                     "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                     "attempt_number": wm.current_attempt,
-                    "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                    "previous_question_ids": reteach_prev_q_ids,
+                    "previous_question_texts": reteach_prev_q_texts,
                     "question_mode": wm.question_mode,
                 },
             )
@@ -1265,7 +1275,8 @@ class LearningOrchestrator:
                         },
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                         "attempt_number": wm.current_attempt,
-                        "previous_question_ids": [t.question_id for t in wm.stage_turns],
+                        "previous_question_ids": reteach_prev_q_ids,
+                        "previous_question_texts": reteach_prev_q_texts,
                         "question_mode": wm.question_mode,
                     },
                 )

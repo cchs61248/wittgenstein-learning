@@ -59,6 +59,7 @@ class QuestionGeneratorAgent(BaseAgent):
         num_questions: int = payload.get("num_questions", 2)
         attempt_number: int = payload.get("attempt_number", 1)
         previous_question_ids: list[str] = payload.get("previous_question_ids", [])
+        previous_question_texts: list[str] = payload.get("previous_question_texts", [])
         question_mode: str = payload.get("question_mode", "short_answer")
         teaching_intent: dict = payload.get("teaching_intent") or {}
         allowed_evidence: list[dict] = payload.get("allowed_evidence") or []
@@ -72,6 +73,8 @@ class QuestionGeneratorAgent(BaseAgent):
         avoid_note = ""
         if previous_question_ids:
             avoid_note = f"\n\n注意：已問過問題 ID：{previous_question_ids}，請避免重複。"
+        if previous_question_texts:
+            avoid_note += "\n已問過的題目文字（請完全避免相同或語意相似的提問）：\n" + "\n".join(f"- {t}" for t in previous_question_texts)
 
         evidence_text = self._format_evidence(stage, allowed_evidence)
         teaching_intent_text = self._format_teaching_intent(teaching_intent)
