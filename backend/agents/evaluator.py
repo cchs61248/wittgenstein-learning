@@ -60,6 +60,18 @@ class EvaluatorAgent(BaseAgent):
                 return str(opt.get("text", "")).strip()
         return ""
 
+    def _add_mastery_label(self, data: dict[str, Any]) -> dict[str, Any]:
+        score = float(data.get("score", 0.0))
+        if score >= 0.75:
+            prefix = "✅ **掌握度佳**\n\n"
+        elif score >= 0.5:
+            prefix = "⚠️ **掌握度部分不足**\n\n"
+        else:
+            prefix = "❌ **掌握度明顯不足**\n\n"
+        if isinstance(data.get("feedback"), str):
+            data["feedback"] = prefix + data["feedback"]
+        return data
+
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
         self._reset()
         payload = ctx.task_payload
@@ -76,7 +88,7 @@ class EvaluatorAgent(BaseAgent):
                 # 選對：直接回傳 1.0，不呼叫 LLM
                 correct_text = self._find_option_text(question, correct_id)
                 label = f"{correct_id}. {correct_text}" if correct_text else correct_id
-                return {
+                result = {
                     "score": 1.0,
                     "understood_concepts": question.get("key_concepts_tested", []),
                     "confused_concepts": [],
@@ -84,8 +96,10 @@ class EvaluatorAgent(BaseAgent):
                     "needs_clarification": False,
                     "clarification_question": None,
                 }
+                return self._add_mastery_label(result)
             # 選錯：交由 LLM 依相近程度給 0.0–0.6 分
-            return await self._score_mc_wrong(question, user_answer, compressed_history, source_chunks)
+            result = await self._score_mc_wrong(question, user_answer, compressed_history, source_chunks)
+            return self._add_mastery_label(result)
 
         # 問答題：原有評分流程
         history_text = ""
@@ -116,7 +130,7 @@ class EvaluatorAgent(BaseAgent):
         data = json.loads(extract_json(response.content))
         if isinstance(data.get("feedback"), str):
             data["feedback"] = data["feedback"].replace("\\n", "\n")
-        return data
+        return self._add_mastery_label(data)
 
     async def _score_mc_wrong(
         self,

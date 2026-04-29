@@ -16,6 +16,9 @@ export function KnowledgeMapModal({ nodes, summary, onConfirm }: Props) {
         <p className="km-desc">
           AI 已將材料拆解為以下學習節點，請確認後開始學習：
         </p>
+        <p className="km-contract">
+          ✅ 確認後即進入「覆蓋合約」——以上所有節點都將被完整覆蓋，系統不會跳過任何一個。
+        </p>
 
         <div className="km-table-wrap">
           <table className="km-table">

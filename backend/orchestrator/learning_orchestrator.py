@@ -814,6 +814,7 @@ class LearningOrchestrator:
                 decision_reasons.append("目前先在本節補強，待下輪評估是否轉移到其他節點。")
             if focus:
                 decision_reasons.append("補強焦點：" + "、".join(focus[:3]))
+            decision_reasons.append("補強不影響整體進度：知識地圖中所有節點最終都會完整覆蓋。")
         elif d == "retry":
             decision_reasons.append("尚未達門檻，先在同節點調整題目難度再嘗試。")
 

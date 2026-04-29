@@ -159,21 +159,28 @@ export const useSessionStore = create<SessionState>((set) => ({
       if (isNewSession) {
         localStorage.removeItem('wl_decision_history');
       }
+      // Preserve existing 'current' status when DB hasn't caught up yet
+      // (e.g., advanceStage already ran but run_stage hasn't written in_progress to DB)
+      const existingStatusMap = new Map(s.stages.map((st) => [st.stage_id, st.status]));
+      const mappedStages = stages.map((stage, i) => {
+        const dbStatus = stageStatuses?.[String(stage.stage_id)];
+        let status: StageStatus;
+        if (dbStatus === 'completed') {
+          status = 'completed';
+        } else if (dbStatus === 'in_progress') {
+          status = 'current';
+        } else if (existingStatusMap.get(stage.stage_id) === 'current') {
+          status = 'current';
+        } else {
+          status = i === 0 ? 'current' : 'pending';
+        }
+        return { ...stage, status };
+      });
+      const currentStage = mappedStages.find((st) => st.status === 'current');
       return {
         sessionId,
-        stages: stages.map((s, i) => {
-          const dbStatus = stageStatuses?.[String(s.stage_id)];
-          let status: StageStatus;
-          if (dbStatus === 'completed') {
-            status = 'completed';
-          } else if (dbStatus === 'in_progress') {
-            status = 'current';
-          } else {
-            status = i === 0 ? 'current' : 'pending';
-          }
-          return { ...s, status };
-        }),
-        currentStageId: stages[0]?.stage_id ?? null,
+        stages: mappedStages,
+        currentStageId: currentStage?.stage_id ?? stages[0]?.stage_id ?? null,
         stageSourceChunks: Object.fromEntries(
           stages.map((stage) => [stage.stage_id, stage.source_chunks ?? []])
         ),

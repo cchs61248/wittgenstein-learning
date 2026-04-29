@@ -240,6 +240,9 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
                 </div>
               </div>
             )}
+            <p className="question-encouragement">
+              💡 不需要回答得很完美，寫下你目前的理解就好。答錯了我們一起釐清，這正是學習的過程。
+            </p>
             {currentQuestion.answer_mode === 'multiple_choice' ? (
               <div className="choice-list">
                 {(currentQuestion.options ?? []).map((opt) => (

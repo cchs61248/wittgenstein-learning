@@ -1116,6 +1116,16 @@ textarea:disabled {
   color: var(--text-subtle);
 }
 
+.question-encouragement {
+  font-size: 12px;
+  color: var(--text-subtle);
+  font-style: italic;
+  margin: 6px 0 12px;
+  padding: 6px 10px;
+  background: var(--surface-hover);
+  border-radius: var(--radius);
+}
+
 /* ── 主按鈕：暖色 CTA ── */
 .btn-primary {
   background: linear-gradient(180deg, var(--cta) 0%, var(--cta-hover) 100%);
@@ -1753,7 +1763,17 @@ textarea:disabled {
 }
 
 .km-desc {
-  margin-bottom: 16px !important;
+  margin-bottom: 8px !important;
+}
+
+.km-contract {
+  font-size: 13px;
+  color: var(--text-subtle);
+  background: var(--surface-hover);
+  border-left: 3px solid var(--success, #22c55e);
+  padding: 8px 12px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-bottom: 16px;
 }
 
 .km-table-wrap {
