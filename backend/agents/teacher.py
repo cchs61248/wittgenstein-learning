@@ -78,6 +78,17 @@ class TeacherAgent(BaseAgent):
         must_reinforce_text = "、".join(must_reinforce) if must_reinforce else "無"
         forbidden_future_text = "、".join(forbidden_future[:5]) if forbidden_future else "無"
 
+        # 選課理由（Phase 4）
+        selection_reason = requirements.get("selection_reason") or {}
+        if selection_reason:
+            sr_reason = selection_reason.get("reason", "")
+            sr_targets = "、".join(selection_reason.get("target_concepts", [])[:3])
+            selection_reason_text = (
+                f"{sr_reason}（重點概念：{sr_targets}）" if sr_targets else sr_reason
+            ) or "無"
+        else:
+            selection_reason_text = "無"
+
         return {
             "user_profile_summary": user_profile_summary,
             "mastery_summary": mastery_summary,
@@ -85,6 +96,7 @@ class TeacherAgent(BaseAgent):
             "recent_qa_text": recent_qa_text,
             "must_reinforce_text": must_reinforce_text,
             "forbidden_future_text": forbidden_future_text,
+            "selection_reason_text": selection_reason_text,
         }
 
     async def run(self, ctx: AgentContext) -> dict[str, Any]:

@@ -63,6 +63,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
 【本節任務】
 必須補強的概念（優先講透，換不同類比框架）：{must_reinforce_text}
 禁止提前教（後續節點才會出現的概念）：{forbidden_future_text}
+選擇本節理由（系統判斷依據，幫助你調整講解側重點）：{selection_reason_text}
 
 【你的角色】
 你收到的「學習材料」是教材的原文段落（逐字摘錄）。
@@ -193,17 +194,31 @@ Score 定義：
 任務：判斷「候選輸出」是否可被 source_chunks 逐條支持。
 
 背景：source_chunks 是從教材原文逐字摘錄的片段，是唯一可信的事實基準。
+cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結果（含對應原文）。
 
-規則：
+驗證規則：
 1. 只能以 source_chunks 為判定依據，不可用外部常識或推論補完
-2. 候選輸出中的每一個事實性陳述，都必須能在 source_chunks 中找到直接依據；找不到的判定 aligned=false
-3. 比喻、類比、舉例若明確標示「類比說明，非原文」則豁免驗證
-4. 若為題目檢查，每道題的答案必須可從 source_chunks 中直接推導，不得要求教材外知識
+2. 對候選輸出中每一個帶 [chunk_id] 標記的主張：
+   a. 在 cited_chunks_lookup 找到對應 chunk_id 的原文（found=true）
+   b. 判斷該主張是否確實被此 chunk 的原文支持（而非只是形式上引用）
+   c. 若 found=false，直接標記 supported=false
+3. 候選輸出中沒有 [chunk_id] 標記的事實性陳述，也需評估是否需要來源
+4. 比喻、類比、舉例若明確標示「類比說明，非原文」則豁免驗證
+5. 若為題目檢查，每道題的答案必須可從 source_chunks 中直接推導，不得要求教材外知識
 
 請只輸出 JSON：
 {{
   "aligned": true,
-  "issues": ["若有漂移，列出具體問題（指出是哪個陳述找不到原文依據）"],
+  "claim_checks": [
+    {{
+      "claim": "候選文字中引用的主張摘要（一句話）",
+      "cited_chunk_id": "chunk_0012",
+      "supported": true,
+      "issue": "若 supported=false，說明哪裡不符"
+    }}
+  ],
+  "unsupported_claims": ["沒有 [chunk_id] 標記且找不到來源的事實性陳述摘要"],
+  "issues": ["若有漂移，列出具體問題（指出哪個陳述找不到原文依據）"],
   "missing_evidence": ["缺少對應來源的敘述摘要"],
   "revision_hint": "若未對齊，提供簡短修正建議"
 }}""",

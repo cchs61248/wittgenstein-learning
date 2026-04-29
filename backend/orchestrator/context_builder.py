@@ -54,6 +54,9 @@ async def build_adaptive_context(
             if c not in must_reinforce:
                 must_reinforce.append(c)
 
+    # 8. 讀取選課理由（Phase 4：由 Orchestrator 在選課後存入 strategy_snapshot）
+    selection_reason = (last_decision.get("strategy_snapshot") or {}).get("selection_reason") if last_decision else None
+
     return {
         "stage": stage,
         "current_attempt": current_attempt,
@@ -66,6 +69,7 @@ async def build_adaptive_context(
         "next_lesson_requirements": {
             "must_reinforce": must_reinforce,
             "forbidden_future_concepts": future_concepts,
+            "selection_reason": selection_reason,
         },
         "source_constraints": {
             "must_cite_chunks": True,

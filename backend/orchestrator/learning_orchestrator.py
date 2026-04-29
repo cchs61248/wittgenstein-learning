@@ -819,6 +819,7 @@ class LearningOrchestrator:
             best_score=decision["best_score"],
             understanding_notes={"confused": decision.get("remediation_focus") or []},
         )
+        selection_reason: dict | None = None
         if d == "advance":
             completed_stage_ids.add(stage["stage_id"])
             weak_raw = await longterm_memory.get_weak_concepts(user_id)
@@ -855,6 +856,16 @@ class LearningOrchestrator:
                 decision_reasons.append(
                     f"下一節選擇：{stages[next_stage_idx]['title']}（依弱點/掌握度/新知權重計算）。"
                 )
+            # 組裝選課理由（Phase 4）：讓 ContextBuilder → TeacherAgent 知道為什麼選這個節點
+            if next_stage_idx is not None:
+                next_stage_concepts = stages[next_stage_idx].get("key_concepts", [])
+                target_concepts = [c for c in next_stage_concepts if mastery_map.get(c, 0.5) < 0.75]
+                weak_overlap_count = len(set(next_stage_concepts).intersection(set(weak_concepts)))
+                selection_reason = {
+                    "reason": f"弱點重疊度={weak_overlap_count}，低掌握概念數={len(target_concepts)}，{'穩定高分模式' if stable_high else '補強優先模式'}",
+                    "target_concepts": target_concepts,
+                    "stable_high": stable_high,
+                }
         elif d in ("remediate", "reteach"):
             # 若判定需要補強，且目前沒有明確對應的待學節點，插入動態補強節點
             focus = decision.get("remediation_focus") or []
@@ -905,6 +916,9 @@ class LearningOrchestrator:
             "next_stage_candidates": ranked_candidates[:5],
             "remediation_focus": decision.get("remediation_focus") or [],
             "dynamic_stage_inserted": dynamic_stage_inserted,
+            "selection_reason": selection_reason,
+            "high_severity_misconceptions": decision.get("high_severity_misconceptions") or [],
+            "repeated_patterns_detected": decision.get("repeated_patterns_detected", False),
         }
         payload = {
             "decision": d,
