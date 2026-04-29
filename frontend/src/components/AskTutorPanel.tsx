@@ -107,7 +107,7 @@ export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = f
                   key={reversedIdx}
                   item={item}
                   index={tutorHistory.length - 1 - reversedIdx}
-                  defaultOpen={reversedIdx === 0}
+                  defaultOpen={false}
                 />
               ))}
             </div>
