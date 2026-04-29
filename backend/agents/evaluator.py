@@ -92,6 +92,7 @@ class EvaluatorAgent(BaseAgent):
                     "score": 1.0,
                     "understood_concepts": question.get("key_concepts_tested", []),
                     "confused_concepts": [],
+                    "misconception_patterns": [],
                     "feedback": f"✅ 答對了！**{label}** 是正確選項。\n\n你對這個概念的掌握很好，繼續保持！",
                     "needs_clarification": False,
                     "clarification_question": None,
@@ -130,6 +131,8 @@ class EvaluatorAgent(BaseAgent):
         data = json.loads(extract_json(response.content))
         if isinstance(data.get("feedback"), str):
             data["feedback"] = data["feedback"].replace("\\n", "\n")
+        if not isinstance(data.get("misconception_patterns"), list):
+            data["misconception_patterns"] = []
         return self._add_mastery_label(data)
 
     async def _score_mc_wrong(
@@ -174,6 +177,8 @@ class EvaluatorAgent(BaseAgent):
         data = json.loads(extract_json(response.content))
         if isinstance(data.get("feedback"), str):
             data["feedback"] = data["feedback"].replace("\\n", "\n")
+        if not isinstance(data.get("misconception_patterns"), list):
+            data["misconception_patterns"] = []
         # 安全夾緊：確保答錯分數不超過 0.6
         if isinstance(data.get("score"), (int, float)):
             data["score"] = min(float(data["score"]), 0.6)

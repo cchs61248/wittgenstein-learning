@@ -1,7 +1,9 @@
+import json
 from typing import Any, AsyncGenerator
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
+from ..utils import extract_json
 
 
 class TeacherAgent(BaseAgent):
@@ -138,3 +140,43 @@ class TeacherAgent(BaseAgent):
         async for chunk in self.llm.stream_chat(self._messages, system_prompt=system):
             yield chunk
         self._reset()
+
+    async def extract_teaching_intent(
+        self, explanation_text: str, stage: dict
+    ) -> dict:
+        """串流結束後，從講解全文中提取教學意圖（non-streaming，供 QuestionGeneratorAgent 使用）。"""
+        self._reset()
+        key_concepts = stage.get("key_concepts", [])
+        system = (
+            "你是教學意圖分析器。從提供的講解文字中提取結構化的教學意圖。\n"
+            "只輸出 JSON，不要任何其他文字：\n"
+            '{\n'
+            '  "reinforced_concepts": ["在講解中重點強調的概念"],\n'
+            '  "analogies_used": ["使用的類比描述（一句話）"],\n'
+            '  "repair_target": "若有針對特定錯誤修正，描述；若無則為 null",\n'
+            '  "main_chunk_ids": ["講解中引用的主要 chunk_id，如 chunk_0001"]\n'
+            "}"
+        )
+        self._add_message(
+            MessageRole.USER,
+            f"關鍵概念：{', '.join(key_concepts)}\n\n"
+            f"講解全文：\n{explanation_text[:3000]}",
+        )
+        try:
+            response = await self.llm.chat(self._messages, system_prompt=system)
+            data = json.loads(extract_json(response.content))
+            return {
+                "reinforced_concepts": [str(c) for c in (data.get("reinforced_concepts") or []) if c],
+                "analogies_used": [str(a) for a in (data.get("analogies_used") or []) if a],
+                "repair_target": data.get("repair_target") or None,
+                "main_chunk_ids": [str(c) for c in (data.get("main_chunk_ids") or []) if c],
+            }
+        except Exception:
+            return {
+                "reinforced_concepts": key_concepts[:2],
+                "analogies_used": [],
+                "repair_target": None,
+                "main_chunk_ids": [],
+            }
+        finally:
+            self._reset()

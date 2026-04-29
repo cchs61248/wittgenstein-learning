@@ -81,30 +81,58 @@ async def update_concept_mastery(
     user_id: str,
     concept_name: str,
     new_score: float,
-    confused_concepts: list[str],
-    successful_analogies: list[str],
+    confused_concepts: list[str] | None = None,
+    successful_analogies: list[str] | None = None,
+    misconception_pattern: dict | None = None,
+    analogy_used: str | None = None,
+    lesson_was_effective: bool = False,
 ) -> None:
     db = await get_db()
     async with db.execute(
-        "SELECT mastery_score, total_exposures, confusion_patterns FROM concept_mastery WHERE user_id = ? AND concept_name = ?",
+        """SELECT mastery_score, total_exposures, confusion_patterns, successful_analogies
+           FROM concept_mastery WHERE user_id = ? AND concept_name = ?""",
         (user_id, concept_name),
     ) as cur:
         row = await cur.fetchone()
 
-    if row:
-        # 指數移動平均（EMA）更新分數
-        old_score = row[0]
-        exposures = row[1] + 1
-        ema_score = 0.7 * old_score + 0.3 * new_score
-        existing_confusion = json.loads(row[2] or "[]")
-        existing_confusion = list(dict.fromkeys(existing_confusion + confused_concepts))[:10]
+    # ── 組裝 confusion_patterns ──────────────────────────────────
+    existing_confusion: list = json.loads((row["confusion_patterns"] if row else None) or "[]")
+    if misconception_pattern and isinstance(misconception_pattern, dict):
+        # 結構化 misconception（Phase 3+）：去除相同 pattern 的舊記錄後 append
+        existing_confusion = [
+            p for p in existing_confusion
+            if not (isinstance(p, dict) and p.get("pattern") == misconception_pattern.get("pattern"))
+        ]
+        existing_confusion.append(misconception_pattern)
+    elif confused_concepts:
+        # 舊格式字串列表（相容）
+        existing_confusion = list(dict.fromkeys(existing_confusion + confused_concepts))
+    existing_confusion = existing_confusion[-5:]
 
+    # ── 組裝 successful_analogies ────────────────────────────────
+    existing_analogies: list = json.loads((row["successful_analogies"] if row else None) or "[]")
+    if successful_analogies:
+        for a in successful_analogies:
+            if a and a not in existing_analogies:
+                existing_analogies.append(a)
+    if lesson_was_effective and analogy_used and analogy_used not in existing_analogies:
+        existing_analogies.append(analogy_used)
+    existing_analogies = existing_analogies[-5:]
+
+    if row:
+        ema_score = 0.7 * float(row["mastery_score"]) + 0.3 * new_score
+        exposures = row["total_exposures"] + 1
         await db.execute(
             """UPDATE concept_mastery
-               SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?, last_tested = ?
+               SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?,
+                   successful_analogies = ?, last_tested = ?
                WHERE user_id = ? AND concept_name = ?""",
-            (ema_score, exposures, json.dumps(existing_confusion, ensure_ascii=False),
-             datetime.utcnow(), user_id, concept_name),
+            (
+                ema_score, exposures,
+                json.dumps(existing_confusion, ensure_ascii=False),
+                json.dumps(existing_analogies, ensure_ascii=False),
+                datetime.utcnow(), user_id, concept_name,
+            ),
         )
     else:
         await db.execute(
@@ -113,8 +141,8 @@ async def update_concept_mastery(
                VALUES (?, ?, ?, 1, ?, ?, ?)""",
             (
                 user_id, concept_name, new_score,
-                json.dumps(confused_concepts[:10], ensure_ascii=False),
-                json.dumps(successful_analogies[:5], ensure_ascii=False),
+                json.dumps(existing_confusion, ensure_ascii=False),
+                json.dumps(existing_analogies, ensure_ascii=False),
                 datetime.utcnow(),
             ),
         )

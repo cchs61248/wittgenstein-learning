@@ -546,12 +546,18 @@ class LearningOrchestrator:
         wm.current_explanation = full_explanation
         await session_memory.store_stage_explanation(session_id, stage["stage_id"], full_explanation)
 
-        # 3. 生成問題
+        # 3. 提取教學意圖（non-streaming call，供問題生成器對齊）
+        teaching_intent = await self.teacher.extract_teaching_intent(full_explanation, stage)
+        wm.current_teaching_intent = teaching_intent
+
+        # 4. 生成問題
         q_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
             task_payload={
                 "stage": stage,
+                "teaching_intent": teaching_intent,
+                "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
                 "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                 if question_mode == "multiple_choice"
                 else stage.get("estimated_questions", 2),
@@ -708,13 +714,27 @@ class LearningOrchestrator:
         mastery_score = (
             correct_mc_score(raw_score) if wm.question_mode == "multiple_choice" else raw_score
         )
+        misconception_patterns_all: list[dict] = eval_result.get("misconception_patterns", [])
+        understood_concepts: list[str] = eval_result.get("understood_concepts", [])
+        # 高分且有教學意圖記錄時，回寫成功類比
+        analogies_to_record: list[str] = (
+            wm.current_teaching_intent.get("analogies_used", [])
+            if wm.current_teaching_intent and mastery_score >= 0.8
+            else []
+        )
         for concept in stage.get("key_concepts", []):
+            mp = next(
+                (p for p in misconception_patterns_all if p.get("concept") == concept), None
+            )
+            effective = concept in understood_concepts and bool(analogies_to_record)
             await longterm_memory.update_concept_mastery(
                 user_id=user_id,
                 concept_name=concept,
                 new_score=mastery_score,
                 confused_concepts=eval_result.get("confused_concepts", []),
-                successful_analogies=[],
+                misconception_pattern=mp,
+                analogy_used=analogies_to_record[0] if effective and analogies_to_record else None,
+                lesson_was_effective=effective,
             )
 
         remaining_qs = [
@@ -1094,6 +1114,10 @@ class LearningOrchestrator:
                 await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
                 await emit({"type": "explanation_chunk", "payload": {"chunk": full_explanation, "is_final": False}})
             wm.current_explanation = full_explanation
+
+            # 提取 reteach 後的新教學意圖
+            reteach_teaching_intent = await self.teacher.extract_teaching_intent(full_explanation, stage)
+            wm.current_teaching_intent = reteach_teaching_intent
             wm.stage_evaluations = []
 
             q_ctx = AgentContext(
@@ -1101,6 +1125,8 @@ class LearningOrchestrator:
                 user_id=user_id,
                 task_payload={
                     "stage": stage,
+                    "teaching_intent": reteach_teaching_intent,
+                    "allowed_evidence": reteach_adaptive_ctx.get("allowed_evidence", []),
                     "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                     "attempt_number": wm.current_attempt,
                     "previous_question_ids": [t.question_id for t in wm.stage_turns],

@@ -161,11 +161,29 @@ Score 定義：
 - 0.5-0.69: 部分理解，有概念混淆
 - 0.0-0.49: 未能展示基本理解
 
+【錯誤模式診斷（重要）】
+若發現學生有特定的錯誤模式，請在 misconception_patterns 中描述：
+- concept：哪個概念出錯（應為 key_concepts_tested 中的概念）
+- pattern：錯誤的具體形式（一句話，例如「把因果方向搞反」）
+- student_evidence：學生答案中的哪句話/哪個詞顯示這個錯誤
+- severity：low（細節有誤）/ medium（概念混淆）/ high（根本誤解）
+- repair_strategy：建議下一篇文章如何修正（例如「換從 X 角度說明」）
+若無明顯錯誤模式，misconception_patterns 回傳空列表 []。
+
 請以 JSON 格式回應：
 {{
   "score": 0.85,
   "understood_concepts": ["概念A"],
   "confused_concepts": ["概念B"],
+  "misconception_patterns": [
+    {{
+      "concept": "概念B",
+      "pattern": "錯誤的具體形式（一句話）",
+      "student_evidence": "學生答案中顯示此錯誤的句子",
+      "severity": "medium",
+      "repair_strategy": "建議修正方法"
+    }}
+  ],
   "feedback": "給使用者的反饋文字（繁體中文）",
   "needs_clarification": false,
   "clarification_question": null
