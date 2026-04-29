@@ -1088,7 +1088,7 @@ class LearningOrchestrator:
                 stages=stages,
             )
             remediation_content = (
-                stage["content"]
+                stage.get("content", "")
                 + f"\n\n（補強模式：針對概念「{focus_str}」，從不同角度補充說明或提供具體例子，"
                 f"約 300 字，不重複原講解，著重釐清混淆點）"
             )
@@ -1220,7 +1220,7 @@ class LearningOrchestrator:
                 stages=stages,
             )
 
-            reteach_content = stage["content"] + "\n\n（請換一個完全不同的比喻框架重新解釋）"
+            reteach_content = stage.get("content", "") + "\n\n（請換一個完全不同的比喻框架重新解釋）"
             reteach_stage = {**stage, "content": reteach_content}
 
             ctx = AgentContext(
