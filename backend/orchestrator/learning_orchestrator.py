@@ -794,6 +794,7 @@ class LearningOrchestrator:
                 "total_stages": len(stages),
                 "current_stage_id": stage["stage_id"],
                 "question_mode": wm.question_mode,
+                "current_attempt": wm.current_attempt,
             },
         )
         decision = await self.progress.run(prog_ctx)

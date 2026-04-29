@@ -30,7 +30,12 @@ class ProgressManagerAgent(BaseAgent):
         current_stage_id: int = payload.get("current_stage_id", 0)
         question_mode: str = payload.get("question_mode", "short_answer")
 
-        attempts = len(evaluations)
+        raw_attempt = payload.get("current_attempt")
+        try:
+            attempts = int(raw_attempt) if raw_attempt is not None else len(evaluations)
+        except (TypeError, ValueError):
+            attempts = len(evaluations)
+        attempts = max(1, attempts)
         raw_scores = [e.get("score", 0.0) for e in evaluations]
 
         # 選擇題套猜測校正，使分數與簡答題具可比性

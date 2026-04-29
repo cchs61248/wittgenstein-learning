@@ -585,6 +585,11 @@ _make_progress_decision(...)
     │
     ├── ProgressManagerAgent.run(ctx)
     │   【純程式邏輯，不呼叫 LLM】
+    │
+    │   ⚠️  attempts 來源：task_payload["current_attempt"]（第幾輪嘗試）
+    │       不可用 len(evaluations)（當輪已答題目數，stage_evaluations 每輪重置）
+    │       Orchestrator 必須傳入 "current_attempt": wm.current_attempt
+    │
     │   從 evaluations 收集 misconception_patterns：
     │       all_misconceptions = [m for ev in evaluations for m in ev.misconception_patterns]
     │       high_severity = [m for m in all_misconceptions if m.severity == "high"]

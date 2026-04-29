@@ -139,6 +139,8 @@ JWT_SECRET=change-me
 
 **`DB_PATH` 解析**：`config.py` 明確載入 `backend/.env`（用 `Path(__file__).parent`），並將相對路徑以 `backend/` 為基準解析。這解決了從不同 CWD 啟動時路徑找不到的問題。
 
+**ProgressManager attempts 來源**：`attempts` 必須來自 task_payload 的 `current_attempt`（第幾輪嘗試，`wm.current_attempt`），**不可用 `len(stage_evaluations)`**（當輪已答題目數）。`wm.stage_evaluations` 在每次 retry/remediate 後重置為 `[]`，所以 `len` 永遠等於當輪題目數（簡答 2、選擇 4），與嘗試輪次無關。Orchestrator 在 `_make_progress_decision` 的 task_payload 中必須傳入 `"current_attempt": wm.current_attempt`。
+
 **WebSocket URL 硬編碼**：`frontend/src/api/websocket.ts` 中 `WS_BASE` 固定為 `ws://localhost:8000`，部署時需手動修改或改成環境變數。
 
 ### WebSocket 訊息協定
