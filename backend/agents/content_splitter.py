@@ -133,7 +133,7 @@ class ContentSplitterAgent(BaseAgent):
         self._reset()
         payload = ctx.task_payload
         source_chunks: list[dict] = payload.get("source_chunks", [])
-        max_stages: int = payload.get("max_stages", 8)
+        max_stages: int = payload.get("max_stages", 30)
         target_depth: str = payload.get("target_depth", "intermediate")
 
         # 建立 chunk_id → chunk dict 供後端回填

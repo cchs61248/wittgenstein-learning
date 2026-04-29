@@ -336,7 +336,7 @@ class LearningOrchestrator:
             user_id=user_id,
             task_payload={
                 "source_chunks": source_chunks,
-                "max_stages": 8,
+                "max_stages": 30,
                 "target_depth": target_depth,
             },
         )

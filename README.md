@@ -20,9 +20,11 @@
 - EvaluatorAgent 輸出結構化 misconception_patterns（concept / pattern / severity / repair_strategy），供長期診斷使用
 - DriftVerifier Citation Accuracy（Phase 4）：逐條驗證 `[chunk_id]` 引用是否真實支撐對應主張，非僅形式引用檢查
 - ProgressManager 智能決策（Phase 4）：高嚴重度根本誤解或同一錯誤重複 ≥ 2 次，立即觸發換框架重教
+- retry / remediate 決策不清除原文，改為在現有講解尾端附加內容；remediate 會完整串流補強教學文章（TeacherAgent），並持久化至 DB，頁面重整後不重新生成
 - 跨會話長期記憶：結構化追蹤每個概念的掌握度（EMA）、混淆模式、成功類比，選課時傳遞理由給 TeacherAgent
 - 支援四個 LLM Provider（Claude、OpenAI、Gemini、Monica）
-- 頁面重整、多裝置切換後完整恢復學習進度
+- 學生追問（Ask Tutor）：可詢問教材內外問題，回答以可收縮筆記方式記錄，透過 localStorage 持久化，頁面重整後自動恢復
+- 頁面重整、多裝置切換後完整恢復學習進度（含講解、答題歷史、追問記錄）
 
 ---
 
@@ -124,11 +126,11 @@ backend/
 | 決策 | 觸發條件 | 優先序 | 行為 |
 |------|---------|--------|------|
 | `advance` | best_score ≥ 0.75 | 1（最高） | 依掌握度/弱點/新知排名選下一節點（可插入整合挑戰節點） |
-| `reteach` | high severity misconception（任何嘗試次數） | 2 | 立即換框架重教，不等到 max_attempts |
-| `reteach` | 同一 pattern 重複 ≥ 2 次 | 3 | 換比喻框架全新講解 + 新題 |
-| `retry` | attempts < 3 且 best_score < 0.75 | 4 | 降低難度重新出題（同框架） |
-| `reteach` | attempts == 3 且 latest_score < 0.5 | 5 | 換框架重教 |
-| `remediate` | 其餘情況 | 6（最低） | 補充說明後重試（可插入動態補強節點） |
+| `reteach` | high severity misconception（任何嘗試次數） | 2 | 先持久化當前講解，再換框架全新串流重教 + 新題 |
+| `reteach` | 同一 pattern 重複 ≥ 2 次 | 3 | 先持久化當前講解，再換比喻框架全新講解 + 新題 |
+| `retry` | attempts < 3 且 best_score < 0.75 | 4 | 不清除原文，附加「第 N 次嘗試」標題 + 重新出題 |
+| `reteach` | attempts == 3 且 latest_score < 0.5 | 5 | 先持久化當前講解，再換框架重教 |
+| `remediate` | 其餘情況 | 6（最低） | 不清除原文，串流補強教學文章（TeacherAgent），附加至原文尾端並持久化 |
 
 ### 前端（React + TypeScript + Vite）
 
@@ -145,7 +147,7 @@ frontend/src/
 │   ├── StageMap.tsx           # 左側學習進度地圖
 │   ├── ExplanationPanel.tsx   # 串流 Markdown 講解
 │   ├── QuestionPanel.tsx      # 問答（含掌握度標籤 + 鼓勵語）與反饋
-│   ├── AskTutorPanel.tsx      # 學生提問（範疇內/外）
+│   ├── AskTutorPanel.tsx      # 學生提問（範疇內/外，可收縮筆記，localStorage 持久化）
 │   └── LearningCoachPanel.tsx # 學習教練輔助面板
 ├── store/
 │   └── sessionStore.ts        # Zustand 全域狀態
@@ -165,17 +167,25 @@ frontend/src/
 **Server → Client**
 
 ```
-session_started   → { session_id, stages: [{stage_id, title}] }
-explanation_chunk → { chunk, is_final }
-question          → { question_id, text, type, stage_id, attempt_number }
-feedback          → { score, feedback_text, needs_clarification }
-stage_decision    → { decision, message, next_stage_id, best_score }
-course_completed  → { message }
+session_started     → { session_id, stages, stage_statuses }
+session_snapshot    → { stage_explanations, stage_qa_histories, decision_history }
+explanation_chunk   → { chunk, is_final }
+explanation_complete→ { stage_id, full_explanation }
+explanation_reset   → {}   （僅 reteach 換框架時送出）
+question            → { question_id, text, type, stage_id, attempt_number, options? }
+feedback            → { score, feedback_text, needs_clarification, clarification_question? }
+stage_decision      → { decision, message, next_stage_id, best_score, strategy_snapshot }
+tutor_reply         → { question, answer, in_scope }
+qa_history          → { records }
+resume_state        → { current_question?, last_feedback? }
+course_completed    → { message }
+kicked              → { message }
+error               → { message }
 ```
 
 ### 資料庫 Schema
 
-七張資料表：`users`、`sessions`、`stage_progress`、`qa_records`、`concept_mastery`、`user_learning_profile`、`decision_records`。
+八張資料表：`users`、`sessions`、`stage_progress`、`qa_records`、`concept_mastery`、`user_learning_profile`、`decision_records`、`source_chunks`（Phase 1，後端 source truth）。
 
 資料庫在首次啟動時自動建立（`data/learning.db`），透過 migration 系統增量更新。
 

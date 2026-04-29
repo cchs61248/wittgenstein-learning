@@ -141,6 +141,12 @@ JWT_SECRET=change-me
 
 **ProgressManager attempts 來源**：`attempts` 必須來自 task_payload 的 `current_attempt`（第幾輪嘗試，`wm.current_attempt`），**不可用 `len(stage_evaluations)`**（當輪已答題目數）。`wm.stage_evaluations` 在每次 retry/remediate 後重置為 `[]`，所以 `len` 永遠等於當輪題目數（簡答 2、選擇 4），與嘗試輪次無關。Orchestrator 在 `_make_progress_decision` 的 task_payload 中必須傳入 `"current_attempt": wm.current_attempt`。
 
+**retry / remediate 不清除原文**：決策為 `retry` 或 `remediate` 時，**不送 `explanation_reset`**。兩者都在 `wm.current_explanation` 尾端附加新內容（retry 附加「第 N 次嘗試」標題，remediate 串流整篇補強教學文章），然後呼叫 `session_memory.store_stage_explanation(combined)` + `store_stage_questions(questions)` 持久化。`reteach` 則在換框架前先存一次舊版（同樣呼叫 `store_stage_explanation` + `store_stage_questions`），讓 resume 不再觸發重新生成。
+
+**TeacherAgent 呼叫時機**：除了 `run_stage` 串流初次講解和 `reteach` 換框架，**remediate 決策也會呼叫 TeacherAgent.stream_explanation**（附「補強模式」指示，針對 focus 概念從不同角度補充說明），並在完成後執行 `extract_teaching_intent` 更新 `wm.current_teaching_intent`。
+
+**ask_tutor 前端持久化**：`tutor_reply` 訊息到達前端後，`addTutorMessage()` 將回答追加至 Zustand `tutorHistory` 陣列，並同步寫入 `localStorage` key `wl_tutor_history`。`clearAuth()` 與 `clearSession()` 均會清除此 key 並重置 `tutorHistory: []`。`AskTutorPanel` 以可收縮筆記（`HistoryNote` 元件）呈現歷史，最新一筆預設展開，頁面重整後自動恢復。
+
 **WebSocket URL 硬編碼**：`frontend/src/api/websocket.ts` 中 `WS_BASE` 固定為 `ws://localhost:8000`，部署時需手動修改或改成環境變數。
 
 ### WebSocket 訊息協定

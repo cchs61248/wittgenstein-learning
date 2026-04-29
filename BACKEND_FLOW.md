@@ -759,7 +759,7 @@ _make_progress_decision(...)
 
 **輸入（Phase 1 改版）**：
 - `source_chunks: list[dict]` — 後端已切好的 chunk 列表（含 chunk_id、text、order_index）
-- `max_stages: int = 8`
+- `max_stages: int = 30`
 - `target_depth: str` — beginner / intermediate / advanced
 
 **Prompt 重點（Phase 1）**：
