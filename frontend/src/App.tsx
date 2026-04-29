@@ -41,6 +41,8 @@ export default function App() {
     setPendingAnswer,
     setQaHistory,
     addTutorMessage,
+    setTutorLoading,
+    isTutorLoading,
     hydrateSnapshot,
     hydrateDecisionHistory,
   } = useSessionStore();
@@ -282,6 +284,7 @@ export default function App() {
   };
 
   const handleAskTutor = (question: string) => {
+    setTutorLoading(true);
     wsRef.current?.send({
       type: 'ask_tutor',
       payload: { session_id: sessionIdRef.current, question },
@@ -365,6 +368,7 @@ export default function App() {
             onAskTutor={handleAskTutor}
             isCollapsed={isAskTutorCollapsed}
             onToggle={() => setIsAskTutorCollapsed((v) => !v)}
+            isLoading={isTutorLoading}
           />
           <QuestionPanel
             onSubmit={handleSubmitAnswer}

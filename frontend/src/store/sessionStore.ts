@@ -63,6 +63,8 @@ interface SessionState {
   stageQaHistories: Record<number, QaHistoryItem[]>;
   tutorReply: { question: string; answer: string; in_scope?: boolean } | null;
   tutorHistory: { question: string; answer: string; in_scope?: boolean }[];
+  isTutorLoading: boolean;
+  setTutorLoading: (v: boolean) => void;
   addTutorMessage: (msg: { question: string; answer: string; in_scope?: boolean }) => void;
   setQuestion: (q: QuestionPayload) => void;
   setQuestionImmediate: (q: QuestionPayload | null) => void;
@@ -238,11 +240,13 @@ export const useSessionStore = create<SessionState>((set) => ({
   stageQaHistories: loadStageQaHistories(),
   tutorReply: null,
   tutorHistory: loadTutorHistory(),
+  isTutorLoading: false,
+  setTutorLoading: (v) => set({ isTutorLoading: v }),
   addTutorMessage: (msg) =>
     set((s) => {
       const updated = [...s.tutorHistory, msg];
       localStorage.setItem('wl_tutor_history', JSON.stringify(updated));
-      return { tutorReply: msg, tutorHistory: updated };
+      return { tutorReply: msg, tutorHistory: updated, isTutorLoading: false };
     }),
   clearTutorHistory: () => {
     localStorage.removeItem('wl_tutor_history');
@@ -402,6 +406,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingAnswer: null,
       tutorReply: null,
       tutorHistory: [],
+      isTutorLoading: false,
       decisionHistory: [],
     });
   },

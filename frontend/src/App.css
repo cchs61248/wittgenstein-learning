@@ -748,6 +748,12 @@ body {
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
+  min-height: 72px;
+}
+
+.ask-tutor-body textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .ask-tutor-panel .qa-history-detail-block {

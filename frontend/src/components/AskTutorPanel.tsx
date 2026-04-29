@@ -9,6 +9,7 @@ interface Props {
   onAskTutor: (question: string) => void;
   isCollapsed: boolean;
   onToggle: () => void;
+  isLoading?: boolean;
 }
 
 function HistoryNote({
@@ -45,13 +46,13 @@ function HistoryNote({
   );
 }
 
-export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle }: Props) {
+export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = false }: Props) {
   const tutorHistory = useSessionStore((s) => s.tutorHistory);
   const clearTutorHistory = useSessionStore((s) => s.clearTutorHistory);
   const [question, setQuestion] = useState('');
 
   const handleSend = () => {
-    if (!question.trim()) return;
+    if (!question.trim() || isLoading) return;
     onAskTutor(question.trim());
     setQuestion('');
   };
@@ -86,16 +87,17 @@ export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle }: Props) {
           <textarea
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder="可詢問教材內容，超出教材會標註並以外部知識補充"
-            rows={2}
+            placeholder={isLoading ? '等待老師回覆中…' : '可詢問教材內容，超出教材會標註並以外部知識補充'}
+            rows={3}
+            disabled={isLoading}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && e.ctrlKey) handleSend();
             }}
           />
           <div className="answer-actions" style={{ marginTop: 0 }}>
-            <span className="hint-text">Ctrl + Enter 發問</span>
-            <button className="btn-ghost" onClick={handleSend} disabled={!question.trim()}>
-              發問
+            <span className="hint-text">{isLoading ? '等待回覆中…' : 'Ctrl + Enter 發問'}</span>
+            <button className="btn-ghost" onClick={handleSend} disabled={!question.trim() || isLoading}>
+              {isLoading ? '發問中…' : '發問'}
             </button>
           </div>
           {tutorHistory.length > 0 && (
