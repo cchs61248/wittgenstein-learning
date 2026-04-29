@@ -58,11 +58,12 @@ JWT_SECRET=change-me
   └─ WebSocket → /ws/{session_id}?token=JWT
        └─ main.py（WebSocketManager）
             └─ LearningOrchestrator（協調所有 Agent）
-                 ├─ ContentSplitterAgent → 切割材料為 stages
-                 ├─ TeacherAgent         → 串流生成講解
+                 ├─ ContentSplitterAgent   → 切割材料為 stages
+                 ├─ TeacherAgent           → 串流生成講解（懂行朋友語氣 + 生活化類比）
                  ├─ QuestionGeneratorAgent → 布魯姆分類題目
-                 ├─ EvaluatorAgent        → 評分 0.0~1.0
-                 └─ ProgressManagerAgent  → advance/retry/remediate/reteach
+                 ├─ EvaluatorAgent         → 評分 0.0~1.0 + 掌握度分類標籤注入
+                 ├─ ProgressManagerAgent   → advance/retry/remediate/reteach
+                 └─ DriftVerifierAgent     → 驗證講解/題目是否紮根原文
 ```
 
 ### REST API 端點
@@ -95,7 +96,11 @@ JWT_SECRET=change-me
 
 ### Agent 上下文隔離（`backend/agents/`）
 
-每個 Agent 的 `_messages` 在 `run()` 結束後呼叫 `_reset()` 清除，防止跨呼叫上下文累積。Token 預算（`max_context_tokens`）：ContentSplitter 4000、Teacher 2000、QuestionGenerator 1500、Evaluator 1200、ProgressManager 800。
+每個 Agent 的 `_messages` 在 `run()` 結束後呼叫 `_reset()` 清除，防止跨呼叫上下文累積。Token 預算（`max_context_tokens`）：ContentSplitter 4000、Teacher 2000、QuestionGenerator 1500、Evaluator 1200、ProgressManager 800、DriftVerifier 1200。
+
+**EvaluatorAgent 掌握度標籤**：`_add_mastery_label()` 在所有三條評分路徑（選擇題答對、選擇題答錯、短答題）結束後，統一在 `feedback` 最前面注入 `✅/⚠️/❌` 分類標籤，不依賴 LLM 生成。
+
+**TeacherAgent System Prompt 結構**：【角色定義（懂行朋友語氣）】→【講解原則（置於格式前，強制 2+ 生活化類比）】→【重要限制（只能依原文）】→【輸出格式（📖 本節 + 🔗 關聯）】。改動 prompt 時注意此順序——講解原則在格式規範之前，確保 LLM 優先遵守類比要求。
 
 ### 記憶三層（`backend/memory/`）
 

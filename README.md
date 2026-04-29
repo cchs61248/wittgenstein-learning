@@ -14,12 +14,14 @@
 
 ## 功能
 
-- 上傳任意學習材料，系統自動切割為有序學習階段
-- Teacher 串流講解（Markdown，即時渲染）
-- 布魯姆分類法出題（理解型 / 應用型 / 創造型）
-- 評估後依掌握程度自動決策下一步
-- 跨會話長期記憶：追蹤每個概念的掌握度與學習風格
-- 支援三個 LLM Provider（Claude、OpenAI、Gemini）
+- 上傳任意學習材料，系統自動切割為有序學習階段（覆蓋合約：確認後所有節點保證覆蓋）
+- Teacher 串流講解（Markdown，即時渲染），語氣如「懂行朋友耐心講解」，每個概念至少 2 個生活化類比
+- 布魯姆分類法出題（理解型 / 應用型 / 創造型），附鼓勵語引導學生自信作答
+- 評估後即時顯示掌握度標籤（✅ 佳 / ⚠️ 部分不足 / ❌ 明顯不足），四種決策路徑自動調整
+- DriftVerifier 防幻覺機制：所有 LLM 輸出皆驗證是否紮根於原始教材
+- 跨會話長期記憶：追蹤每個概念的掌握度（EMA）與學習風格，智能選擇下一節點
+- 支援四個 LLM Provider（Claude、OpenAI、Gemini、Monica）
+- 頁面重整、多裝置切換後完整恢復學習進度
 
 ---
 
@@ -92,12 +94,13 @@ backend/
 │   ├── openai_provider.py
 │   ├── gemini_provider.py
 │   └── provider_factory.py
-├── agents/                   # 五個功能 Agent
+├── agents/                   # 六個功能 Agent
 │   ├── content_splitter.py   # 切割學習材料
-│   ├── teacher.py            # 串流講解生成
-│   ├── question_generator.py # 出題
-│   ├── evaluator.py          # 評分
-│   └── progress_manager.py   # 決策
+│   ├── teacher.py            # 串流講解生成（懂行朋友語氣 + 生活化類比）
+│   ├── question_generator.py # 出題（布魯姆分類法）
+│   ├── evaluator.py          # 評分（含掌握度標籤注入）
+│   ├── progress_manager.py   # 決策（純規則，不呼叫 LLM）
+│   └── drift_verifier.py     # 防幻覺：驗證輸出是否紮根原文
 ├── orchestrator/
 │   └── learning_orchestrator.py  # 協調所有 Agent 的主控流程
 ├── memory/
@@ -110,14 +113,14 @@ backend/
 
 **Agent 運作方式**：每個 Agent 擁有獨立的 `_messages` 列表，`run()` 結束後呼叫 `_reset()` 清除，避免跨呼叫上下文累積。各 Agent 有各自的 token 預算（800–4000 tokens）。
 
-**四種進度決策**：
+**四種進度決策**（remediate/reteach 時附加覆蓋保護說明）：
 
 | 決策 | 觸發條件 | 行為 |
 |------|---------|------|
-| `advance` | 平均分 ≥ 0.75 | 進入下一階段 |
-| `retry` | 分數不足且嘗試 < 3 次 | 降低難度重新出題 |
-| `remediate` | 多次失敗 | 插入補充說明後重試 |
-| `reteach` | 完全無法理解 | Teacher 換比喻框架重新講解 |
+| `advance` | best_score ≥ 0.75 | 依掌握度/弱點排名選擇下一節點（可能插入整合挑戰節點） |
+| `retry` | attempts < 3 且 best_score < 0.75 | 降低難度重新出題（同框架） |
+| `remediate` | attempts ≥ 3 且 latest_score ≥ 0.5 | 補充說明後重試（可能動態插入補強節點） |
+| `reteach` | attempts == 3 且 latest_score < 0.5 | Teacher 換比喻框架全新講解 + 新題 |
 
 ### 前端（React + TypeScript + Vite）
 
@@ -130,9 +133,12 @@ frontend/src/
 ├── components/
 │   ├── AuthForm.tsx           # 登入/註冊表單
 │   ├── UploadModal.tsx        # 上傳學習材料
+│   ├── KnowledgeMapModal.tsx  # 知識地圖確認（含覆蓋合約說明）
 │   ├── StageMap.tsx           # 左側學習進度地圖
 │   ├── ExplanationPanel.tsx   # 串流 Markdown 講解
-│   └── QuestionPanel.tsx      # 問答與反饋
+│   ├── QuestionPanel.tsx      # 問答（含掌握度標籤 + 鼓勵語）與反饋
+│   ├── AskTutorPanel.tsx      # 學生提問（範疇內/外）
+│   └── LearningCoachPanel.tsx # 學習教練輔助面板
 ├── store/
 │   └── sessionStore.ts        # Zustand 全域狀態
 └── types/
@@ -161,9 +167,9 @@ course_completed  → { message }
 
 ### 資料庫 Schema
 
-六張資料表：`users`、`sessions`、`stage_progress`、`qa_records`、`concept_mastery`、`user_learning_profile`。
+七張資料表：`users`、`sessions`、`stage_progress`、`qa_records`、`concept_mastery`、`user_learning_profile`、`decision_records`。
 
-資料庫在首次啟動時自動建立（`data/learning.db`）。
+資料庫在首次啟動時自動建立（`data/learning.db`），透過 migration 系統增量更新。
 
 ---
 
