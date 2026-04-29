@@ -14,11 +14,12 @@ from .routers.upload import router as upload_router
 from .routers.session import router as session_router
 from .auth.utils import decode_token
 from .llm.provider_factory import create_provider
-from .llm.file_adapter import create_provider_file_ref
 from .orchestrator.learning_orchestrator import LearningOrchestrator
 from .memory.working_memory import get_working_memory, delete_working_memory
 from .memory import session_memory
 from .files.upload_store import load_upload
+from .utils.text_extractor import extract_text
+from .utils.chunker import build_source_chunks
 
 
 @asynccontextmanager
@@ -135,37 +136,29 @@ async def websocket_endpoint(
                         await emit({"type": "error", "payload": {"message": "請先上傳檔案或提供文字內容"}})
                         continue
 
-                    provider_file_ref: dict | None = None
+                    # 本地文字抽取 + chunking（後端掌控 source truth）
                     if uploaded_file_id:
                         try:
                             uploaded = load_upload(uploaded_file_id)
                         except FileNotFoundError:
                             await emit({"type": "error", "payload": {"message": "找不到已上傳檔案，請重新上傳"}})
                             continue
-                        pref = await create_provider_file_ref(
-                            provider=provider_name,
-                            filename=uploaded["filename"],
-                            mime_type=uploaded["mime_type"],
-                            raw=uploaded["raw"],
-                        )
-                        provider_file_ref = {
-                            "filename": pref.filename,
-                            "mime_type": pref.mime_type,
-                            "openai_file_id": pref.openai_file_id,
-                            "gemini_file_uri": pref.gemini_file_uri,
-                            "claude_file_id": pref.claude_file_id,
-                            "monica_file_data": pref.monica_file_data,
-                        }
+                        doc_text = extract_text(uploaded["filename"], uploaded["raw"])
+                    else:
+                        doc_text = raw_content
+
+                    source_chunks = build_source_chunks(doc_text)
+                    if not source_chunks:
+                        await emit({"type": "error", "payload": {"message": "無法從文件中抽取內容，請確認檔案格式"}})
+                        continue
 
                     llm = create_provider(provider_name, model=model)
                     orchestrator = LearningOrchestrator(llm)
-                    # 儲存 orchestrator 以便後續 handle_answer 使用
                     _orchestrators[session_id] = orchestrator
                     await orchestrator.start_session(
                         session_id=session_id,
                         user_id=user_id,
-                        raw_content=raw_content,
-                        provider_file_ref=provider_file_ref,
+                        source_chunks=source_chunks,
                         target_depth=p.get("target_depth", "intermediate"),
                         question_mode=p.get("question_mode", "short_answer"),
                         provider_name=provider_name,

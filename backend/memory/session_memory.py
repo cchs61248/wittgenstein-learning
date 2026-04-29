@@ -315,6 +315,89 @@ async def get_decision_records(
     return records
 
 
+async def insert_source_chunks(session_id: str, chunks: list[dict]) -> None:
+    """將本地切好的 source_chunks 存入 DB（教材 source truth）。"""
+    db = await get_db()
+    await db.executemany(
+        """INSERT OR REPLACE INTO source_chunks
+           (chunk_id, session_id, order_index, text, section_title, char_start, char_end)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (
+                c["chunk_id"],
+                session_id,
+                c["order_index"],
+                c["text"],
+                c.get("section_title"),
+                c.get("char_start"),
+                c.get("char_end"),
+            )
+            for c in chunks
+        ],
+    )
+    await db.commit()
+
+
+async def get_source_chunks(
+    session_id: str,
+    chunk_ids: list[str] | None = None,
+) -> list[dict]:
+    """
+    取得 session 的 source_chunks。
+    chunk_ids 為 None 時回傳全部；指定時只回傳對應的 chunks。
+    """
+    db = await get_db()
+    if chunk_ids is None:
+        async with db.execute(
+            "SELECT * FROM source_chunks WHERE session_id = ? ORDER BY order_index",
+            (session_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    else:
+        if not chunk_ids:
+            return []
+        placeholders = ",".join("?" * len(chunk_ids))
+        async with db.execute(
+            f"SELECT * FROM source_chunks WHERE session_id = ? AND chunk_id IN ({placeholders}) ORDER BY order_index",
+            (session_id, *chunk_ids),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def get_recent_qa_summary(session_id: str, max_items: int = 5) -> list[dict]:
+    """取得最近 N 筆問答記錄摘要（供 ContextBuilder 使用）。"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT stage_id, question_text, user_answer, score
+           FROM qa_records WHERE session_id = ?
+           ORDER BY id DESC LIMIT ?""",
+        (session_id, max_items),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in reversed(rows)]
+
+
+async def get_last_decision_record(session_id: str) -> Optional[dict]:
+    """取得最後一筆決策記錄（含 strategy_snapshot）。"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT stage_id, decision, best_score, strategy_snapshot_json
+           FROM decision_records WHERE session_id = ?
+           ORDER BY id DESC LIMIT 1""",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "stage_id": row["stage_id"],
+        "decision": row["decision"],
+        "best_score": row["best_score"],
+        "strategy_snapshot": json.loads(row["strategy_snapshot_json"] or "{}"),
+    }
+
+
 async def insert_qa_record(
     session_id: str,
     stage_id: int,

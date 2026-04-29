@@ -8,7 +8,7 @@ from ..files.upload_store import save_upload
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
-_ALLOWED = {".txt", ".md", ".pdf", ".docx", ".doc"}
+_ALLOWED = {".txt", ".md", ".pdf", ".docx", ".doc", ".pptx", ".html", ".htm"}
 _MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 
 

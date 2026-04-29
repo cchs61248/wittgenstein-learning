@@ -32,6 +32,7 @@ class LearningOrchestrator:
         self.progress = ProgressManagerAgent(llm, tc)
         self.drift_verifier = DriftVerifierAgent(llm, tc)
         self._pending_stages: list[dict] | None = None
+        self._pending_source_chunks: list[dict] | None = None
         self._pending_start_args: dict | None = None
 
     # ── 工具方法 ──────────────────────────────────────────────
@@ -277,38 +278,79 @@ class LearningOrchestrator:
         )
         return updated, len(updated) - 1
 
+    # ── 品質檢查 ──────────────────────────────────────────────
+
+    def _check_stage_quality(
+        self, stages: list[dict], all_chunks: list[dict]
+    ) -> list[dict]:
+        issues: list[dict] = []
+        referenced: set[str] = set()
+
+        for s in stages:
+            chunk_ids = s.get("source_chunk_ids") or []
+            referenced.update(chunk_ids)
+            if len(chunk_ids) <= 1:
+                issues.append({
+                    "type": "possibly_too_small",
+                    "stage_id": s.get("stage_id"),
+                    "title": s.get("title", ""),
+                })
+
+        concept_map: dict[str, list] = {}
+        for s in stages:
+            for c in s.get("key_concepts", []):
+                concept_map.setdefault(c, []).append(s.get("stage_id"))
+        for concept, ids in concept_map.items():
+            if len(ids) >= 3:
+                issues.append({
+                    "type": "concept_fragmented",
+                    "concept": concept,
+                    "stage_ids": ids,
+                })
+
+        orphans = [c["chunk_id"] for c in all_chunks if c["chunk_id"] not in referenced]
+        if orphans:
+            issues.append({"type": "orphaned_chunks", "chunk_ids": orphans})
+
+        return issues
+
     # ── 初始化：切割內容，等待確認 ──────────────────────────
 
     async def start_session(
         self,
         session_id: str,
         user_id: str,
-        raw_content: str,
-        provider_file_ref: dict | None,
+        source_chunks: list[dict],
         target_depth: str,
         question_mode: str,
         provider_name: str | None,
         model_name: str | None,
         emit: WSEmitter,
     ) -> None:
-        hash_seed = raw_content if raw_content else json.dumps(provider_file_ref or {}, ensure_ascii=False)
+        hash_seed = "".join(c["text"][:80] for c in source_chunks)
         content_hash = hashlib.sha256(hash_seed.encode()).hexdigest()[:16]
 
         ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
             task_payload={
-                "raw_content": raw_content,
-                "provider_file_ref": provider_file_ref,
+                "source_chunks": source_chunks,
                 "max_stages": 8,
                 "target_depth": target_depth,
             },
         )
         split_result = await self.splitter.run(ctx)
         stages: list[dict] = split_result["stages"]
-        for stage in stages:
-            stage["source_chunks"] = self._normalize_stage_source_chunks(stage)
         summary: str = split_result.get("summary", "")
+
+        # 品質檢查（記錄 issues，不中斷流程）
+        quality_issues = self._check_stage_quality(stages, source_chunks)
+        if quality_issues:
+            # 僅 log，不阻擋教學流程
+            import logging
+            logging.getLogger(__name__).warning(
+                "Stage quality issues: %s", quality_issues
+            )
 
         nodes = [
             {"node_id": s["node_id"], "stage_id": s["stage_id"], "title": s["title"]}
@@ -316,6 +358,7 @@ class LearningOrchestrator:
         ]
 
         self._pending_stages = stages
+        self._pending_source_chunks = source_chunks
         self._pending_start_args = {
             "session_id": session_id,
             "user_id": user_id,
@@ -324,7 +367,7 @@ class LearningOrchestrator:
             "question_mode": question_mode,
         }
 
-        # 立即存入 DB，讓重整後能恢復此狀態
+        # 先建立 pending session（source_chunks 有 FK 依賴）
         await session_memory.create_pending_session(
             session_id=session_id,
             user_id=user_id,
@@ -336,6 +379,9 @@ class LearningOrchestrator:
             model_name=model_name,
             question_mode=question_mode,
         )
+
+        # 存入 source_chunks（後端掌控的 source truth）
+        await session_memory.insert_source_chunks(session_id, source_chunks)
 
         await emit({
             "type": "knowledge_map",

@@ -82,6 +82,25 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
+    # Migration 009：建立 source_chunks 表（後端掌控教材 source truth）
+    await _connection.execute(
+        """CREATE TABLE IF NOT EXISTS source_chunks (
+            chunk_id      TEXT NOT NULL,
+            session_id    TEXT NOT NULL REFERENCES sessions(session_id),
+            order_index   INTEGER NOT NULL,
+            text          TEXT NOT NULL,
+            section_title TEXT,
+            char_start    INTEGER,
+            char_end      INTEGER,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (chunk_id, session_id)
+        )"""
+    )
+    await _connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_source_chunks_session ON source_chunks(session_id)"
+    )
+    await _connection.commit()
+
     # Migration 006：建立決策歷史表（跨裝置恢復教練趨勢）
     await _connection.execute(
         """CREATE TABLE IF NOT EXISTS decision_records (
