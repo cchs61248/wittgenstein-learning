@@ -795,6 +795,8 @@ class LearningOrchestrator:
                 "current_stage_id": stage["stage_id"],
                 "question_mode": wm.question_mode,
                 "current_attempt": wm.current_attempt,
+                "is_dynamic": stage.get("is_dynamic", False),
+                "remediate_count": wm.remediate_count,
             },
         )
         decision = await self.progress.run(prog_ctx)
@@ -884,7 +886,7 @@ class LearningOrchestrator:
                 mastery_map=mastery_map,
                 stable_high=False,
             )
-            if focus and candidate_idx is None:
+            if focus:
                 stages_for_run, next_stage_idx = await self._insert_remediation_stage(
                     session_id=session_id,
                     stages=stages,
@@ -895,10 +897,8 @@ class LearningOrchestrator:
                 stages = stages_for_run
                 dynamic_stage_inserted = True
                 decision_reasons.append(
-                    "偵測到需補強概念且無現成節點可對應，已動態插入補強節點。"
+                    "已動態插入補強子節點（" + "、".join(focus[:3]) + "）。"
                 )
-            else:
-                decision_reasons.append("目前先在本節補強，待下輪評估是否轉移到其他節點。")
             if focus:
                 decision_reasons.append("補強焦點：" + "、".join(focus[:3]))
             decision_reasons.append("補強不影響整體進度：知識地圖中所有節點最終都會完整覆蓋。")
@@ -1066,140 +1066,96 @@ class LearningOrchestrator:
                 })
 
         elif d == "remediate":
-            wm.current_attempt += 1
+            wm.remediate_count += 1
 
-            # remediate：不清除原講解，在末尾插入補強文章（2.1.1 模式）
-            focus = decision.get("remediation_focus") or []
-            focus_str = "、".join(focus[:3]) if focus else "相關概念"
-            remediation_header = (
-                f"\n\n---\n\n### 💬 補強說明：{focus_str}\n\n"
-                f"{decision['message']}\n\n"
-            )
-            await emit({"type": "explanation_chunk", "payload": {"chunk": remediation_header, "is_final": False}})
-
-            # 呼叫 TeacherAgent 生成補強教學文章（另一個角度）
-            user_profile_summary = await longterm_memory.get_user_profile_summary(user_id)
-            prev_stage = stages[current_idx - 1] if current_idx > 0 else None
-            remediation_adaptive_ctx = await build_adaptive_context(
-                session_id=session_id,
-                user_id=user_id,
-                stage=stage,
-                current_attempt=wm.current_attempt,
-                stages=stages,
-            )
-            remediation_content = (
-                stage.get("content", "")
-                + f"\n\n（補強模式：針對概念「{focus_str}」，從不同角度補充說明或提供具體例子，"
-                f"約 300 字，不重複原講解，著重釐清混淆點）"
-            )
-            rem_stage = {**stage, "content": remediation_content}
-            rem_ctx = AgentContext(
-                session_id=session_id,
-                user_id=user_id,
-                task_payload={
-                    "stage": rem_stage,
-                    "prev_stage_title": prev_stage["title"] if prev_stage else None,
-                    "user_profile_summary": user_profile_summary,
-                    "adaptive_context": remediation_adaptive_ctx,
-                },
-            )
-            remediation_article = ""
-            async for chunk in self.teacher.stream_explanation(rem_ctx):
-                remediation_article += chunk
-                await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
-
-            # 提取補強教學意圖，讓問題對齊補強內容
-            remediation_intent = await self.teacher.extract_teaching_intent(remediation_article, stage)
-            wm.current_teaching_intent = remediation_intent
-
-            # 生成問題
-            q_ctx = AgentContext(
-                session_id=session_id,
-                user_id=user_id,
-                task_payload={
-                    "stage": stage,
-                    "teaching_intent": remediation_intent,
-                    "allowed_evidence": remediation_adaptive_ctx.get("allowed_evidence", []),
-                    "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
-                    "attempt_number": wm.current_attempt,
-                    "previous_question_ids": [t.question_id for t in wm.stage_turns],
-                    "question_mode": wm.question_mode,
-                },
-            )
-            q_result = await self.questioner.run(q_ctx)
-            questions = q_result.get("questions", [])
-            questions_verify = await self._verify_grounding(
-                session_id=session_id,
-                user_id=user_id,
-                stage=stage,
-                content_type="questions",
-                candidate_text=json.dumps(questions, ensure_ascii=False),
-            )
-            if not questions_verify.get("aligned", False):
-                retry_q_ctx = AgentContext(
+            if next_stage_idx is not None:
+                # 進入獨立補強子節點（2.X.1 模式）
+                # 先把原節點標為 completed，讓 stage map 顯示正確
+                await session_memory.upsert_stage_progress(
+                    session_id=session_id,
+                    stage_id=stage["stage_id"],
+                    status="completed",
+                    attempts=wm.current_attempt,
+                    best_score=decision["best_score"],
+                    understanding_notes={"remediated": True, "focus": decision.get("remediation_focus") or []},
+                )
+                refreshed_statuses = await session_memory.get_stage_statuses(session_id)
+                await emit({
+                    "type": "session_started",
+                    "payload": {
+                        "session_id": session_id,
+                        "total_stages": len(stages),
+                        "stages": [
+                            {
+                                "stage_id": s["stage_id"],
+                                "title": s["title"],
+                                "source_chunks": self._normalize_stage_source_chunks(s),
+                            }
+                            for s in stages
+                        ],
+                        "stage_statuses": {str(k): v for k, v in refreshed_statuses.items()},
+                    },
+                })
+                await self.run_stage(
+                    session_id, user_id, stages, next_stage_idx, wm.question_mode, emit
+                )
+            else:
+                # focus 為空，沒有混淆概念資訊，退化為輕量補強（僅附加提示並重出題）
+                wm.current_attempt += 1
+                remediation_note = f"\n\n---\n\n💬 {decision['message']}\n\n"
+                await emit({"type": "explanation_chunk", "payload": {"chunk": remediation_note, "is_final": False}})
+                q_ctx = AgentContext(
                     session_id=session_id,
                     user_id=user_id,
                     task_payload={
-                        "stage": {
-                            **stage,
-                            "content": stage.get("content", "")
-                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
-                        },
+                        "stage": stage,
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                         "attempt_number": wm.current_attempt,
                         "previous_question_ids": [t.question_id for t in wm.stage_turns],
                         "question_mode": wm.question_mode,
                     },
                 )
-                q_result = await self.questioner.run(retry_q_ctx)
+                q_result = await self.questioner.run(q_ctx)
                 questions = q_result.get("questions", [])
-            used_ids = {t.question_id for t in wm.stage_turns}
-            for q in questions:
-                if not q.get("question_id") or q["question_id"] in used_ids:
-                    q["question_id"] = f"q_{stage['stage_id']}_{wm.current_attempt}_{uuid.uuid4().hex[:8]}"
-                used_ids.add(q["question_id"])
-            wm.pending_questions = questions
-            wm.stage_evaluations = []
-
-            # 持久化：原講解 + 補強文章；重整後 resume 直接還原
-            combined_explanation_rem = wm.current_explanation + remediation_header + remediation_article
-            await session_memory.store_stage_explanation(session_id, stage["stage_id"], combined_explanation_rem)
-            await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
-            wm.current_explanation = combined_explanation_rem
-
-            questions_md = self._build_questions_section(questions)
-            if questions_md:
-                await emit({"type": "explanation_chunk", "payload": {"chunk": questions_md, "is_final": False}})
-
-            await emit({"type": "explanation_chunk", "payload": {"chunk": "", "is_final": True}})
-            await emit({
-                "type": "explanation_complete",
-                "payload": {
-                    "stage_id": stage["stage_id"],
-                    "full_explanation": combined_explanation_rem + questions_md,
-                },
-            })
-
-            if questions:
-                q = questions[0]
-                wm.current_turn = TurnContext(
-                    turn_id=str(uuid.uuid4()),
-                    question_id=q["question_id"],
-                    question_text=q["text"],
-                )
+                used_ids = {t.question_id for t in wm.stage_turns}
+                for q in questions:
+                    if not q.get("question_id") or q["question_id"] in used_ids:
+                        q["question_id"] = f"q_{stage['stage_id']}_{wm.current_attempt}_{uuid.uuid4().hex[:8]}"
+                    used_ids.add(q["question_id"])
+                wm.pending_questions = questions
+                wm.stage_evaluations = []
+                combined_rem = wm.current_explanation + remediation_note
+                await session_memory.store_stage_explanation(session_id, stage["stage_id"], combined_rem)
+                await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
+                wm.current_explanation = combined_rem
+                questions_md = self._build_questions_section(questions)
+                if questions_md:
+                    await emit({"type": "explanation_chunk", "payload": {"chunk": questions_md, "is_final": False}})
+                await emit({"type": "explanation_chunk", "payload": {"chunk": "", "is_final": True}})
                 await emit({
-                    "type": "question",
-                    "payload": {
-                        "question_id": q["question_id"],
-                        "text": q["text"],
-                        "type": q.get("type", "understand"),
-                        "answer_mode": q.get("answer_mode", "short_answer"),
-                        "options": q.get("options", []),
-                        "evidence_chunk_ids": q.get("evidence_chunk_ids", []),
-                        "stage_id": stage["stage_id"],
-                        "attempt_number": wm.current_attempt,
-                    },
+                    "type": "explanation_complete",
+                    "payload": {"stage_id": stage["stage_id"], "full_explanation": combined_rem + questions_md},
                 })
+                if questions:
+                    q = questions[0]
+                    wm.current_turn = TurnContext(
+                        turn_id=str(uuid.uuid4()),
+                        question_id=q["question_id"],
+                        question_text=q["text"],
+                    )
+                    await emit({
+                        "type": "question",
+                        "payload": {
+                            "question_id": q["question_id"],
+                            "text": q["text"],
+                            "type": q.get("type", "understand"),
+                            "answer_mode": q.get("answer_mode", "short_answer"),
+                            "options": q.get("options", []),
+                            "evidence_chunk_ids": q.get("evidence_chunk_ids", []),
+                            "stage_id": stage["stage_id"],
+                            "attempt_number": wm.current_attempt,
+                        },
+                    })
 
         elif d == "reteach":
             wm.current_attempt += 1

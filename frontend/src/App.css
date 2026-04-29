@@ -939,6 +939,7 @@ body {
   border-radius: 20px;
   border: 1px solid var(--accent-border);
   letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 .attempt-badge {
@@ -2030,7 +2031,7 @@ textarea:disabled {
 
 .qa-history-item {
   display: grid;
-  grid-template-columns: 20px 52px 1fr 48px;
+  grid-template-columns: 20px auto 1fr 48px;
   align-items: center;
   gap: 8px;
   width: 100%;

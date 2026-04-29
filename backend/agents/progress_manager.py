@@ -29,6 +29,9 @@ class ProgressManagerAgent(BaseAgent):
         total_stages: int = payload.get("total_stages", 1)
         current_stage_id: int = payload.get("current_stage_id", 0)
         question_mode: str = payload.get("question_mode", "short_answer")
+        is_dynamic: bool = payload.get("is_dynamic", False)
+        remediate_count: int = payload.get("remediate_count", 0)
+        max_remediate: int = 2
 
         raw_attempt = payload.get("current_attempt")
         try:
@@ -46,6 +49,30 @@ class ProgressManagerAgent(BaseAgent):
 
         best_score = max(scores) if scores else 0.0
         latest_score = scores[-1] if scores else 0.0
+
+        # 動態補強子節點：完成即前進，避免無限子節點
+        if is_dynamic:
+            return {
+                "decision": "advance",
+                "message": "補強練習完成，繼續前進！",
+                "next_stage_id": None,
+                "best_score": best_score,
+                "remediation_focus": None,
+                "high_severity_misconceptions": [],
+                "repeated_patterns_detected": False,
+            }
+
+        # 超過最大補強次數：強制前進
+        if remediate_count >= max_remediate:
+            return {
+                "decision": "advance",
+                "message": f"你已完成 {remediate_count} 次補強練習，讓我們繼續前進。",
+                "next_stage_id": None,
+                "best_score": best_score,
+                "remediation_focus": None,
+                "high_severity_misconceptions": [],
+                "repeated_patterns_detected": False,
+            }
 
         # 收集所有 misconception_patterns，診斷嚴重程度與重複模式
         all_misconceptions: list[dict] = []

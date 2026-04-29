@@ -29,6 +29,7 @@ class WorkingMemory:
     question_mode: str = "short_answer"
     enrichment_stage_added: bool = False
     current_teaching_intent: Optional[dict] = None
+    remediate_count: int = 0
 
     def get_compressed_history(self, max_turns: int = 3) -> list[dict]:
         recent = self.stage_turns[-max_turns:]
@@ -54,6 +55,7 @@ class WorkingMemory:
         self.stage_evaluations = []
         self.current_attempt = 1
         self.current_teaching_intent = None
+        self.remediate_count = 0
 
 
 _store: dict[str, WorkingMemory] = {}
