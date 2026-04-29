@@ -14,31 +14,95 @@ class TeacherAgent(BaseAgent):
             if not isinstance(chunk, dict):
                 continue
             chunk_id = str(chunk.get("chunk_id", "")).strip() or "unknown"
-            quote = str(chunk.get("quote", "")).strip()
+            quote = str(chunk.get("quote", "") or chunk.get("text", "")).strip()
             note = str(chunk.get("note", "")).strip()
             if not quote:
                 continue
             lines.append(f"[{chunk_id}] {quote}" + (f"（{note}）" if note else ""))
         return "\n".join(lines) if lines else "（source_chunks 格式不完整）"
 
+    def _format_allowed_evidence(self, allowed_chunks: list[dict]) -> str:
+        if not allowed_chunks:
+            return ""
+        lines = []
+        for c in allowed_chunks:
+            chunk_id = c.get("chunk_id", "unknown")
+            text = (c.get("text") or c.get("quote") or "").strip()
+            if text:
+                lines.append(f"[{chunk_id}] {text}")
+        return "\n".join(lines)
+
+    def _build_prompt_params(self, payload: dict) -> dict:
+        """從 payload 組裝 teacher system prompt 的格式參數。"""
+        user_profile_summary = payload.get("user_profile_summary", "尚無資料")
+        adaptive_ctx = payload.get("adaptive_context") or {}
+        learner_state = adaptive_ctx.get("learner_state", {})
+        requirements = adaptive_ctx.get("next_lesson_requirements", {})
+
+        mastery_map: dict = learner_state.get("mastery_map", {})
+        misconceptions: list = learner_state.get("misconceptions", [])
+        recent_qa: list = learner_state.get("recent_qa_summary", [])
+        must_reinforce: list = requirements.get("must_reinforce", [])
+        forbidden_future: list = requirements.get("forbidden_future_concepts", [])
+
+        # 掌握度摘要
+        if mastery_map:
+            mastery_summary = "、".join(f"{c}={v:.0%}" for c, v in mastery_map.items())
+        else:
+            mastery_summary = payload.get("weak_concepts", "無")
+
+        # 混淆模式摘要
+        if misconceptions:
+            parts = [
+                f"「{m['concept']}」：{m['pattern']}"
+                for m in misconceptions[:3]
+                if m.get("concept") and m.get("pattern")
+            ]
+            misconceptions_text = "；".join(parts) if parts else "無"
+        else:
+            misconceptions_text = "無"
+
+        # 最近答題摘要（最多 3 筆，倒序取最近）
+        if recent_qa:
+            qa_parts = [
+                f"{r.get('question_text', '')[:25]}…（{r.get('score', 0):.0%}）"
+                for r in recent_qa[-3:]
+                if r.get("question_text")
+            ]
+            recent_qa_text = "；".join(qa_parts) if qa_parts else "無"
+        else:
+            recent_qa_text = "無"
+
+        must_reinforce_text = "、".join(must_reinforce) if must_reinforce else "無"
+        forbidden_future_text = "、".join(forbidden_future[:5]) if forbidden_future else "無"
+
+        return {
+            "user_profile_summary": user_profile_summary,
+            "mastery_summary": mastery_summary,
+            "misconceptions_text": misconceptions_text,
+            "recent_qa_text": recent_qa_text,
+            "must_reinforce_text": must_reinforce_text,
+            "forbidden_future_text": forbidden_future_text,
+        }
+
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
         self._reset()
         payload = ctx.task_payload
         stage = payload["stage"]
-        user_profile_summary: str = payload.get("user_profile_summary", "尚無資料")
-        weak_concepts: str = payload.get("weak_concepts", "無")
 
-        system = SYSTEM_PROMPTS["teacher"].format(
-            user_profile_summary=user_profile_summary,
-            weak_concepts=weak_concepts,
-        )
+        prompt_params = self._build_prompt_params(payload)
+        system = SYSTEM_PROMPTS["teacher"].format(**prompt_params)
+
+        allowed_evidence = (payload.get("adaptive_context") or {}).get("allowed_evidence", [])
+        evidence_text = self._format_allowed_evidence(allowed_evidence) or self._format_source_chunks(stage)
+
         self._add_message(
             MessageRole.USER,
             f"請講解以下學習階段：\n\n"
             f"## {stage['title']}\n\n"
-            f"{stage['content']}\n\n"
+            f"{stage.get('content', '')}\n\n"
             f"關鍵概念：{', '.join(stage.get('key_concepts', []))}\n\n"
-            f"source_chunks（請在敘述後標記 chunk_id）：\n{self._format_source_chunks(stage)}",
+            f"source_chunks（請在敘述後標記 chunk_id）：\n{evidence_text}",
         )
 
         response = await self.llm.chat(self._messages, system_prompt=system)
@@ -51,22 +115,24 @@ class TeacherAgent(BaseAgent):
         self._reset()
         payload = ctx.task_payload
         stage = payload["stage"]
-        user_profile_summary: str = payload.get("user_profile_summary", "尚無資料")
-        weak_concepts: str = payload.get("weak_concepts", "無")
         prev_stage_title: str | None = payload.get("prev_stage_title")
 
-        system = SYSTEM_PROMPTS["teacher"].format(
-            user_profile_summary=user_profile_summary,
-            weak_concepts=weak_concepts,
-        )
+        prompt_params = self._build_prompt_params(payload)
+        system = SYSTEM_PROMPTS["teacher"].format(**prompt_params)
+
+        # 優先用 allowed_evidence（context_builder 提供的真實 source chunks），
+        # 否則退回 stage.source_chunks（舊格式）
+        allowed_evidence = (payload.get("adaptive_context") or {}).get("allowed_evidence", [])
+        evidence_text = self._format_allowed_evidence(allowed_evidence) or self._format_source_chunks(stage)
+
         prev_note = f"前一節點：「{prev_stage_title}」" if prev_stage_title else "本節是第一個節點"
         self._add_message(
             MessageRole.USER,
             f"節點 {stage.get('node_id', stage['stage_id'])}：{stage['title']}\n\n"
             f"{prev_note}\n\n"
-            f"學習材料：\n{stage['content']}\n\n"
+            f"學習材料：\n{stage.get('content', '')}\n\n"
             f"關鍵概念：{', '.join(stage.get('key_concepts', []))}\n\n"
-            f"source_chunks（請在敘述後標記 chunk_id）：\n{self._format_source_chunks(stage)}",
+            f"source_chunks（請在敘述後標記 chunk_id）：\n{evidence_text}",
         )
 
         async for chunk in self.llm.stream_chat(self._messages, system_prompt=system):

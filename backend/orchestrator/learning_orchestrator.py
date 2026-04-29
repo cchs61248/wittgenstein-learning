@@ -18,6 +18,7 @@ from ..utils import extract_json
 from ..utils.token_counter import TokenCounter
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..tools.web_search import search_web
+from .context_builder import build_adaptive_context
 
 WSEmitter = Callable[[dict], Awaitable[None]]
 
@@ -481,8 +482,16 @@ class LearningOrchestrator:
         )
 
         user_profile_summary = await longterm_memory.get_user_profile_summary(user_id)
-        weak_concepts = await longterm_memory.get_weak_concepts(user_id)
         prev_stage = stages[stage_index - 1] if stage_index > 0 else None
+
+        # 組裝完整學生狀態包
+        adaptive_ctx = await build_adaptive_context(
+            session_id=session_id,
+            user_id=user_id,
+            stage=stage,
+            current_attempt=wm.current_attempt,
+            stages=stages,
+        )
 
         # 1. 進度表
         progress_md = self._build_progress_table(stages, stage_index)
@@ -496,7 +505,7 @@ class LearningOrchestrator:
                 "stage": stage,
                 "prev_stage_title": prev_stage["title"] if prev_stage else None,
                 "user_profile_summary": user_profile_summary,
-                "weak_concepts": weak_concepts,
+                "adaptive_context": adaptive_ctx,
             },
         )
         full_explanation = ""
@@ -523,7 +532,7 @@ class LearningOrchestrator:
                     },
                     "prev_stage_title": prev_stage["title"] if prev_stage else None,
                     "user_profile_summary": user_profile_summary,
-                    "weak_concepts": weak_concepts,
+                    "adaptive_context": adaptive_ctx,
                 },
             )
             full_explanation = ""
@@ -1025,8 +1034,16 @@ class LearningOrchestrator:
             await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
 
             user_profile_summary = await longterm_memory.get_user_profile_summary(user_id)
-            weak_concepts = ", ".join(decision.get("remediation_focus") or [])
             prev_stage = stages[current_idx - 1] if current_idx > 0 else None
+
+            # 重教時重建 adaptive_ctx（current_attempt 已遞增，must_reinforce 更新）
+            reteach_adaptive_ctx = await build_adaptive_context(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                current_attempt=wm.current_attempt,
+                stages=stages,
+            )
 
             reteach_content = stage["content"] + "\n\n（請換一個完全不同的比喻框架重新解釋）"
             reteach_stage = {**stage, "content": reteach_content}
@@ -1038,7 +1055,7 @@ class LearningOrchestrator:
                     "stage": reteach_stage,
                     "prev_stage_title": prev_stage["title"] if prev_stage else None,
                     "user_profile_summary": user_profile_summary,
-                    "weak_concepts": weak_concepts or "無",
+                    "adaptive_context": reteach_adaptive_ctx,
                 },
             )
             full_explanation = ""
@@ -1065,7 +1082,7 @@ class LearningOrchestrator:
                         },
                         "prev_stage_title": prev_stage["title"] if prev_stage else None,
                         "user_profile_summary": user_profile_summary,
-                        "weak_concepts": weak_concepts or "無",
+                        "adaptive_context": reteach_adaptive_ctx,
                     },
                 )
                 full_explanation = ""

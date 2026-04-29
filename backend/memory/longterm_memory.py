@@ -36,6 +36,32 @@ async def get_weak_concepts(user_id: str, limit: int = 5) -> str:
     return "、".join(row[0] for row in rows)
 
 
+async def get_misconceptions(user_id: str, concepts: list[str]) -> list[dict]:
+    """取得指定概念的混淆模式（供 ContextBuilder 使用）。"""
+    if not concepts:
+        return []
+    db = await get_db()
+    placeholders = ",".join("?" for _ in concepts)
+    async with db.execute(
+        f"""SELECT concept_name, confusion_patterns FROM concept_mastery
+            WHERE user_id = ? AND concept_name IN ({placeholders})
+              AND confusion_patterns IS NOT NULL AND confusion_patterns != '[]'""",
+        [user_id, *concepts],
+    ) as cur:
+        rows = await cur.fetchall()
+
+    result: list[dict] = []
+    for row in rows:
+        concept = row["concept_name"]
+        patterns = json.loads(row["confusion_patterns"] or "[]")
+        for p in patterns:
+            if isinstance(p, str):
+                result.append({"concept": concept, "pattern": p, "severity": "medium"})
+            elif isinstance(p, dict):
+                result.append({**p, "concept": p.get("concept", concept)})
+    return result
+
+
 async def get_concept_mastery_map(user_id: str, concepts: list[str]) -> dict[str, float]:
     if not concepts:
         return {}
