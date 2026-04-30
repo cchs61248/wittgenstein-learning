@@ -16,9 +16,9 @@
 
 - 上傳任意學習材料（PDF / DOCX / PPTX / MD / TXT），系統本地解析並建立 source_chunks（後端掌控 source truth），自動切割為有序學習階段
 - Teacher 串流講解（Markdown 即時渲染），根據學生掌握度、混淆模式、選課理由自適應調整重點，每個概念至少 2 個生活化類比
-- 問題生成與 TeacherAgent 的教學意圖（teaching_intent）對齊：直接測試修正目標概念、檢驗類比框架理解
+- 問題生成與 TeacherAgent 的教學意圖（teaching_intent）對齊：直接測試修正目標概念的核心原理；TeacherAgent 自創類比明確標記為「說明工具，禁止作為題目素材」，確保所有問題均可回溯至 source_chunks
 - EvaluatorAgent 輸出結構化 misconception_patterns（concept / pattern / severity / repair_strategy），供長期診斷使用
-- DriftVerifier Citation Accuracy（Phase 4）：逐條驗證 `[chunk_id]` 引用是否真實支撐對應主張，非僅形式引用檢查
+- DriftVerifier Citation Accuracy（Phase 4）：逐條驗證引用是否真實支撐對應主張，同時支援 Markdown `[chunk_id]` 與 JSON 陣列兩種格式的 chunk 引用解析
 - ProgressManager 智能決策（Phase 4）：高嚴重度根本誤解或同一錯誤重複 ≥ 2 次，立即觸發換框架重教
 - retry / remediate 決策不清除原文，改為在現有講解尾端附加內容；remediate 會完整串流補強教學文章（TeacherAgent），並持久化至 DB，頁面重整後不重新生成
 - 跨會話長期記憶：結構化追蹤每個概念的掌握度（EMA）、混淆模式、成功類比，選課時傳遞理由給 TeacherAgent

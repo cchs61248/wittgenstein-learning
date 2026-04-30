@@ -113,9 +113,13 @@ JWT_SECRET=change-me
 
 **ContextBuilder（`backend/orchestrator/context_builder.py`）**：Phase 2 新增模組，`build_adaptive_context()` 在每次 TeacherAgent 呼叫前執行，組裝 `allowed_evidence`（DB 原文）、`learner_state`（mastery_map + misconceptions + recent_qa）、`next_lesson_requirements`（must_reinforce + forbidden_future + selection_reason）。
 
-**DriftVerifier Citation Accuracy（Phase 4）**：`_extract_cited_chunks()` 預先提取 `[chunk_id]` 引用並配對原文，傳遞 `cited_chunks_lookup` 給 LLM，實現逐條 claim 驗證而非形式引用檢查。後端強制：`found=False` 的 chunk_id 標記為 `supported=False`。
+**DriftVerifier Citation Accuracy（Phase 4）**：`_extract_cited_chunks()` 使用 `\bchunk_\w+\b` 正則同時支援 Markdown `[chunk_0001]` 與 JSON `["chunk_0001"]` 兩種格式提取引用，配對原文後傳遞 `cited_chunks_lookup` 給 LLM，實現逐條 claim 驗證而非形式引用檢查。後端強制：`found=False` 的 chunk_id 標記為 `supported=False`。注意：舊版 `\[([^\]]+)\]` 會在 JSON 格式中抓到含引號的 `"chunk_0000"` 導致全部 `found=False`，已於 2026-04-30 修正。
 
 **ProgressManager 決策優先序（Phase 4）**：`high_severity` misconception（任何嘗試次數）或 `_detect_repeated_patterns()`（同一 pattern ≥ 2 次）立即觸發 `reteach`，優先於 `attempts < max_attempts → retry`。
+
+**ContentSplitter 小 stage 合併（2026-04-30）**：`_normalize_splitter_output()` 完成後呼叫 `_merge_thin_stages()`，前向掃描並將 `source_chunk_ids < 2` 的 stage 合併至後繼 stage（最後一個合往前），合併後重新編號 `stage_id`。這消除了 LLM 把單一 chunk 切成獨立 stage 時產生的 `possibly_too_small` 警告。
+
+**QuestionGenerator 類比隔離（2026-04-30）**：`_format_teaching_intent()` 中，`teaching_intent.analogies_used` 是 TeacherAgent 自創的說明工具，不存在於 source_chunks。現在明確標記「禁止把類比細節當成題目素材」，並移除舊版「至少一題能檢驗學生是否理解文章使用的類比框架」的要求（該指令會讓 LLM 以教師類比為題，DriftVerifier 必然 fail）。改為要求問題測試補強概念的核心原理（依據 source_chunks）。
 
 ### 記憶三層（`backend/memory/`）
 

@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-04 master 分支（Phase 1–4 完整實作，最後更新：2026-04-29，含 retry/remediate 分離、補強文章串流、持久化修正、ask_tutor 前端持久化）
+> 適用版本：2026-04 master 分支（Phase 1–4 完整實作，最後更新：2026-04-30，含 retry/remediate 分離、補強文章串流、持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復）
 
 ---
 
@@ -768,6 +768,11 @@ _make_progress_decision(...)
 - 標記 `chunk_roles`：core / example / transition / ignored
 - 不要把每個 chunk 都變成一個 stage（語義合併）
 
+**正規化後處理（`_merge_thin_stages`，2026-04-30 新增）**：
+- 前向掃描：`source_chunk_ids < 2` 的 stage 自動合併至後繼 stage（繼承 chunk_ids、source_chunks、key_concepts）
+- 最後一個 stage 若仍只有 1 chunk，合往前一個 stage
+- 合併後重新編號 `stage_id`（1 起算），消除 orchestrator 的 `possibly_too_small` 警告
+
 **輸出 JSON**：
 ```json
 {
@@ -861,16 +866,20 @@ stage["source_chunks"] = [{"chunk_id": cid, "quote": db_chunks[cid]["text"]}
 - `allowed_evidence` — ContextBuilder 提供的 DB 原文（Phase 2）
 - `num_questions`、`attempt_number`、`previous_question_ids`、`question_mode`
 
-**Prompt 新增（Phase 3）**：
+**Prompt 新增（Phase 3，2026-04-30 修正類比隔離）**：
 ```
-本篇文章的教學意圖：
+本篇講解的教學意圖：
 - 補強概念：{reinforced_concepts}
-- 使用的類比：{analogies_used}
+- 教師使用的類比（僅供理解教學側重，這些類比是教師自創的說明工具，
+  不存在於 source_chunks，禁止把類比細節當成題目素材）：{analogies_used}
 - 修正目標：{repair_target}
 
 → 至少一題直接測試修正目標（若有）
-→ 至少一題能檢驗學生是否理解文章使用的類比框架
+→ 問題應測試學生是否理解補強概念的核心原理（依據 source_chunks），
+  而非測試類比的情境細節
 ```
+
+> ⚠️ 修正原因：Phase 3 舊版要求「至少一題檢驗類比框架」，LLM 誤把 TeacherAgent 自創的比喻情境（如「超市收據」「自來水管線」）當作 source_chunks 中的原始素材出題，導致 DriftVerifier 必然 fail。修正後明確標示類比為教師工具，禁止作為題目素材。
 
 **Evidence 來源**：優先 `allowed_evidence`（DB 真實原文，key: `text`），退回 `stage.source_chunks`（key: `quote`）
 
@@ -950,10 +959,13 @@ repeated = 同一 pattern 字串出現 >= 2 次
 
 ```python
 def _extract_cited_chunks(candidate_text, source_chunks):
-    # 正則提取所有 [chunk_id] 引用
+    # 用 \bchunk_\w+\b 模式提取所有 chunk_id 引用
+    # 同時支援 Markdown 格式 [chunk_0001] 與 JSON 格式 ["chunk_0001"]
     # 查詢 source_chunks 取對應原文
     # 回傳 [{chunk_id, text, found}]
 ```
+
+> ⚠️ 修正說明（2026-04-30）：舊版使用 `\[([^\]]+)\]` 正則，在 JSON 格式（QuestionGenerator 輸出）中會抓到 `"chunk_0000"`（含引號），與 chunk_map 的 key `chunk_0000` 不符，導致全部 `found=False`，citation lookup 完全失效。改用 `\bchunk_\w+\b` 後同時相容兩種格式。
 
 傳給 LLM 的資料包含 `cited_chunks_lookup`（引用 id + 對應原文），LLM 可逐條驗證「主張是否確實被該 chunk 支撐」，而非只做形式引用檢查。
 
