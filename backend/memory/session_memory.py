@@ -62,8 +62,8 @@ async def create_pending_session(
     await db.execute(
         """INSERT INTO sessions
            (session_id, user_id, content_hash, total_stages, raw_content_summary,
-            status, stages_json, pending_map_json, provider_name, model_name, question_mode)
-           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?, ?)""",
+            status, stages_json, pending_map_json, provider_name, model_name, question_mode, title)
+           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?, ?, ?)""",
         (
             session_id, user_id, content_hash, len(stages),
             summary,
@@ -72,6 +72,7 @@ async def create_pending_session(
             provider_name,
             model_name,
             question_mode,
+            summary,
         ),
     )
     await db.commit()
@@ -418,3 +419,63 @@ async def insert_qa_record(
          user_answer, score, feedback),
     )
     await db.commit()
+
+
+async def get_user_sessions(user_id: str) -> list[dict]:
+    """回傳用戶所有書本（排除 abandoned），含完成進度統計。"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT session_id, title, raw_content_summary, status,
+                  total_stages, updated_at
+           FROM sessions
+           WHERE user_id = ? AND status != 'abandoned'
+           ORDER BY updated_at DESC""",
+        (user_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        r = dict(row)
+        async with db.execute(
+            "SELECT COUNT(*) AS cnt FROM stage_progress WHERE session_id = ? AND status = 'completed'",
+            (r["session_id"],),
+        ) as cnt_cur:
+            cnt_row = await cnt_cur.fetchone()
+        result.append({
+            "session_id": r["session_id"],
+            "title": r["title"] or r["raw_content_summary"] or "未命名學習材料",
+            "status": r["status"],
+            "total_stages": int(r["total_stages"] or 0),
+            "completed_stages": int(cnt_row["cnt"] if cnt_row else 0),
+            "updated_at": str(r["updated_at"]) if r["updated_at"] else None,
+        })
+    return result
+
+
+async def update_session_title(session_id: str, user_id: str, title: str) -> bool:
+    db = await get_db()
+    await db.execute(
+        "UPDATE sessions SET title = ? WHERE session_id = ? AND user_id = ?",
+        (title.strip(), session_id, user_id),
+    )
+    await db.commit()
+    return True
+
+
+async def delete_session(session_id: str, user_id: str) -> bool:
+    """刪除 session 及相關學習記錄，但保留 concept_mastery（學習成效不刪）。"""
+    db = await get_db()
+    async with db.execute(
+        "SELECT session_id FROM sessions WHERE session_id = ? AND user_id = ?",
+        (session_id, user_id),
+    ) as cur:
+        if not await cur.fetchone():
+            return False
+    for tbl in ("qa_records", "stage_progress", "source_chunks", "decision_records"):
+        await db.execute(f"DELETE FROM {tbl} WHERE session_id = ?", (session_id,))
+    await db.execute(
+        "DELETE FROM sessions WHERE session_id = ? AND user_id = ?",
+        (session_id, user_id),
+    )
+    await db.commit()
+    return True

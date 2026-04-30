@@ -2892,3 +2892,295 @@ textarea:disabled {
   .mastery-concept-row { grid-template-columns: 1fr 70px 36px; font-size: 12px; }
   .mastery-bar-track { display: none; }
 }
+
+/* ═══════════════════════════════════════════════
+   書櫃 Panel
+   ═══════════════════════════════════════════════ */
+.bookshelf-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Header row: "書櫃" label + "＋ 新增材料" button */
+.bookshelf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 10px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-subtle);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.bookshelf-add-btn {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 32px;
+  transition: background var(--press-duration, 120ms);
+}
+.bookshelf-add-btn:hover { background: var(--accent-bg); }
+.bookshelf-add-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Scrollable book list */
+.bookshelf-list {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  flex: 1;
+  min-height: 0;
+}
+
+.bookshelf-empty {
+  text-align: center;
+  padding: 20px 14px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+/* Individual book item */
+.book-item {
+  padding: 10px 12px 10px 14px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background var(--press-duration, 120ms), border-color var(--press-duration, 120ms);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 44px;
+  outline: none;
+}
+.book-item:hover { background: var(--bg-hover); }
+.book-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.book-item.is-active {
+  background: var(--accent-bg);
+  border-left-color: var(--accent);
+}
+
+/* Top row: title + actions */
+.book-item-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+}
+
+.book-title-text {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+}
+
+.book-title-input {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1.5px solid var(--accent);
+  border-radius: 4px;
+  padding: 3px 7px;
+  outline: none;
+  min-height: 28px;
+  box-shadow: 0 0 0 2px var(--accent-bg);
+}
+
+/* Icon buttons group */
+.book-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.book-item:hover .book-actions,
+.book-item:focus-within .book-actions,
+.book-item.is-active .book-actions {
+  opacity: 1;
+}
+
+.book-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  color: var(--text-subtle);
+  border-radius: 5px;
+  min-width: 32px;
+  min-height: 32px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color var(--press-duration, 120ms), background var(--press-duration, 120ms);
+  flex-shrink: 0;
+}
+.book-icon-btn:hover { color: var(--accent); background: var(--bg-hover); }
+.book-icon-btn.delete:hover { color: var(--red); background: var(--red-bg); }
+.book-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.book-icon-btn.delete:focus-visible { outline-color: var(--red); }
+
+/* Inline delete confirm row */
+.book-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--red);
+  font-weight: 700;
+}
+
+.book-delete-confirm-yes,
+.book-delete-confirm-no {
+  background: transparent;
+  border: 1px solid;
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  min-height: 28px;
+  min-width: 44px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background var(--press-duration, 120ms);
+}
+.book-delete-confirm-yes {
+  color: var(--red);
+  border-color: var(--red-border);
+}
+.book-delete-confirm-yes:hover { background: var(--red-bg); }
+.book-delete-confirm-yes:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 1px;
+}
+.book-delete-confirm-no {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+.book-delete-confirm-no:hover { background: var(--bg-hover); }
+.book-delete-confirm-no:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Progress row: bar + count label + status badge */
+.book-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-left: 1px;
+}
+
+.book-progress-bar-track {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.book-progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.55s ease-out;
+}
+.book-item.is-active .book-progress-bar-fill { background: var(--accent); }
+
+.book-progress-label {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Status badge: color + text (dual signal, not color-only) */
+.book-status-badge {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid;
+  white-space: nowrap;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+.book-status-badge.status-active {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+.book-status-badge.status-completed {
+  color: var(--green);
+  background: var(--green-bg);
+  border-color: var(--green-border);
+}
+.book-status-badge.status-pending {
+  color: var(--text-subtle);
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+/* Divider above StageMap */
+.bookshelf-stage-divider {
+  padding: 10px 14px 6px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-subtle);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* Mobile (≤768px) */
+@media (max-width: 768px) {
+  .bookshelf-header { padding: 10px 12px 8px; }
+  .book-item { padding: 8px 10px 8px 12px; }
+  .book-title-text { font-size: 12px; }
+  /* Always show actions on mobile (no hover) */
+  .book-actions { opacity: 1; }
+  .book-icon-btn { min-width: 36px; min-height: 36px; }
+}

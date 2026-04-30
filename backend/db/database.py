@@ -101,6 +101,13 @@ async def init_db(db_path: str) -> None:
     )
     await _connection.commit()
 
+    # Migration 010：為 sessions 加入可自訂標題欄位
+    try:
+        await _connection.execute("ALTER TABLE sessions ADD COLUMN title TEXT DEFAULT NULL")
+        await _connection.commit()
+    except Exception:
+        pass
+
     # Migration 006：建立決策歷史表（跨裝置恢復教練趨勢）
     await _connection.execute(
         """CREATE TABLE IF NOT EXISTS decision_records (

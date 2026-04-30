@@ -29,3 +29,68 @@ export async function getActiveSession(token: string): Promise<ActiveSession | n
     return null;
   }
 }
+
+export interface BookEntry {
+  sessionId: string;
+  title: string;
+  status: 'active' | 'completed' | 'pending_confirmation';
+  totalStages: number;
+  completedStages: number;
+  updatedAt: string | null;
+}
+
+export async function listSessions(token: string): Promise<BookEntry[]> {
+  try {
+    const res = await fetch(`${BASE}/sessions/list?token=${encodeURIComponent(token)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.sessions as Array<{
+      session_id: string; title: string; status: string;
+      total_stages: number; completed_stages: number; updated_at: string | null;
+    }>).map(s => ({
+      sessionId: s.session_id,
+      title: s.title,
+      status: s.status as BookEntry['status'],
+      totalStages: s.total_stages,
+      completedStages: s.completed_stages,
+      updatedAt: s.updated_at,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function getSessionDetail(token: string, sessionId: string): Promise<ActiveSession | null> {
+  try {
+    const res = await fetch(`${BASE}/sessions/${sessionId}?token=${encodeURIComponent(token)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.session as ActiveSession | null;
+  } catch {
+    return null;
+  }
+}
+
+export async function renameSession(token: string, sessionId: string, title: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${BASE}/sessions/${sessionId}/title?token=${encodeURIComponent(token)}`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) }
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteSession(token: string, sessionId: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${BASE}/sessions/${sessionId}?token=${encodeURIComponent(token)}`,
+      { method: 'DELETE' }
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

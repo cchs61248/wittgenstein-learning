@@ -3,14 +3,15 @@ import { useSessionStore } from './store/sessionStore';
 import { AuthForm } from './components/AuthForm';
 import { UploadModal } from './components/UploadModal';
 import { KnowledgeMapModal } from './components/KnowledgeMapModal';
-import { StageMap } from './components/StageMap';
 import { ExplanationPanel } from './components/ExplanationPanel';
 import { QuestionPanel } from './components/QuestionPanel';
 import { AskTutorPanel } from './components/AskTutorPanel';
 import { LearningWebSocket } from './api/websocket';
-import { getActiveSession } from './api/session';
+import { getActiveSession, listSessions, getSessionDetail, renameSession, deleteSession } from './api/session';
+import type { BookEntry } from './api/session';
 import type { ServerMessage, ProviderType, DepthType } from './types/messages';
 import { LearningStatsPage } from './components/LearningStatsPage';
+import { BookshelfPanel } from './components/BookshelfPanel';
 import './App.css';
 
 function generateSessionId() {
@@ -48,6 +49,7 @@ export default function App() {
     hydrateDecisionHistory,
   } = useSessionStore();
 
+  const [bookshelf, setBookshelf] = useState<BookEntry[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [kickedMessage, setKickedMessage] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<'learn' | 'stats'>('learn');
@@ -77,9 +79,10 @@ export default function App() {
     let cancelled = false;
     setIsSessionLoading(true);
 
-    getActiveSession(token).then((session) => {
+    Promise.all([getActiveSession(token), listSessions(token)]).then(([session, books]) => {
       if (cancelled) return;
       setIsSessionLoading(false);
+      setBookshelf(books);
       if (!session) {
         setShowUpload(true);
         return;
@@ -273,6 +276,7 @@ export default function App() {
     ws.connect();
     wsRef.current = ws;
     setShowUpload(false);
+    listSessions(token).then(setBookshelf);
   };
 
   const handleSubmitAnswer = (questionId: string, answer: string) => {
@@ -294,6 +298,65 @@ export default function App() {
       type: 'ask_tutor',
       payload: { session_id: sessionIdRef.current, question },
     });
+  };
+
+  const handleSwitchSession = async (entry: BookEntry) => {
+    if (entry.sessionId === sessionIdRef.current) return;
+    wsRef.current?.close();
+    clearSession();
+    setIsSessionLoading(true);
+    const session = await getSessionDetail(token!, entry.sessionId);
+    setIsSessionLoading(false);
+    if (!session) return;
+
+    const sid = session.session_id;
+    activeProviderRef.current = session.provider || 'claude';
+    activeModelRef.current = session.model || undefined;
+    sessionIdRef.current = sid;
+    localStorage.setItem('wl_session_id', sid);
+
+    if (session.status === 'pending_confirmation' && session.pending_map) {
+      setPendingMap(session.pending_map);
+      const ws = new LearningWebSocket(sid, token!, {
+        onMessage: handleMessage,
+        onOpen: () => setConnected(true),
+        onClose: () => setConnected(false),
+      });
+      ws.connect();
+      wsRef.current = ws;
+    } else {
+      setSession(sid, session.stages, session.stage_statuses);
+      const ws = new LearningWebSocket(sid, token!, {
+        onMessage: handleMessage,
+        onOpen: () => {
+          setConnected(true);
+          ws.send({
+            type: 'resume_session',
+            payload: { session_id: sid, provider: activeProviderRef.current, model: activeModelRef.current },
+          });
+        },
+        onClose: () => setConnected(false),
+      });
+      ws.connect();
+      wsRef.current = ws;
+    }
+  };
+
+  const handleDeleteBook = async (sessionId: string) => {
+    await deleteSession(token!, sessionId);
+    setBookshelf((prev) => prev.filter((b) => b.sessionId !== sessionId));
+    if (sessionId === sessionIdRef.current) {
+      wsRef.current?.close();
+      clearSession();
+      setShowUpload(true);
+    }
+  };
+
+  const handleRenameBook = async (sessionId: string, title: string) => {
+    await renameSession(token!, sessionId, title);
+    setBookshelf((prev) =>
+      prev.map((b) => (b.sessionId === sessionId ? { ...b, title } : b))
+    );
   };
 
   if (!token) {
@@ -349,13 +412,20 @@ export default function App() {
             aria-expanded={!isStageSidebarCollapsed}
             aria-controls="stage-map-panel"
           >
-            <span className="stage-sidebar-toggle-label">學習進度</span>
-            <span className="stage-sidebar-toggle-value">{stages.filter((s) => s.status === 'completed').length}/{stages.length || 0}</span>
+            <span className="stage-sidebar-toggle-label">書櫃</span>
+            <span className="stage-sidebar-toggle-value">{bookshelf.length}</span>
             <span className="stage-sidebar-toggle-icon" aria-hidden="true">{isStageSidebarCollapsed ? '▸' : '◂'}</span>
           </button>
           {!isStageSidebarCollapsed && (
             <div id="stage-map-panel">
-              <StageMap hideHeading />
+              <BookshelfPanel
+                books={bookshelf}
+                activeSessionId={sessionIdRef.current}
+                onSwitch={handleSwitchSession}
+                onNewMaterial={() => setShowUpload(true)}
+                onRename={handleRenameBook}
+                onDelete={handleDeleteBook}
+              />
             </div>
           )}
         </section>
