@@ -267,7 +267,7 @@ async def websocket_endpoint(
                         emit=emit,
                     )
 
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         _ws_log.info("WS DISCONNECT  session=%s  user=%s", session_id, user_id)
         ws_manager.disconnect(session_id, user_id, websocket)
         # 只有在此 WS 確實是當前連線（disconnect 後 session 已無 WS）時才清除資源，
