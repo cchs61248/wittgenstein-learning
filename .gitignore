@@ -32,3 +32,4 @@ Thumbs.db
 
 # Log files（30 天自動輪轉，不上傳）
 backend/logs/
+*.log*

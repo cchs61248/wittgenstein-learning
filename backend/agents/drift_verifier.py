@@ -11,13 +11,17 @@ class DriftVerifierAgent(BaseAgent):
     def _extract_cited_chunks(
         self, candidate_text: str, source_chunks: list[dict]
     ) -> list[dict]:
-        """從候選文字中提取所有 [chunk_id] 引用，配對 source_chunks 中的原文。"""
+        """從候選文字中提取所有 chunk_id 引用，配對 source_chunks 中的原文。
+
+        同時支援 Markdown 格式 [chunk_0001] 與 JSON 格式 ["chunk_0001"]。
+        """
         chunk_map = {
             c["chunk_id"]: c
             for c in source_chunks
             if isinstance(c, dict) and c.get("chunk_id")
         }
-        cited_ids = list(dict.fromkeys(re.findall(r"\[([^\]]+)\]", candidate_text)))
+        # 直接比對 chunk_id 命名模式，不受括號格式影響
+        cited_ids = list(dict.fromkeys(re.findall(r'\bchunk_\w+\b', candidate_text)))
         result = []
         for cid in cited_ids:
             chunk = chunk_map.get(cid)

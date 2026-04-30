@@ -88,11 +88,57 @@ class ContentSplitterAgent(BaseAgent):
         if not normalized_stages:
             raise ValueError("內容切割結果缺少有效 stages")
 
+        normalized_stages = self._merge_thin_stages(normalized_stages)
+
         return {
             "stages": normalized_stages,
             "chunk_roles": chunk_roles,
             "summary": str(data.get("summary", "")),
         }
+
+    def _merge_thin_stages(self, stages: list[dict]) -> list[dict]:
+        """將 source_chunk_ids < 2 的小型 stage 合併至後繼 stage（最後一個合往前）。"""
+        if len(stages) <= 1:
+            return stages
+
+        result: list[dict] = []
+        i = 0
+        while i < len(stages):
+            cur = stages[i]
+            if len(cur.get("source_chunk_ids", [])) < 2 and i + 1 < len(stages):
+                nxt = stages[i + 1]
+                existing = set(nxt["source_chunk_ids"])
+                new_ids = [c for c in cur["source_chunk_ids"] if c not in existing]
+                nxt["source_chunk_ids"] = new_ids + nxt["source_chunk_ids"]
+                nxt["source_chunks"] = [
+                    sc for sc in cur["source_chunks"] if sc["chunk_id"] in new_ids
+                ] + nxt["source_chunks"]
+                nxt["key_concepts"] = list(dict.fromkeys(
+                    cur["key_concepts"] + nxt["key_concepts"]
+                ))
+                i += 1
+                continue
+            result.append(cur)
+            i += 1
+
+        # 最後一個 stage 若仍只有 1 chunk，合往前一個
+        if len(result) >= 2 and len(result[-1].get("source_chunk_ids", [])) < 2:
+            last = result.pop()
+            prev = result[-1]
+            existing = set(prev["source_chunk_ids"])
+            new_ids = [c for c in last["source_chunk_ids"] if c not in existing]
+            prev["source_chunk_ids"] = prev["source_chunk_ids"] + new_ids
+            prev["source_chunks"] = prev["source_chunks"] + [
+                sc for sc in last["source_chunks"] if sc["chunk_id"] in new_ids
+            ]
+            prev["key_concepts"] = list(dict.fromkeys(
+                prev["key_concepts"] + last["key_concepts"]
+            ))
+
+        for j, s in enumerate(result):
+            s["stage_id"] = j + 1
+
+        return result
 
     async def _parse_or_repair_json(
         self,

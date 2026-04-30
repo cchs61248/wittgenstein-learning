@@ -40,14 +40,19 @@ class QuestionGeneratorAgent(BaseAgent):
         repair = teaching_intent.get("repair_target")
         if not reinforced and not analogies and not repair:
             return ""
-        lines = ["\n【本篇文章的教學意圖（請讓問題與此對齊）】"]
+        lines = ["\n【本篇講解的教學意圖（請讓問題與此對齊）】"]
         lines.append(f"補強概念：{', '.join(reinforced) if reinforced else '無'}")
-        lines.append(f"使用的類比：{'; '.join(analogies) if analogies else '無'}")
+        if analogies:
+            lines.append(
+                f"教師使用的類比（僅供理解教學側重，這些類比是教師自創的說明工具，"
+                f"不存在於 source_chunks，禁止把類比細節當成題目素材）："
+                f"{'; '.join(analogies)}"
+            )
         lines.append(f"修正目標：{repair if repair else '無'}")
         if repair:
             lines.append("→ 至少一題直接測試上述修正目標")
-        if analogies:
-            lines.append("→ 至少一題能檢驗學生是否理解文章使用的類比框架")
+        if reinforced:
+            lines.append("→ 問題應測試學生是否理解補強概念的核心原理（依據 source_chunks），而非測試類比的情境細節")
         return "\n".join(lines)
 
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
