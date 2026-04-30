@@ -122,12 +122,12 @@ async def websocket_endpoint(
 
     async def emit(msg: dict) -> None:
         try:
-            _ws_log.info(
-                "WS OUT  session=%s  type=%s", session_id, msg.get("type", "?")
-            )
+            msg_type = msg.get("type", "?")
+            log_fn = _ws_log.debug if msg_type == "explanation_chunk" else _ws_log.info
+            log_fn("WS OUT  session=%s  type=%s", session_id, msg_type)
             _ws_log.debug(
                 "WS OUT PAYLOAD  session=%s  type=%s\n%s",
-                session_id, msg.get("type", "?"),
+                session_id, msg_type,
                 json.dumps(msg, ensure_ascii=False),
             )
             await ws_manager.send(session_id, msg)
