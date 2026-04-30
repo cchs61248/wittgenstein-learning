@@ -55,15 +55,18 @@ class WebSocketManager:
         self._sid_to_ws: dict[str, WebSocket] = {}   # session_id → WebSocket
         self._uid_to_sid: dict[str, str] = {}          # user_id → 當前 session_id
 
-    async def connect(self, session_id: str, user_id: str, ws: WebSocket) -> str | None:
-        """接受新連線，踢掉同 user_id 的舊連線。回傳被踢掉的舊 session_id（若不同），否則 None。"""
+    async def connect(self, session_id: str, user_id: str, ws: WebSocket) -> None:
+        """接受新連線。
+        同一 session_id 重連（換裝置／視窗）時踢掉舊連線。
+        不同 session_id（如背景新材料生成）直接並存，不影響現有連線。
+        """
         await ws.accept()
 
         old_session_id = self._uid_to_sid.get(user_id)
-        evicted_session_id: str | None = None
 
-        if old_session_id:
-            old_ws = self._sid_to_ws.pop(old_session_id, None)
+        # 僅在同一 session 重連時才踢掉舊連線（多裝置保護）
+        if old_session_id == session_id:
+            old_ws = self._sid_to_ws.pop(session_id, None)
             if old_ws:
                 try:
                     await old_ws.send_text(json.dumps(
@@ -73,13 +76,9 @@ class WebSocketManager:
                     await old_ws.close(code=4002)
                 except Exception:
                     pass
-            # 只有 session 不同才需要外部清理舊 orchestrator
-            if old_session_id != session_id:
-                evicted_session_id = old_session_id
 
         self._sid_to_ws[session_id] = ws
         self._uid_to_sid[user_id] = session_id
-        return evicted_session_id
 
     async def send(self, session_id: str, message: dict) -> None:
         ws = self._sid_to_ws.get(session_id)
@@ -116,11 +115,7 @@ async def websocket_endpoint(
     user_id: str = payload["sub"]
     _ws_log = ws_logger()
     _ws_log.info("WS CONNECT  session=%s  user=%s", session_id, user_id)
-    evicted_sid = await ws_manager.connect(session_id, user_id, websocket)
-    if evicted_sid:
-        _ws_log.info("WS EVICT  old_session=%s  new_session=%s", evicted_sid, session_id)
-        _orchestrators.pop(evicted_sid, None)
-        delete_working_memory(evicted_sid)
+    await ws_manager.connect(session_id, user_id, websocket)
 
     async def emit(msg: dict) -> None:
         try:

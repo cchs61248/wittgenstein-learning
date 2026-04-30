@@ -1947,6 +1947,13 @@ textarea:disabled {
   margin-bottom: 4px !important;
 }
 
+.km-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+}
+
 /* ── 回顧模式 Banner ── */
 .review-banner {
   display: flex;
@@ -3169,6 +3176,20 @@ textarea:disabled {
   color: var(--text-subtle);
   background: var(--bg-hover);
   border-color: var(--border);
+}
+.book-status-badge.status-generating {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  animation: badge-pulse 1.4s ease-in-out infinite;
+}
+.book-item.is-generating {
+  cursor: default;
+  opacity: 0.75;
+}
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 /* ── 地圖視圖（點擊書本後顯示）── */

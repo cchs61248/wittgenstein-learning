@@ -14,12 +14,14 @@ interface BookshelfPanelProps {
 function statusLabel(status: BookEntry['status']): string {
   if (status === 'active') return '學習中';
   if (status === 'completed') return '已完成';
+  if (status === 'generating') return '生成中…';
   return '待確認';
 }
 
 function statusClass(status: BookEntry['status']): string {
   if (status === 'active') return 'status-active';
   if (status === 'completed') return 'status-completed';
+  if (status === 'generating') return 'status-generating';
   return 'status-pending';
 }
 
@@ -83,14 +85,17 @@ function BookItem({ entry, isActive, onSwitch, onRename, onDelete }: BookItemPro
     ? Math.round((entry.completedStages / entry.totalStages) * 100)
     : 0;
 
+  const isGenerating = entry.status === 'generating';
+
   return (
     <div
-      className={`book-item${isActive ? ' is-active' : ''}`}
-      onClick={!isEditing && !isDeleting ? onSwitch : undefined}
+      className={`book-item${isActive ? ' is-active' : ''}${isGenerating ? ' is-generating' : ''}`}
+      onClick={!isEditing && !isDeleting && !isGenerating ? onSwitch : undefined}
       role="button"
-      tabIndex={0}
+      tabIndex={isGenerating ? -1 : 0}
       aria-pressed={isActive}
-      onKeyDown={(e) => { if (!isEditing && !isDeleting && (e.key === 'Enter' || e.key === ' ')) onSwitch(); }}
+      aria-disabled={isGenerating}
+      onKeyDown={(e) => { if (!isEditing && !isDeleting && !isGenerating && (e.key === 'Enter' || e.key === ' ')) onSwitch(); }}
     >
       <div className="book-item-top">
         {isEditing ? (
@@ -130,7 +135,7 @@ function BookItem({ entry, isActive, onSwitch, onRename, onDelete }: BookItemPro
             </button>
           </div>
         ) : (
-          !isEditing && (
+          !isEditing && !isGenerating && (
             <div className="book-actions">
               <button
                 className="book-icon-btn"
@@ -192,6 +197,7 @@ export function BookshelfPanel({
     : null;
 
   const handleBookSelect = (entry: BookEntry) => {
+    if (entry.status === 'generating') return;
     setViewingSessionId(entry.sessionId);
     setView('map');
     onSwitch(entry);

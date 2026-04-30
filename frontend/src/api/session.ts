@@ -33,7 +33,7 @@ export async function getActiveSession(token: string): Promise<ActiveSession | n
 export interface BookEntry {
   sessionId: string;
   title: string;
-  status: 'active' | 'completed' | 'pending_confirmation';
+  status: 'active' | 'completed' | 'pending_confirmation' | 'generating';
   totalStages: number;
   completedStages: number;
   updatedAt: string | null;

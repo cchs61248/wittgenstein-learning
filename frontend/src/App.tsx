@@ -57,10 +57,18 @@ export default function App() {
   const [isAskTutorCollapsed, setIsAskTutorCollapsed] = useState(false);
   const [isQuestionPanelCollapsed, setIsQuestionPanelCollapsed] = useState(false);
   const [isSessionLoading, setIsSessionLoading] = useState(false);
+  const [bgPendingMap, setBgPendingMap] = useState<{
+    nodes: { node_id: string; stage_id: number; title: string }[];
+    summary: string;
+  } | null>(null);
   const wsRef = useRef<LearningWebSocket | null>(null);
+  const bgWsRef = useRef<LearningWebSocket | null>(null);
+  const bgSessionIdRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
   const activeProviderRef = useRef<string>('claude');
   const activeModelRef = useRef<string | undefined>(undefined);
+  const bgProviderRef = useRef<string>('claude');
+  const bgModelRef = useRef<string | undefined>(undefined);
   const stagesRef = useRef(stages);
   stagesRef.current = stages;
 
@@ -130,6 +138,7 @@ export default function App() {
       cancelled = true;
       setIsSessionLoading(false);
       wsRef.current?.close();
+      bgWsRef.current?.close();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
@@ -138,9 +147,11 @@ export default function App() {
     switch (msg.type) {
       case 'knowledge_map':
         setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
+        listSessions(token!).then(setBookshelf);
         break;
       case 'session_started':
         setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
+        listSessions(token!).then(setBookshelf);
         break;
       case 'explanation_chunk':
         appendExplanationChunk(msg.payload.chunk);
@@ -254,6 +265,61 @@ export default function App() {
 
     localStorage.setItem('wl_provider', provider);
     localStorage.setItem('wl_model', model);
+
+    // 背景模式：當前已有學習中的 session，新材料在背景生成，不中斷現有學習
+    if (stagesRef.current.length > 0) {
+      const newSid = generateSessionId();
+      bgWsRef.current?.close();
+      bgSessionIdRef.current = newSid;
+      setBgPendingMap(null);
+      bgProviderRef.current = provider;
+      bgModelRef.current = model || undefined;
+
+      const bgWs = new LearningWebSocket(newSid, token, {
+        onMessage: (msg) => {
+          if (msg.type === 'knowledge_map') {
+            setBgPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
+            // 此時 session 已在 DB，以真實資料取代樂觀佔位
+            listSessions(token!).then(setBookshelf);
+          } else if (msg.type === 'session_started') {
+            listSessions(token!).then(setBookshelf);
+          } else if (msg.type === 'error') {
+            bgWsRef.current?.close();
+            bgWsRef.current = null;
+            bgSessionIdRef.current = null;
+            setBgPendingMap(null);
+            // 移除樂觀佔位
+            setBookshelf((prev) => prev.filter((b) => b.sessionId !== newSid));
+          }
+        },
+        onOpen: () => {
+          bgWs.send({
+            type: 'start_session',
+            payload: { content, uploaded_file_id: uploadedFileId, provider, target_depth: depth, question_mode: questionMode, model },
+          });
+        },
+        onClose: () => {},
+      });
+      bgWs.connect();
+      bgWsRef.current = bgWs;
+
+      // 立刻樂觀新增書本，讓使用者知道材料正在生成，不等 DB
+      setBookshelf((prev) => [
+        ...prev,
+        {
+          sessionId: newSid,
+          title: '新材料生成中…',
+          status: 'generating' as const,
+          totalStages: 0,
+          completedStages: 0,
+          updatedAt: null,
+        },
+      ]);
+      setShowUpload(false);
+      return;
+    }
+
+    // 前景模式：沒有進行中的 session，正常啟動
     activeProviderRef.current = provider;
     activeModelRef.current = model || undefined;
 
@@ -302,6 +368,36 @@ export default function App() {
 
   const handleSwitchSession = async (entry: BookEntry) => {
     if (entry.sessionId === sessionIdRef.current) return;
+
+    // 若點擊的是背景 session
+    if (entry.sessionId === bgSessionIdRef.current) {
+      if (!bgPendingMap) return; // 還在生成中，不做任何事
+
+      // 知識地圖已就緒 → 關閉 bgWs、切換主連線、顯示確認 modal
+      bgWsRef.current?.close();
+      bgWsRef.current = null;
+      const sid = entry.sessionId;
+      const pendingMapData = bgPendingMap;
+      bgSessionIdRef.current = null;
+      setBgPendingMap(null);
+
+      wsRef.current?.close();
+      clearSession();
+      activeProviderRef.current = bgProviderRef.current;
+      activeModelRef.current = bgModelRef.current;
+      sessionIdRef.current = sid;
+      localStorage.setItem('wl_session_id', sid);
+      setPendingMap(pendingMapData);
+      const ws = new LearningWebSocket(sid, token!, {
+        onMessage: handleMessage,
+        onOpen: () => setConnected(true),
+        onClose: () => setConnected(false),
+      });
+      ws.connect();
+      wsRef.current = ws;
+      return;
+    }
+
     wsRef.current?.close();
     clearSession();
     const session = await getSessionDetail(token!, entry.sessionId);
@@ -341,6 +437,12 @@ export default function App() {
   };
 
   const handleDeleteBook = async (sessionId: string) => {
+    if (sessionId === bgSessionIdRef.current) {
+      bgWsRef.current?.close();
+      bgWsRef.current = null;
+      bgSessionIdRef.current = null;
+      setBgPendingMap(null);
+    }
     await deleteSession(token!, sessionId);
     setBookshelf((prev) => prev.filter((b) => b.sessionId !== sessionId));
     if (sessionId === sessionIdRef.current) {

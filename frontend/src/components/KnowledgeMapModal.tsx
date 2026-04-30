@@ -4,9 +4,10 @@ interface Props {
   nodes: KnowledgeMapNode[];
   summary: string;
   onConfirm: () => void;
+  onCancel?: () => void;
 }
 
-export function KnowledgeMapModal({ nodes, summary, onConfirm }: Props) {
+export function KnowledgeMapModal({ nodes, summary, onConfirm, onCancel }: Props) {
   return (
     <div className="modal-overlay">
       <div className="modal-card km-modal">
@@ -41,9 +42,16 @@ export function KnowledgeMapModal({ nodes, summary, onConfirm }: Props) {
 
         <p className="km-count">共 {nodes.length} 個節點</p>
 
-        <button className="btn-primary btn-large" onClick={onConfirm}>
-          確認，開始學習 →
-        </button>
+        <div className="km-actions">
+          {onCancel && (
+            <button className="btn-ghost" onClick={onCancel}>
+              稍後再說
+            </button>
+          )}
+          <button className="btn-primary btn-large" onClick={onConfirm}>
+            確認，開始學習 →
+          </button>
+        </div>
       </div>
     </div>
   );
