@@ -74,6 +74,7 @@ export default function App() {
   const [isAskTutorCollapsed, setIsAskTutorCollapsed] = useState(false);
   const [isQuestionPanelCollapsed, setIsQuestionPanelCollapsed] = useState(false);
   const [isSessionLoading, setIsSessionLoading] = useState(false);
+  const [isWaitingForCurrentGeneration, setIsWaitingForCurrentGeneration] = useState(false);
   const [bgPendingMap, setBgPendingMap] = useState<{
     nodes: { node_id: string; stage_id: number; title: string }[];
     summary: string;
@@ -131,7 +132,10 @@ export default function App() {
       sessionIdRef.current = savedSessionId;
       localStorage.setItem('wl_session_id', savedSessionId);
 
-      if (session.status === 'pending_confirmation' && session.pending_map) {
+      if (session.status === 'generating') {
+        // ContentSplitter 仍在執行，輪詢會偵測轉換；isWaitingForCurrentGeneration 觸發自動顯示地圖
+        setIsWaitingForCurrentGeneration(true);
+      } else if (session.status === 'pending_confirmation' && session.pending_map) {
         // 知識地圖已生成但用戶尚未確認，直接顯示地圖讓用戶確認
         setPendingMap(session.pending_map);
         // 建立 WebSocket 連線，等待用戶確認後發送 confirm_map
@@ -183,6 +187,37 @@ export default function App() {
     }, 5000);
     return () => clearInterval(id);
   }, [hasGenerating, token]);
+
+  // 當前 session 從「生成中」轉為「待確認」時，自動顯示知識地圖（處理重整後的情境）
+  useEffect(() => {
+    if (!isWaitingForCurrentGeneration || !token) return;
+    const currentSid = sessionIdRef.current;
+    const entry = bookshelf.find(b => b.sessionId === currentSid);
+    if (!entry) return;
+
+    if (entry.status === 'pending_confirmation') {
+      setIsWaitingForCurrentGeneration(false);
+      getSessionDetail(token, currentSid).then(session => {
+        if (!session || session.status !== 'pending_confirmation' || !session.pending_map) return;
+        activeProviderRef.current = session.provider || 'claude';
+        activeModelRef.current = session.model || undefined;
+        setPendingMap(session.pending_map);
+        wsRef.current?.close();
+        const ws = new LearningWebSocket(currentSid, token, {
+          onMessage: handleMessage,
+          onOpen: () => setConnected(true),
+          onClose: () => setConnected(false),
+        });
+        ws.connect();
+        wsRef.current = ws;
+      });
+    } else if (entry.status !== 'generating') {
+      // 生成失敗（abandoned 等），退回上傳畫面
+      setIsWaitingForCurrentGeneration(false);
+      setShowUpload(true);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookshelf, isWaitingForCurrentGeneration, token]);
 
   const handleMessage = (msg: ServerMessage) => {
     switch (msg.type) {
@@ -385,6 +420,8 @@ export default function App() {
     clearSession();
     const newSid = generateSessionId();
     sessionIdRef.current = newSid;
+    localStorage.setItem('wl_session_id', newSid); // 讓重整後能定位到正確 session
+    setIsWaitingForCurrentGeneration(false); // 清除前次等待狀態
 
     const ws = new LearningWebSocket(newSid, token, {
       onMessage: handleMessage,
@@ -426,12 +463,12 @@ export default function App() {
 
   const handleSwitchSession = async (entry: BookEntry) => {
     if (entry.sessionId === sessionIdRef.current) return;
+    setIsWaitingForCurrentGeneration(false);
 
-    // 若點擊的是背景 session
-    if (entry.sessionId === bgSessionIdRef.current) {
-      if (!bgPendingMap) return; // 還在生成中，不做任何事
+    const isBgSession = entry.sessionId === bgSessionIdRef.current;
 
-      // 知識地圖已就緒 → 關閉 bgWs、切換主連線、顯示確認 modal
+    // bgSession 且知識地圖已在記憶體中 → 直接切換，不需重新 fetch
+    if (isBgSession && bgPendingMap) {
       bgWsRef.current?.close();
       bgWsRef.current = null;
       const sid = entry.sessionId;
@@ -454,6 +491,17 @@ export default function App() {
       ws.connect();
       wsRef.current = ws;
       return;
+    }
+
+    // bgSession 仍在生成中（記憶體無地圖）→ 不做任何事
+    if (isBgSession && entry.status === 'generating') return;
+
+    // 一般切換（非 bgSession，或 bgSession 的地圖記憶體遺失但 DB 已完成）
+    if (isBgSession) {
+      bgWsRef.current?.close();
+      bgWsRef.current = null;
+      bgSessionIdRef.current = null;
+      setBgPendingMap(null);
     }
 
     wsRef.current?.close();

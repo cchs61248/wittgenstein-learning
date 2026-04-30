@@ -75,9 +75,20 @@ async def get_session_detail(session_id: str, token: str = Query(...)):
     if not session or session["user_id"] != payload["sub"]:
         raise HTTPException(status_code=404, detail="Session 不存在")
     stages: list[dict] = json.loads(session["stages_json"] or "[]")
-    if not stages:
-        return {"session": None}
     status: str = session["status"]
+    if not stages:
+        if status == "generating":
+            return {"session": {
+                "session_id": session["session_id"],
+                "status": "generating",
+                "stages": [],
+                "current_stage_id": None,
+                "total_stages": 0,
+                "provider": session.get("provider_name"),
+                "model": session.get("model_name"),
+                "question_mode": session.get("question_mode") or "short_answer",
+            }}
+        return {"session": None}
     result: dict = {
         "session_id": session["session_id"],
         "status": status,

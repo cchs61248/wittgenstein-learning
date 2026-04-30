@@ -9,7 +9,7 @@ export interface ActiveSessionStage {
 
 export interface ActiveSession {
   session_id: string;
-  status: 'active' | 'pending_confirmation';
+  status: 'active' | 'pending_confirmation' | 'generating';
   current_stage_id: number;
   total_stages: number;
   provider?: string | null;
