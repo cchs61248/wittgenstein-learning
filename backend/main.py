@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -204,6 +205,15 @@ async def websocket_endpoint(
                     llm = create_provider(provider_name, model=model)
                     orch = LearningOrchestrator(llm)
                     _orchestrators[session_id] = orch
+                # 若此 session 有上一輪未完成的生成，先等它結束再開始
+                _prev_gen = _active_generations.get(session_id)
+                if _prev_gen:
+                    try:
+                        await asyncio.wait_for(_prev_gen.wait(), timeout=300)
+                    except asyncio.TimeoutError:
+                        pass
+                _gen_evt: asyncio.Event | None = asyncio.Event()
+                _active_generations[session_id] = _gen_evt
                 try:
                     await orch.confirm_session(
                         session_id=session_id,
@@ -212,6 +222,9 @@ async def websocket_endpoint(
                     )
                 except Exception as e:
                     await emit({"type": "error", "payload": {"message": f"確認知識地圖失敗：{e}"}})
+                finally:
+                    _gen_evt.set()
+                    _active_generations.pop(session_id, None)
 
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)
@@ -225,8 +238,16 @@ async def websocket_endpoint(
                     )
 
             elif msg_type == "resume_session":
+                session_id_to_resume: str = p.get("session_id", session_id)
+                _resume_gen_evt: asyncio.Event | None = None
                 try:
-                    session_id_to_resume: str = p.get("session_id", session_id)
+                    # 若此 session 有上一輪未完成的生成，先等它結束再 resume
+                    _prev_resume_gen = _active_generations.get(session_id_to_resume)
+                    if _prev_resume_gen:
+                        try:
+                            await asyncio.wait_for(_prev_resume_gen.wait(), timeout=300)
+                        except asyncio.TimeoutError:
+                            pass
                     session_row = await session_memory.get_session(session_id_to_resume)
                     provider_name: str = (
                         p.get("provider")
@@ -241,6 +262,8 @@ async def websocket_endpoint(
                     llm = create_provider(provider_name, model=model)
                     orchestrator = LearningOrchestrator(llm)
                     _orchestrators[session_id_to_resume] = orchestrator
+                    _resume_gen_evt = asyncio.Event()
+                    _active_generations[session_id_to_resume] = _resume_gen_evt
                     await orchestrator.resume_session(
                         session_id=session_id_to_resume,
                         user_id=user_id,
@@ -248,6 +271,10 @@ async def websocket_endpoint(
                     )
                 except Exception as e:
                     await emit({"type": "error", "payload": {"message": f"恢復會話失敗：{e}"}})
+                finally:
+                    if _resume_gen_evt:
+                        _resume_gen_evt.set()
+                        _active_generations.pop(session_id_to_resume, None)
 
             elif msg_type == "request_hint":
                 await emit({
@@ -276,6 +303,9 @@ async def websocket_endpoint(
 
 # 會話級 orchestrator 暫存（單 process 內有效）
 _orchestrators: dict[str, LearningOrchestrator] = {}
+
+# 追蹤正在生成的 session（session_id → Event），避免斷線重連時並發起多個 TeacherAgent
+_active_generations: dict[str, asyncio.Event] = {}
 
 
 @app.get("/health")

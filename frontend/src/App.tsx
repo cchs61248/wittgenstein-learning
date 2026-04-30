@@ -104,7 +104,13 @@ export default function App() {
     let cancelled = false;
     setIsSessionLoading(true);
 
-    Promise.all([getActiveSession(token), listSessions(token)]).then(([session, books]) => {
+    // 優先載入上次學習的 session，避免 pending_confirmation 的背景 session 強佔畫面
+    const lastSessionId = localStorage.getItem('wl_session_id');
+    const getSession = lastSessionId
+      ? getSessionDetail(token, lastSessionId).then(s => s ?? getActiveSession(token))
+      : getActiveSession(token);
+
+    Promise.all([getSession, listSessions(token)]).then(([session, books]) => {
       if (cancelled) return;
       setIsSessionLoading(false);
       setBookshelf(books);
