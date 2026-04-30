@@ -127,6 +127,7 @@ export interface ResumeStatePayload {
 }
 
 export type ServerMessage =
+  | { type: 'session_generating'; payload: { session_id: string } }
   | { type: 'knowledge_map'; payload: KnowledgeMapPayload }
   | { type: 'session_started'; payload: SessionStartedPayload }
   | { type: 'explanation_chunk'; payload: ExplanationChunkPayload }

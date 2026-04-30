@@ -339,6 +339,14 @@ class LearningOrchestrator:
             "start_session  session=%s  user=%s  chunks=%d  depth=%s  mode=%s",
             session_id, user_id, len(source_chunks), target_depth, question_mode,
         )
+
+        # ── 1. ContentSplitter 執行前，先建立 generating stub + 存入 source_chunks
+        #       讓書櫃在 LLM 呼叫期間持久顯示「生成中」，頁面重整也不消失
+        await session_memory.create_generating_stub(session_id, user_id, content_hash)
+        await session_memory.insert_source_chunks(session_id, source_chunks)
+        await emit({"type": "session_generating", "payload": {"session_id": session_id}})
+
+        # ── 2. ContentSplitter（LLM 呼叫，可能耗時 10–60s）
         ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -348,7 +356,12 @@ class LearningOrchestrator:
                 "target_depth": target_depth,
             },
         )
-        split_result = await self.splitter.run(ctx)
+        try:
+            split_result = await self.splitter.run(ctx)
+        except Exception:
+            await session_memory.abandon_generating_stub(session_id)
+            raise
+
         stages: list[dict] = split_result["stages"]
         summary: str = split_result.get("summary", "")
         _log.info(
@@ -379,7 +392,8 @@ class LearningOrchestrator:
             "question_mode": question_mode,
         }
 
-        # 先建立 pending session（source_chunks 有 FK 依賴）
+        # ── 3. ContentSplitter 完成，UPSERT 為 pending_confirmation
+        #       source_chunks 已在步驟 1 存入，不需重複
         await session_memory.create_pending_session(
             session_id=session_id,
             user_id=user_id,
@@ -391,9 +405,6 @@ class LearningOrchestrator:
             model_name=model_name,
             question_mode=question_mode,
         )
-
-        # 存入 source_chunks（後端掌控的 source truth）
-        await session_memory.insert_source_chunks(session_id, source_chunks)
 
         await emit({
             "type": "knowledge_map",

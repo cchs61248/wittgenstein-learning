@@ -41,6 +41,30 @@ async def get_session(session_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+async def create_generating_stub(
+    session_id: str, user_id: str, content_hash: str
+) -> None:
+    """ContentSplitter 執行前建立佔位記錄，讓書櫃在 LLM 呼叫期間持久顯示「生成中」。"""
+    db = await get_db()
+    await db.execute(
+        """INSERT OR IGNORE INTO sessions
+           (session_id, user_id, content_hash, total_stages, status, title)
+           VALUES (?, ?, ?, 0, 'generating', '生成中…')""",
+        (session_id, user_id, content_hash),
+    )
+    await db.commit()
+
+
+async def abandon_generating_stub(session_id: str) -> None:
+    """ContentSplitter 失敗時，將 generating 佔位標記為 abandoned。"""
+    db = await get_db()
+    await db.execute(
+        "UPDATE sessions SET status = 'abandoned' WHERE session_id = ? AND status = 'generating'",
+        (session_id,),
+    )
+    await db.commit()
+
+
 async def create_pending_session(
     session_id: str,
     user_id: str,
@@ -53,17 +77,25 @@ async def create_pending_session(
     question_mode: str = "short_answer",
 ) -> None:
     db = await get_db()
-    # 清除同用戶舊的 pending session（避免累積）
-    await db.execute(
-        "UPDATE sessions SET status = 'abandoned' WHERE user_id = ? AND status = 'pending_confirmation'",
-        (user_id,),
-    )
     pending_map = {"nodes": nodes, "summary": summary}
+    # UPSERT：若 session 已以 generating stub 存在，直接更新為 pending_confirmation
     await db.execute(
         """INSERT INTO sessions
            (session_id, user_id, content_hash, total_stages, raw_content_summary,
             status, stages_json, pending_map_json, provider_name, model_name, question_mode, title)
-           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET
+             content_hash=excluded.content_hash,
+             total_stages=excluded.total_stages,
+             raw_content_summary=excluded.raw_content_summary,
+             status='pending_confirmation',
+             stages_json=excluded.stages_json,
+             pending_map_json=excluded.pending_map_json,
+             provider_name=excluded.provider_name,
+             model_name=excluded.model_name,
+             question_mode=excluded.question_mode,
+             title=excluded.title,
+             updated_at=CURRENT_TIMESTAMP""",
         (
             session_id, user_id, content_hash, len(stages),
             summary,

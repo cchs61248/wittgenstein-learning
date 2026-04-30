@@ -25,7 +25,13 @@ function mergeBookshelf(existing: BookEntry[], fresh: BookEntry[]): BookEntry[] 
   const newItems = fresh.filter(e => !existingIds.has(e.sessionId));
   const updatedExisting = existing
     .filter(e => freshMap.has(e.sessionId) || e.status === 'generating')
-    .map(e => freshMap.get(e.sessionId) ?? e);
+    .map(e => {
+      const freshEntry = freshMap.get(e.sessionId);
+      if (!freshEntry) return e; // 仍在生成中，DB 尚無記錄
+      // generating 期間保留本地描述性標題，避免被 DB stub 的占位標題覆蓋
+      if (freshEntry.status === 'generating') return { ...freshEntry, title: e.title };
+      return freshEntry;
+    });
   return [...newItems, ...updatedExisting];
 }
 
@@ -166,8 +172,35 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  // 書櫃有「生成中」項目時輪詢，頁面重整後也能自動追蹤狀態轉換
+  const hasGenerating = bookshelf.some(b => b.status === 'generating');
+  useEffect(() => {
+    if (!hasGenerating || !token) return;
+    const id = setInterval(() => {
+      listSessions(token).then(fresh =>
+        setBookshelf(prev => mergeBookshelf(prev, fresh))
+      );
+    }, 5000);
+    return () => clearInterval(id);
+  }, [hasGenerating, token]);
+
   const handleMessage = (msg: ServerMessage) => {
     switch (msg.type) {
+      case 'session_generating':
+        // 前景模式：stub 已建立，若書櫃中尚無此項目（例如使用者直接發送 start_session）則補上
+        setBookshelf(prev => {
+          const sid = msg.payload.session_id;
+          if (prev.some(b => b.sessionId === sid)) return prev;
+          return [{
+            sessionId: sid,
+            title: '生成中…',
+            status: 'generating' as const,
+            totalStages: 0,
+            completedStages: 0,
+            updatedAt: null,
+          }, ...prev];
+        });
+        break;
       case 'knowledge_map':
         setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
         listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
@@ -300,7 +333,9 @@ export default function App() {
 
       const bgWs = new LearningWebSocket(newSid, token, {
         onMessage: (msg) => {
-          if (msg.type === 'knowledge_map') {
+          if (msg.type === 'session_generating') {
+            // stub 已建立，樂觀佔位已存在，輪詢會自動追蹤後續狀態
+          } else if (msg.type === 'knowledge_map') {
             setBgPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
             // 此時 session 已在 DB，以真實資料取代樂觀佔位
             listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
