@@ -95,10 +95,12 @@ export default function App() {
   // 掛載時：若有 token，先查詢是否有活躍會話；沒有才顯示上傳 modal
   useEffect(() => {
     if (!token) {
-      setBookshelf([]); // 登出時確保書櫃清空，避免下個帳號看到殘留資料
+      setBookshelf([]);
+      clearSession();
       return;
     }
-    setBookshelf([]); // 切換帳號前立即清空，不讓舊帳號資料出現
+    setBookshelf([]);
+    clearSession(); // 切換帳號前清空舊帳號的 session state
     let cancelled = false;
     setIsSessionLoading(true);
 
@@ -504,6 +506,7 @@ export default function App() {
               setBookshelf([]);
               wsRef.current?.close();
               bgWsRef.current?.close();
+              clearSession();
               clearAuth();
             }}
             className="btn-ghost"
