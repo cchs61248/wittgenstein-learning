@@ -2678,3 +2678,217 @@ textarea:disabled {
     transition: none;
   }
 }
+
+/* ════════════════════════════════════════════════
+   學習成效分頁
+   ════════════════════════════════════════════════ */
+
+/* ── Page Tab 切換列 ── */
+.page-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.page-tab {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px;
+  min-height: 44px;
+  min-width: 72px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: color var(--press-duration), border-color var(--press-duration);
+  margin-bottom: -1px;
+}
+.page-tab:hover { color: var(--accent); }
+.page-tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── 學習成效分頁容器 ── */
+.stats-page {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 28px 40px max(40px, env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-height: 0;
+}
+.stats-section { display: flex; flex-direction: column; gap: 12px; }
+.stats-section-title {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── 總覽 stat cards ── */
+.stat-cards-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stat-card-label {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-subtle);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.stat-card-value {
+  font-family: var(--font-ui);
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+.stat-card-sub { font-family: var(--font-ui); font-size: 12px; color: var(--text-muted); font-weight: 600; }
+
+/* ── 概念掌握度 ── */
+.mastery-concept-row {
+  display: grid;
+  grid-template-columns: 1fr 180px 48px 72px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  min-height: 44px;
+}
+.mastery-concept-name { font-family: var(--font-body); font-size: 14px; color: var(--text); font-weight: 600; }
+.mastery-bar-track {
+  height: 8px;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.mastery-bar-fill { height: 100%; border-radius: 999px; transition: width 0.65s var(--ease-out); }
+.mastery-bar-fill.level-high  { background: var(--green); }
+.mastery-bar-fill.level-mid   { background: var(--accent); }
+.mastery-bar-fill.level-low   { background: var(--red); }
+.mastery-pct { font-family: var(--font-ui); font-size: 13px; font-weight: 700; text-align: right; }
+.mastery-pct.level-high { color: var(--green); }
+.mastery-pct.level-mid  { color: var(--accent); }
+.mastery-pct.level-low  { color: var(--red); }
+.mastery-exposures { font-family: var(--font-ui); font-size: 11px; color: var(--text-subtle); text-align: right; white-space: nowrap; }
+
+/* ── Stage 表現表格 ── */
+.stage-perf-table-scroll { width: 100%; }
+.stage-perf-table { width: 100%; border-collapse: collapse; font-family: var(--font-ui); font-size: 13px; }
+.stage-perf-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-weight: 700;
+  color: var(--text-subtle);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-bottom: 2px solid var(--border);
+}
+.stage-perf-table td { padding: 10px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+.stage-perf-table tr:last-child td { border-bottom: none; }
+
+/* ── 混淆模式 ── */
+.misconception-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.misconception-concept { font-family: var(--font-ui); font-size: 11px; font-weight: 700; color: var(--text-subtle); margin-bottom: 4px; }
+.misconception-pattern { font-family: var(--font-body); font-size: 14px; color: var(--text); line-height: 1.55; }
+.severity-badge { font-family: var(--font-ui); font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+.severity-high   { color: var(--red);    background: var(--red-bg);    border-color: var(--red-border); }
+.severity-medium { color: var(--yellow); background: var(--yellow-bg); border-color: var(--yellow-border); }
+.severity-low    { color: var(--green);  background: var(--green-bg);  border-color: var(--green-border); }
+
+/* ── 決策時間線 ── */
+.decision-timeline-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  min-height: 44px;
+}
+.decision-badge { font-family: var(--font-ui); font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+.decision-badge.decision-advance   { color: var(--green);  background: var(--green-bg);   border-color: var(--green-border); }
+.decision-badge.decision-retry     { color: var(--yellow); background: var(--yellow-bg);  border-color: var(--yellow-border); }
+.decision-badge.decision-remediate { color: var(--accent); background: var(--accent-bg);  border-color: var(--accent-border); }
+.decision-badge.decision-reteach   { color: var(--red);    background: var(--red-bg);     border-color: var(--red-border); }
+.decision-stage-title { font-family: var(--font-body); font-size: 14px; color: var(--text); font-weight: 600; }
+.decision-score { font-family: var(--font-ui); font-size: 13px; font-weight: 700; color: var(--text-muted); }
+
+/* ── 空狀態 ── */
+.stats-empty { text-align: center; padding: 28px 20px; color: var(--text-muted); font-family: var(--font-ui); font-size: 14px; }
+.stats-empty-guide {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px 28px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+.stats-empty-guide p { color: var(--text-muted); font-size: 15px; max-width: 320px; line-height: 1.65; }
+
+/* ── 平板（769–1024px） ── */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .stat-cards-row { grid-template-columns: repeat(2, 1fr); }
+  .stats-page { padding: 24px 28px 36px; }
+}
+
+/* ── 手機（≤768px） ── */
+@media (max-width: 768px) {
+  .stats-page {
+    padding: 16px
+      max(16px, env(safe-area-inset-right, 0px))
+      max(32px, env(safe-area-inset-bottom, 0px))
+      max(16px, env(safe-area-inset-left, 0px));
+    gap: 20px;
+  }
+  .page-tabs {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .stat-cards-row { grid-template-columns: 1fr; }
+  .mastery-concept-row { grid-template-columns: 1fr 90px 40px; gap: 8px; }
+  .mastery-exposures { display: none; }
+  .stage-perf-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  .stage-perf-table { font-size: 12px; min-width: 360px; }
+  .stage-perf-table th, .stage-perf-table td { padding: 8px 6px; }
+  .decision-timeline-item { grid-template-columns: 1fr auto; gap: 8px; }
+  .misconception-item { grid-template-columns: 1fr; gap: 6px; }
+}
+
+/* ── 極小螢幕（≤380px） ── */
+@media (max-width: 380px) {
+  .stat-card-value { font-size: 1.6rem; }
+  .mastery-concept-row { grid-template-columns: 1fr 70px 36px; font-size: 12px; }
+  .mastery-bar-track { display: none; }
+}

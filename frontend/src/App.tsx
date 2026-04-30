@@ -10,6 +10,7 @@ import { AskTutorPanel } from './components/AskTutorPanel';
 import { LearningWebSocket } from './api/websocket';
 import { getActiveSession } from './api/session';
 import type { ServerMessage, ProviderType, DepthType } from './types/messages';
+import { LearningStatsPage } from './components/LearningStatsPage';
 import './App.css';
 
 function generateSessionId() {
@@ -49,6 +50,7 @@ export default function App() {
 
   const [showUpload, setShowUpload] = useState(false);
   const [kickedMessage, setKickedMessage] = useState<string | null>(null);
+  const [activePage, setActivePage] = useState<'learn' | 'stats'>('learn');
   const [isStageSidebarCollapsed, setIsStageSidebarCollapsed] = useState(false);
   const [isAskTutorCollapsed, setIsAskTutorCollapsed] = useState(false);
   const [isQuestionPanelCollapsed, setIsQuestionPanelCollapsed] = useState(false);
@@ -366,18 +368,42 @@ export default function App() {
         )}
 
         <main className="main-content">
-          <ExplanationPanel />
-          <AskTutorPanel
-            onAskTutor={handleAskTutor}
-            isCollapsed={isAskTutorCollapsed}
-            onToggle={() => setIsAskTutorCollapsed((v) => !v)}
-            isLoading={isTutorLoading}
-          />
-          <QuestionPanel
-            onSubmit={handleSubmitAnswer}
-            isCollapsed={isQuestionPanelCollapsed}
-            onToggle={() => setIsQuestionPanelCollapsed((v) => !v)}
-          />
+          <div className="page-tabs" role="tablist">
+            <button
+              role="tab"
+              aria-selected={activePage === 'learn'}
+              className={`page-tab${activePage === 'learn' ? ' is-active' : ''}`}
+              onClick={() => setActivePage('learn')}
+            >
+              學習
+            </button>
+            <button
+              role="tab"
+              aria-selected={activePage === 'stats'}
+              className={`page-tab${activePage === 'stats' ? ' is-active' : ''}`}
+              onClick={() => setActivePage('stats')}
+            >
+              學習成效
+            </button>
+          </div>
+          {activePage === 'learn' ? (
+            <>
+              <ExplanationPanel />
+              <AskTutorPanel
+                onAskTutor={handleAskTutor}
+                isCollapsed={isAskTutorCollapsed}
+                onToggle={() => setIsAskTutorCollapsed((v) => !v)}
+                isLoading={isTutorLoading}
+              />
+              <QuestionPanel
+                onSubmit={handleSubmitAnswer}
+                isCollapsed={isQuestionPanelCollapsed}
+                onToggle={() => setIsQuestionPanelCollapsed((v) => !v)}
+              />
+            </>
+          ) : (
+            <LearningStatsPage token={token!} />
+          )}
         </main>
       </div>
 

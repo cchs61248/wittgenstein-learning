@@ -12,6 +12,7 @@ from .db.database import init_db, close_db
 from .auth.router import router as auth_router
 from .routers.upload import router as upload_router
 from .routers.session import router as session_router
+from .routers.learner import router as learner_router
 from .auth.utils import decode_token
 from .llm.provider_factory import create_provider
 from .orchestrator.learning_orchestrator import LearningOrchestrator
@@ -46,6 +47,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(upload_router)
 app.include_router(session_router)
+app.include_router(learner_router)
 
 
 class WebSocketManager:

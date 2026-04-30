@@ -173,3 +173,28 @@ async def update_user_profile(user_id: str, attempts_this_session: float) -> Non
             (user_id, attempts_this_session),
         )
     await db.commit()
+
+
+async def get_all_concept_mastery(user_id: str) -> list[dict]:
+    """回傳該用戶所有概念的掌握度記錄（按掌握度升序）。"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT concept_name, mastery_score, total_exposures,
+                  confusion_patterns, last_tested
+           FROM concept_mastery
+           WHERE user_id = ?
+           ORDER BY mastery_score ASC""",
+        (user_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    result = []
+    for row in rows:
+        result.append({
+            "concept_name": row["concept_name"],
+            "mastery_score": float(row["mastery_score"]),
+            "total_exposures": int(row["total_exposures"]),
+            "confusion_patterns": json.loads(row["confusion_patterns"] or "[]"),
+            "last_tested": str(row["last_tested"]) if row["last_tested"] else None,
+        })
+    return result
