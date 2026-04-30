@@ -76,6 +76,12 @@ class EvaluatorAgent(BaseAgent):
         self._reset()
         payload = ctx.task_payload
         question = payload["question"]
+        t0 = self._log_start(
+            ctx,
+            question_id=question.get("question_id", "?"),
+            answer_mode=question.get("answer_mode", "short_answer"),
+        )
+
         user_answer: str = payload["user_answer"]
         compressed_history: list[dict] = payload.get("compressed_history", [])
         source_chunks: list[dict] = payload.get("source_chunks", [])
@@ -97,9 +103,14 @@ class EvaluatorAgent(BaseAgent):
                     "needs_clarification": False,
                     "clarification_question": None,
                 }
+                self._log.info(
+                    "EvaluatorAgent MC correct (no LLM)  session=%s  score=1.0",
+                    ctx.session_id,
+                )
                 return self._add_mastery_label(result)
             # 選錯：交由 LLM 依相近程度給 0.0–0.6 分
             result = await self._score_mc_wrong(question, user_answer, compressed_history, source_chunks)
+            self._log_end(ctx, t0, {"score": result.get("score", 0)})
             return self._add_mastery_label(result)
 
         # 問答題：原有評分流程
@@ -133,6 +144,8 @@ class EvaluatorAgent(BaseAgent):
             data["feedback"] = data["feedback"].replace("\\n", "\n")
         if not isinstance(data.get("misconception_patterns"), list):
             data["misconception_patterns"] = []
+
+        self._log_end(ctx, t0, {"score": data.get("score", 0)})
         return self._add_mastery_label(data)
 
     async def _score_mc_wrong(

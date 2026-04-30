@@ -20,13 +20,17 @@ from .memory import session_memory
 from .files.upload_store import load_upload
 from .utils.text_extractor import extract_text
 from .utils.chunker import build_source_chunks
+from .utils.logger import setup_logging, ws_logger
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging()
+    ws_logger().info("Wittgenstein Learning System starting up")
     await init_db(DB_PATH)
     yield
     await close_db()
+    ws_logger().info("Wittgenstein Learning System shutting down")
 
 
 app = FastAPI(title="Wittgenstein Learning System", lifespan=lifespan)
@@ -108,13 +112,24 @@ async def websocket_endpoint(
         return
 
     user_id: str = payload["sub"]
+    _ws_log = ws_logger()
+    _ws_log.info("WS CONNECT  session=%s  user=%s", session_id, user_id)
     evicted_sid = await ws_manager.connect(session_id, user_id, websocket)
     if evicted_sid:
+        _ws_log.info("WS EVICT  old_session=%s  new_session=%s", evicted_sid, session_id)
         _orchestrators.pop(evicted_sid, None)
         delete_working_memory(evicted_sid)
 
     async def emit(msg: dict) -> None:
         try:
+            _ws_log.info(
+                "WS OUT  session=%s  type=%s", session_id, msg.get("type", "?")
+            )
+            _ws_log.debug(
+                "WS OUT PAYLOAD  session=%s  type=%s\n%s",
+                session_id, msg.get("type", "?"),
+                json.dumps(msg, ensure_ascii=False),
+            )
             await ws_manager.send(session_id, msg)
         except (WebSocketDisconnect, RuntimeError):
             pass
@@ -125,6 +140,12 @@ async def websocket_endpoint(
             msg = json.loads(raw)
             msg_type: str = msg.get("type", "")
             p: dict = msg.get("payload", {})
+            _ws_log.info("WS IN  session=%s  type=%s", session_id, msg_type)
+            _ws_log.debug(
+                "WS IN PAYLOAD  session=%s  type=%s\n%s",
+                session_id, msg_type,
+                json.dumps(msg, ensure_ascii=False),
+            )
 
             if msg_type == "start_session":
                 try:
@@ -247,6 +268,7 @@ async def websocket_endpoint(
                     )
 
     except WebSocketDisconnect:
+        _ws_log.info("WS DISCONNECT  session=%s  user=%s", session_id, user_id)
         ws_manager.disconnect(session_id, user_id, websocket)
         # 只有在此 WS 確實是當前連線（disconnect 後 session 已無 WS）時才清除資源，
         # 避免把後繼裝置的 orchestrator / working memory 一起清掉。

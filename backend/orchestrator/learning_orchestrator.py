@@ -1,5 +1,7 @@
 import hashlib
 import json
+import logging
+import time
 import uuid
 from typing import Callable, Awaitable
 
@@ -21,6 +23,8 @@ from ..tools.web_search import search_web
 from .context_builder import build_adaptive_context
 
 WSEmitter = Callable[[dict], Awaitable[None]]
+
+_log = logging.getLogger("wl.orchestrator")
 
 
 class LearningOrchestrator:
@@ -331,6 +335,10 @@ class LearningOrchestrator:
         hash_seed = "".join(c["text"][:80] for c in source_chunks)
         content_hash = hashlib.sha256(hash_seed.encode()).hexdigest()[:16]
 
+        _log.info(
+            "start_session  session=%s  user=%s  chunks=%d  depth=%s  mode=%s",
+            session_id, user_id, len(source_chunks), target_depth, question_mode,
+        )
         ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -343,14 +351,17 @@ class LearningOrchestrator:
         split_result = await self.splitter.run(ctx)
         stages: list[dict] = split_result["stages"]
         summary: str = split_result.get("summary", "")
+        _log.info(
+            "start_session split done  session=%s  stages=%d",
+            session_id, len(stages),
+        )
 
         # 品質檢查（記錄 issues，不中斷流程）
         quality_issues = self._check_stage_quality(stages, source_chunks)
         if quality_issues:
-            # 僅 log，不阻擋教學流程
-            import logging
-            logging.getLogger(__name__).warning(
-                "Stage quality issues: %s", quality_issues
+            _log.warning(
+                "start_session stage quality issues  session=%s  issues=%s",
+                session_id, quality_issues,
             )
 
         nodes = [
@@ -395,6 +406,7 @@ class LearningOrchestrator:
     # ── 使用者確認知識地圖後開始教學 ────────────────────────
 
     async def confirm_session(self, session_id: str, user_id: str, emit: WSEmitter) -> None:
+        _log.info("confirm_session  session=%s  user=%s", session_id, user_id)
         stages = self._pending_stages
         args = self._pending_start_args
 
@@ -463,6 +475,7 @@ class LearningOrchestrator:
         question_mode: str,
         emit: WSEmitter,
     ) -> None:
+        _t_stage = time.perf_counter()
         wm = get_working_memory(session_id)
         wm.reset_for_new_stage(stages[stage_index]["stage_id"])
         wm.question_mode = question_mode
@@ -475,6 +488,11 @@ class LearningOrchestrator:
             for s in stages
         )
         stage = stages[stage_index]
+        _log.info(
+            "run_stage  session=%s  stage_id=%s  title=%s  attempt=%d  mode=%s",
+            session_id, stage["stage_id"], stage.get("title", "")[:40],
+            wm.current_attempt, question_mode,
+        )
 
         await session_memory.update_current_stage(session_id, stage["stage_id"])
         await session_memory.upsert_stage_progress(
@@ -635,6 +653,11 @@ class LearningOrchestrator:
                     "attempt_number": 1,
                 },
             })
+        _log.info(
+            "run_stage DONE  session=%s  stage_id=%s  questions=%d  elapsed=%.2fs",
+            session_id, stage["stage_id"], len(questions),
+            time.perf_counter() - _t_stage,
+        )
 
     # ── 處理使用者答案 ────────────────────────────────────────
 
@@ -646,6 +669,10 @@ class LearningOrchestrator:
         answer: str,
         emit: WSEmitter,
     ) -> None:
+        _log.info(
+            "handle_answer  session=%s  question_id=%s  answer_len=%d",
+            session_id, question_id, len(answer),
+        )
         wm = get_working_memory(session_id)
         stages: list[dict] = wm.stages
         if not stages:
@@ -801,6 +828,16 @@ class LearningOrchestrator:
         )
         decision = await self.progress.run(prog_ctx)
         d = decision["decision"]
+        _log.info(
+            "progress_decision  session=%s  stage_id=%s  decision=%s  "
+            "best_score=%.2f  attempt=%d",
+            session_id, stage["stage_id"], d,
+            decision.get("best_score", 0), wm.current_attempt,
+        )
+        _log.debug(
+            "progress_decision DETAIL  session=%s\n%s",
+            session_id, json.dumps(decision, ensure_ascii=False, default=str),
+        )
         decision_reasons: list[str] = []
         dynamic_stage_inserted = False
         ranked_candidates: list[dict] = []
@@ -1333,6 +1370,10 @@ class LearningOrchestrator:
         question: str,
         emit: WSEmitter,
     ) -> None:
+        _log.info(
+            "handle_student_question  session=%s  question_len=%d",
+            session_id, len(question),
+        )
         wm = get_working_memory(session_id)
         stage = next((s for s in wm.stages if s.get("stage_id") == wm.current_stage_id), None)
         stage_title = stage["title"] if stage else "目前節點"
@@ -1411,6 +1452,7 @@ class LearningOrchestrator:
         user_id: str,
         emit: WSEmitter,
     ) -> None:
+        _log.info("resume_session  session=%s  user=%s", session_id, user_id)
         session = await session_memory.get_session(session_id)
         if not session:
             await emit({"type": "error", "payload": {"message": "找不到會話，請重新上傳材料"}})

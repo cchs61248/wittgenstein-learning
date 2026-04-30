@@ -52,7 +52,7 @@ class GeminiProvider(BaseLLMProvider):
             contents.pop()
         return contents, last_user, last_user_attachment
 
-    async def chat(
+    async def _do_chat(
         self,
         messages: list[LLMMessage],
         system_prompt: Optional[str] = None,
@@ -86,7 +86,7 @@ class GeminiProvider(BaseLLMProvider):
             finish_reason="stop",
         )
 
-    async def stream_chat(
+    async def _do_stream_chat(
         self,
         messages: list[LLMMessage],
         system_prompt: Optional[str] = None,

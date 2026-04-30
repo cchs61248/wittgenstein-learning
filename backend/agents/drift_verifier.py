@@ -32,10 +32,11 @@ class DriftVerifierAgent(BaseAgent):
         self._reset()
         payload = ctx.task_payload
         content_type: str = payload.get("content_type", "explanation")
+        t0 = self._log_start(ctx, content_type=content_type)
+
         source_chunks: list[dict] = payload.get("source_chunks", [])
         candidate_text: str = payload.get("candidate_text", "")
 
-        # 預先提取引用的 chunk，傳遞給 LLM 做精確的 citation accuracy 驗證
         cited_chunks = self._extract_cited_chunks(candidate_text, source_chunks)
 
         self._add_message(
@@ -50,7 +51,6 @@ class DriftVerifierAgent(BaseAgent):
 
         data = json.loads(extract_json(response.content))
 
-        # 後端強制補充：found=False 的 chunk_id 一定是未對齊的（不管 LLM 有沒有偵測到）
         claim_checks: list[dict] = data.get("claim_checks") or []
         for cc in cited_chunks:
             if not cc["found"]:
@@ -66,7 +66,7 @@ class DriftVerifierAgent(BaseAgent):
                         "issue": f"chunk_id '{cc['chunk_id']}' 不存在於 source_chunks",
                     })
 
-        return {
+        result = {
             "aligned": bool(data.get("aligned", False)),
             "issues": data.get("issues") or [],
             "missing_evidence": data.get("missing_evidence") or [],
@@ -74,3 +74,11 @@ class DriftVerifierAgent(BaseAgent):
             "claim_checks": claim_checks,
             "unsupported_claims": data.get("unsupported_claims") or [],
         }
+        aligned = result["aligned"]
+        if not aligned:
+            self._log.warning(
+                "DriftVerifier NOT aligned  session=%s  content_type=%s  issues=%s",
+                ctx.session_id, content_type, result["issues"],
+            )
+        self._log_end(ctx, t0, {"aligned": aligned, "issues": len(result["issues"])})
+        return result

@@ -9,7 +9,6 @@ from ..utils import extract_json
 class QuestionGeneratorAgent(BaseAgent):
     def _format_evidence(self, stage: dict[str, Any], allowed_evidence: list[dict]) -> str:
         """優先用 allowed_evidence（DB source chunks），否則退回 stage.source_chunks。"""
-        # 優先：context_builder 提供的真實 source chunks
         if allowed_evidence:
             lines = []
             for c in allowed_evidence:
@@ -20,7 +19,6 @@ class QuestionGeneratorAgent(BaseAgent):
             if lines:
                 return "\n".join(lines)
 
-        # 退回：stage 內的 source_chunks（舊格式）
         chunks = stage.get("source_chunks") or []
         if not isinstance(chunks, list) or not chunks:
             return "（無 source_chunks，可用內容僅限內容摘要）"
@@ -56,6 +54,14 @@ class QuestionGeneratorAgent(BaseAgent):
         self._reset()
         payload = ctx.task_payload
         stage = payload["stage"]
+        t0 = self._log_start(
+            ctx,
+            stage_id=stage.get("stage_id", "?"),
+            attempt=payload.get("attempt_number", 1),
+            mode=payload.get("question_mode", "short_answer"),
+            n=payload.get("num_questions", 2),
+        )
+
         num_questions: int = payload.get("num_questions", 2)
         attempt_number: int = payload.get("attempt_number", 1)
         previous_question_ids: list[str] = payload.get("previous_question_ids", [])
@@ -100,4 +106,6 @@ class QuestionGeneratorAgent(BaseAgent):
             if q["answer_mode"] != "multiple_choice":
                 q["options"] = []
                 q["correct_option_id"] = None
+
+        self._log_end(ctx, t0, {"questions_count": len(data.get("questions", []))})
         return data

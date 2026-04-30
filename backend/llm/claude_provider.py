@@ -37,7 +37,7 @@ class ClaudeProvider(BaseLLMProvider):
                 formatted.append({"role": msg.role.value, "content": msg.content})
         return formatted
 
-    async def chat(
+    async def _do_chat(
         self,
         messages: list[LLMMessage],
         system_prompt: Optional[str] = None,
@@ -59,7 +59,7 @@ class ClaudeProvider(BaseLLMProvider):
             finish_reason=response.stop_reason or "stop",
         )
 
-    async def stream_chat(
+    async def _do_stream_chat(
         self,
         messages: list[LLMMessage],
         system_prompt: Optional[str] = None,

@@ -29,3 +29,6 @@ frontend/node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# Log files（30 天自動輪轉，不上傳）
+backend/logs/

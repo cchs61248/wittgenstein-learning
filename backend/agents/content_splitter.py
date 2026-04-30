@@ -111,6 +111,9 @@ class ContentSplitterAgent(BaseAgent):
             except Exception as e:
                 if attempt == 2:
                     raise
+                self._log.warning(
+                    "ContentSplitterAgent JSON repair attempt=%d  error=%s", attempt + 1, e
+                )
                 repair_system = (
                     "你是 JSON 修復器。只輸出合法 JSON，不要任何額外文字。"
                     "請確保字串內換行使用 \\n 且所有欄位間有逗號。"
@@ -131,15 +134,19 @@ class ContentSplitterAgent(BaseAgent):
 
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
         self._reset()
+        t0 = self._log_start(
+            ctx,
+            chunks=len(ctx.task_payload.get("source_chunks", [])),
+            target_depth=ctx.task_payload.get("target_depth", "?"),
+        )
+
         payload = ctx.task_payload
         source_chunks: list[dict] = payload.get("source_chunks", [])
         max_stages: int = payload.get("max_stages", 30)
         target_depth: str = payload.get("target_depth", "intermediate")
 
-        # 建立 chunk_id → chunk dict 供後端回填
         db_chunks: dict[str, dict] = {c["chunk_id"]: c for c in source_chunks}
 
-        # 組裝 chunks 呈現給 LLM（只傳 id + text，不傳 source truth 以外的欄位）
         chunks_text = "\n\n".join(
             f"[{c['chunk_id']}]\n{c['text']}"
             for c in sorted(source_chunks, key=lambda x: x.get("order_index", 0))
@@ -155,4 +162,7 @@ class ContentSplitterAgent(BaseAgent):
 
         response = await self.llm.chat(self._messages, system_prompt=system)
         self._reset()
-        return await self._parse_or_repair_json(response.content, max_stages=max_stages, db_chunks=db_chunks)
+        result = await self._parse_or_repair_json(response.content, max_stages=max_stages, db_chunks=db_chunks)
+
+        self._log_end(ctx, t0, {"stages_count": len(result.get("stages", []))})
+        return result

@@ -23,6 +23,13 @@ def _detect_repeated_patterns(evaluations: list[dict]) -> bool:
 class ProgressManagerAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
         payload = ctx.task_payload
+        t0 = self._log_start(
+            ctx,
+            stage_id=payload.get("current_stage_id", "?"),
+            attempt=payload.get("current_attempt", "?"),
+            evals=len(payload.get("evaluations", [])),
+        )
+
         evaluations: list[dict] = payload["evaluations"]
         pass_threshold: float = payload.get("pass_threshold", 0.75)
         max_attempts: int = payload.get("max_attempts", 3)
@@ -41,7 +48,6 @@ class ProgressManagerAgent(BaseAgent):
         attempts = max(1, attempts)
         raw_scores = [e.get("score", 0.0) for e in evaluations]
 
-        # 選擇題套猜測校正，使分數與簡答題具可比性
         if question_mode == "multiple_choice":
             scores = [correct_mc_score(s) for s in raw_scores]
         else:
@@ -52,7 +58,7 @@ class ProgressManagerAgent(BaseAgent):
 
         # 動態補強子節點：完成即前進，避免無限子節點
         if is_dynamic:
-            return {
+            result = {
                 "decision": "advance",
                 "message": "補強練習完成，繼續前進！",
                 "next_stage_id": None,
@@ -61,10 +67,12 @@ class ProgressManagerAgent(BaseAgent):
                 "high_severity_misconceptions": [],
                 "repeated_patterns_detected": False,
             }
+            self._log_end(ctx, t0, {"decision": "advance(dynamic)", "best_score": best_score})
+            return result
 
         # 超過最大補強次數：強制前進
         if remediate_count >= max_remediate:
-            return {
+            result = {
                 "decision": "advance",
                 "message": f"你已完成 {remediate_count} 次補強練習，讓我們繼續前進。",
                 "next_stage_id": None,
@@ -73,8 +81,9 @@ class ProgressManagerAgent(BaseAgent):
                 "high_severity_misconceptions": [],
                 "repeated_patterns_detected": False,
             }
+            self._log_end(ctx, t0, {"decision": "advance(max_remediate)", "best_score": best_score})
+            return result
 
-        # 收集所有 misconception_patterns，診斷嚴重程度與重複模式
         all_misconceptions: list[dict] = []
         for ev in evaluations:
             all_misconceptions.extend(ev.get("misconception_patterns", []))
@@ -86,13 +95,11 @@ class ProgressManagerAgent(BaseAgent):
             next_stage = current_stage_id + 1 if current_stage_id + 1 < total_stages else None
             message = f"很好！你已理解這個階段（校正得分：{best_score:.0%}），讓我們繼續。"
         elif high_severity:
-            # 高嚴重度根本誤解 → 立即換框架重教，不繼續重試同框架
             decision = "reteach"
             next_stage = None
             concept = high_severity[0].get("concept", "這個概念")
             message = f"我注意到你在「{concept}」上有根本性的誤解，讓我換個完全不同的角度重新解釋。"
         elif repeated_patterns:
-            # 同一錯誤重複出現 → 換框架重教
             decision = "reteach"
             next_stage = None
             message = "我注意到你在同一個概念上重複出現相同的錯誤，讓我換個完全不同的比喻框架來解釋。"
@@ -114,7 +121,7 @@ class ProgressManagerAgent(BaseAgent):
             confused_concepts.extend(ev.get("confused_concepts", []))
         unique_confused = list(dict.fromkeys(confused_concepts))
 
-        return {
+        result = {
             "decision": decision,
             "message": message,
             "next_stage_id": next_stage,
@@ -123,3 +130,11 @@ class ProgressManagerAgent(BaseAgent):
             "high_severity_misconceptions": high_severity[:3],
             "repeated_patterns_detected": repeated_patterns,
         }
+        self._log_end(ctx, t0, {
+            "decision": decision,
+            "best_score": round(best_score, 3),
+            "attempts": attempts,
+            "high_severity": len(high_severity),
+            "repeated": repeated_patterns,
+        })
+        return result

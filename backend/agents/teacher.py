@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Any, AsyncGenerator
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
@@ -47,13 +48,11 @@ class TeacherAgent(BaseAgent):
         must_reinforce: list = requirements.get("must_reinforce", [])
         forbidden_future: list = requirements.get("forbidden_future_concepts", [])
 
-        # 掌握度摘要
         if mastery_map:
             mastery_summary = "、".join(f"{c}={v:.0%}" for c, v in mastery_map.items())
         else:
             mastery_summary = payload.get("weak_concepts", "無")
 
-        # 混淆模式摘要
         if misconceptions:
             parts = [
                 f"「{m['concept']}」：{m['pattern']}"
@@ -64,7 +63,6 @@ class TeacherAgent(BaseAgent):
         else:
             misconceptions_text = "無"
 
-        # 最近答題摘要（最多 3 筆，倒序取最近）
         if recent_qa:
             qa_parts = [
                 f"{r.get('question_text', '')[:25]}…（{r.get('score', 0):.0%}）"
@@ -78,7 +76,6 @@ class TeacherAgent(BaseAgent):
         must_reinforce_text = "、".join(must_reinforce) if must_reinforce else "無"
         forbidden_future_text = "、".join(forbidden_future[:5]) if forbidden_future else "無"
 
-        # 選課理由（Phase 4）
         selection_reason = requirements.get("selection_reason") or {}
         if selection_reason:
             sr_reason = selection_reason.get("reason", "")
@@ -101,9 +98,14 @@ class TeacherAgent(BaseAgent):
 
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
         self._reset()
-        payload = ctx.task_payload
-        stage = payload["stage"]
+        stage = ctx.task_payload["stage"]
+        t0 = self._log_start(
+            ctx,
+            stage_id=stage.get("stage_id", "?"),
+            stage_title=stage.get("title", "")[:40],
+        )
 
+        payload = ctx.task_payload
         prompt_params = self._build_prompt_params(payload)
         system = SYSTEM_PROMPTS["teacher"].format(**prompt_params)
 
@@ -121,7 +123,9 @@ class TeacherAgent(BaseAgent):
 
         response = await self.llm.chat(self._messages, system_prompt=system)
         self._reset()
-        return {"explanation": response.content}
+        result = {"explanation": response.content}
+        self._log_end(ctx, t0, {"explanation_len": len(response.content)})
+        return result
 
     async def stream_explanation(
         self, ctx: AgentContext
@@ -131,11 +135,15 @@ class TeacherAgent(BaseAgent):
         stage = payload["stage"]
         prev_stage_title: str | None = payload.get("prev_stage_title")
 
+        self._log.info(
+            "TeacherAgent stream_explanation START  session=%s  stage_id=%s  title=%s",
+            ctx.session_id, stage.get("stage_id", "?"), stage.get("title", "")[:40],
+        )
+        t0 = time.perf_counter()
+
         prompt_params = self._build_prompt_params(payload)
         system = SYSTEM_PROMPTS["teacher"].format(**prompt_params)
 
-        # 優先用 allowed_evidence（context_builder 提供的真實 source chunks），
-        # 否則退回 stage.source_chunks（舊格式）
         allowed_evidence = (payload.get("adaptive_context") or {}).get("allowed_evidence", [])
         evidence_text = self._format_allowed_evidence(allowed_evidence) or self._format_source_chunks(stage)
 
@@ -149,9 +157,18 @@ class TeacherAgent(BaseAgent):
             f"source_chunks（請在敘述後標記 chunk_id）：\n{evidence_text}",
         )
 
+        total_chars = 0
         async for chunk in self.llm.stream_chat(self._messages, system_prompt=system):
+            total_chars += len(chunk)
             yield chunk
         self._reset()
+
+        elapsed = time.perf_counter() - t0
+        self._log.info(
+            "TeacherAgent stream_explanation END  session=%s  stage_id=%s  "
+            "chars=%d  elapsed=%.2fs",
+            ctx.session_id, stage.get("stage_id", "?"), total_chars, elapsed,
+        )
 
     async def extract_teaching_intent(
         self, explanation_text: str, stage: dict
@@ -159,6 +176,10 @@ class TeacherAgent(BaseAgent):
         """串流結束後，從講解全文中提取教學意圖（non-streaming，供 QuestionGeneratorAgent 使用）。"""
         self._reset()
         key_concepts = stage.get("key_concepts", [])
+        self._log.info(
+            "TeacherAgent extract_teaching_intent  stage_id=%s",
+            stage.get("stage_id", "?"),
+        )
         system = (
             "你是教學意圖分析器。從提供的講解文字中提取結構化的教學意圖。\n"
             "只輸出 JSON，不要任何其他文字：\n"
@@ -183,7 +204,11 @@ class TeacherAgent(BaseAgent):
                 "repair_target": data.get("repair_target") or None,
                 "main_chunk_ids": [str(c) for c in (data.get("main_chunk_ids") or []) if c],
             }
-        except Exception:
+        except Exception as e:
+            self._log.warning(
+                "TeacherAgent extract_teaching_intent parse error  stage_id=%s  error=%s",
+                stage.get("stage_id", "?"), e,
+            )
             return {
                 "reinforced_concepts": key_concepts[:2],
                 "analogies_used": [],
