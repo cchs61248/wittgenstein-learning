@@ -18,6 +18,17 @@ function generateSessionId() {
   return 'sess_' + Math.random().toString(36).slice(2, 11);
 }
 
+// 穩定合併書櫃：既有項目保持原位，只把真正新的推到最上面
+function mergeBookshelf(existing: BookEntry[], fresh: BookEntry[]): BookEntry[] {
+  const freshMap = new Map(fresh.map(e => [e.sessionId, e]));
+  const existingIds = new Set(existing.map(e => e.sessionId));
+  const newItems = fresh.filter(e => !existingIds.has(e.sessionId));
+  const updatedExisting = existing
+    .filter(e => freshMap.has(e.sessionId) || e.status === 'generating')
+    .map(e => freshMap.get(e.sessionId) ?? e);
+  return [...newItems, ...updatedExisting];
+}
+
 export default function App() {
   const { token, email, clearAuth } = useSessionStore();
   const {
@@ -83,7 +94,11 @@ export default function App() {
 
   // 掛載時：若有 token，先查詢是否有活躍會話；沒有才顯示上傳 modal
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setBookshelf([]); // 登出時確保書櫃清空，避免下個帳號看到殘留資料
+      return;
+    }
+    setBookshelf([]); // 切換帳號前立即清空，不讓舊帳號資料出現
     let cancelled = false;
     setIsSessionLoading(true);
 
@@ -147,11 +162,11 @@ export default function App() {
     switch (msg.type) {
       case 'knowledge_map':
         setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
-        listSessions(token!).then(setBookshelf);
+        listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
         break;
       case 'session_started':
         setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
-        listSessions(token!).then(setBookshelf);
+        listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
         break;
       case 'explanation_chunk':
         appendExplanationChunk(msg.payload.chunk);
@@ -280,9 +295,9 @@ export default function App() {
           if (msg.type === 'knowledge_map') {
             setBgPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
             // 此時 session 已在 DB，以真實資料取代樂觀佔位
-            listSessions(token!).then(setBookshelf);
+            listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
           } else if (msg.type === 'session_started') {
-            listSessions(token!).then(setBookshelf);
+            listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
           } else if (msg.type === 'error') {
             bgWsRef.current?.close();
             bgWsRef.current = null;
@@ -303,9 +318,8 @@ export default function App() {
       bgWs.connect();
       bgWsRef.current = bgWs;
 
-      // 立刻樂觀新增書本，讓使用者知道材料正在生成，不等 DB
+      // 立刻樂觀新增書本到最前面，讓使用者知道材料正在生成，不等 DB
       setBookshelf((prev) => [
-        ...prev,
         {
           sessionId: newSid,
           title: '新材料生成中…',
@@ -314,6 +328,7 @@ export default function App() {
           completedStages: 0,
           updatedAt: null,
         },
+        ...prev,
       ]);
       setShowUpload(false);
       return;
@@ -342,7 +357,7 @@ export default function App() {
     ws.connect();
     wsRef.current = ws;
     setShowUpload(false);
-    listSessions(token).then(setBookshelf);
+    listSessions(token).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
   };
 
   const handleSubmitAnswer = (questionId: string, answer: string) => {
@@ -486,8 +501,10 @@ export default function App() {
           <span className="header-email">{email}</span>
           <button
             onClick={() => {
-              clearAuth();
+              setBookshelf([]);
               wsRef.current?.close();
+              bgWsRef.current?.close();
+              clearAuth();
             }}
             className="btn-ghost"
           >
