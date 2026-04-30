@@ -27,7 +27,7 @@ class LLMResponse:
 
 
 class BaseLLMProvider(ABC):
-    def __init__(self, model: str, temperature: float = 0.7, max_tokens: int = 2048):
+    def __init__(self, model: str, temperature: float = 0.7, max_tokens: int = 4096):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens

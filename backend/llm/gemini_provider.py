@@ -5,7 +5,7 @@ from .base_provider import BaseLLMProvider, LLMMessage, LLMResponse, MessageRole
 
 
 class GeminiProvider(BaseLLMProvider):
-    def __init__(self, model: str = "gemini-2.0-flash", temperature: float = 0.7, max_tokens: int = 2048):
+    def __init__(self, model: str = "gemini-2.0-flash", temperature: float = 0.7, max_tokens: int = 4096):
         super().__init__(model, temperature, max_tokens)
         self._client = genai.Client()
 

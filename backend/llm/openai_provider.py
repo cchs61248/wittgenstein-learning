@@ -4,7 +4,7 @@ from .base_provider import BaseLLMProvider, LLMMessage, LLMResponse, MessageRole
 
 
 class OpenAIProvider(BaseLLMProvider):
-    def __init__(self, model: str = "gpt-4o-mini", temperature: float = 0.7, max_tokens: int = 2048):
+    def __init__(self, model: str = "gpt-4o-mini", temperature: float = 0.7, max_tokens: int = 4096):
         super().__init__(model, temperature, max_tokens)
         self._client = AsyncOpenAI()
 
