@@ -2896,9 +2896,18 @@ textarea:disabled {
 /* ═══════════════════════════════════════════════
    書櫃 Panel
    ═══════════════════════════════════════════════ */
+.stage-map-panel-inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .bookshelf-panel {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
   overflow: hidden;
 }
@@ -3162,17 +3171,57 @@ textarea:disabled {
   border-color: var(--border);
 }
 
-/* Divider above StageMap */
-.bookshelf-stage-divider {
-  padding: 10px 14px 6px;
-  font-family: var(--font-ui);
-  font-size: 10px;
-  font-weight: 800;
-  color: var(--text-subtle);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  border-top: 1px solid var(--border);
+/* ── 地圖視圖（點擊書本後顯示）── */
+.bookshelf-map-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  min-height: 44px;
+}
+
+.bookshelf-back-btn {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-height: 32px;
+  transition: background var(--press-duration, 120ms);
+}
+.bookshelf-back-btn:hover { background: var(--accent-bg); }
+.bookshelf-back-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.bookshelf-map-title {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.bookshelf-map-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 /* Mobile (≤768px) */

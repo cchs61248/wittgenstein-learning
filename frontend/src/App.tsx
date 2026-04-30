@@ -304,9 +304,7 @@ export default function App() {
     if (entry.sessionId === sessionIdRef.current) return;
     wsRef.current?.close();
     clearSession();
-    setIsSessionLoading(true);
     const session = await getSessionDetail(token!, entry.sessionId);
-    setIsSessionLoading(false);
     if (!session) return;
 
     const sid = session.session_id;
@@ -386,14 +384,6 @@ export default function App() {
           <span className="header-email">{email}</span>
           <button
             onClick={() => {
-              setShowUpload(true);
-            }}
-            className="btn-ghost"
-          >
-            新學習
-          </button>
-          <button
-            onClick={() => {
               clearAuth();
               wsRef.current?.close();
             }}
@@ -417,7 +407,7 @@ export default function App() {
             <span className="stage-sidebar-toggle-icon" aria-hidden="true">{isStageSidebarCollapsed ? '▸' : '◂'}</span>
           </button>
           {!isStageSidebarCollapsed && (
-            <div id="stage-map-panel">
+            <div id="stage-map-panel" className="stage-map-panel-inner">
               <BookshelfPanel
                 books={bookshelf}
                 activeSessionId={sessionIdRef.current}

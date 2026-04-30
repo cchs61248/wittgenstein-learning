@@ -184,6 +184,43 @@ export function BookshelfPanel({
   onRename,
   onDelete,
 }: BookshelfPanelProps) {
+  const [view, setView] = useState<'list' | 'map'>('list');
+  const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
+
+  const viewingBook = viewingSessionId
+    ? books.find((b) => b.sessionId === viewingSessionId) ?? null
+    : null;
+
+  const handleBookSelect = (entry: BookEntry) => {
+    setViewingSessionId(entry.sessionId);
+    setView('map');
+    onSwitch(entry);
+  };
+
+  if (view === 'map') {
+    return (
+      <div className="bookshelf-panel">
+        <div className="bookshelf-map-header">
+          <button
+            className="bookshelf-back-btn"
+            onClick={() => setView('list')}
+            aria-label="返回書櫃列表"
+          >
+            ← 書櫃
+          </button>
+          {viewingBook && (
+            <span className="bookshelf-map-title" title={viewingBook.title}>
+              {viewingBook.title}
+            </span>
+          )}
+        </div>
+        <div className="bookshelf-map-body">
+          <StageMap hideHeading />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bookshelf-panel">
       <div className="bookshelf-header">
@@ -206,20 +243,13 @@ export function BookshelfPanel({
               key={entry.sessionId}
               entry={entry}
               isActive={entry.sessionId === activeSessionId}
-              onSwitch={() => onSwitch(entry)}
+              onSwitch={() => handleBookSelect(entry)}
               onRename={(title) => onRename(entry.sessionId, title)}
               onDelete={() => onDelete(entry.sessionId)}
             />
           ))
         )}
       </div>
-
-      {books.length > 0 && (
-        <>
-          <div className="bookshelf-stage-divider">當前進度</div>
-          <StageMap hideHeading />
-        </>
-      )}
     </div>
   );
 }
