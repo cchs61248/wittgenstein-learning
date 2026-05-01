@@ -39,7 +39,9 @@ npm run lint      # ESLint 檢查
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=...
 GOOGLE_API_KEY=...
-DEFAULT_PROVIDER=claude        # claude | openai | gemini
+MONICA_API_KEY=...             # Monica OpenAI 相容代理（可選）
+MONICA_BASE_URL=...            # Monica API 基底 URL（可選）
+DEFAULT_PROVIDER=claude        # claude | openai | gemini | monica
 PASS_THRESHOLD=0.75
 MAX_STAGE_ATTEMPTS=3
 DB_PATH=../data/learning.db    # 相對路徑以 backend/ 為基準
@@ -79,11 +81,17 @@ JWT_SECRET=change-me
 | POST | `/auth/login` | 登入，回傳 JWT |
 | GET | `/auth/me?token=...` | 取得當前使用者 |
 | POST | `/upload` | 上傳檔案（需 `Authorization: Bearer <token>`），回傳 `file_id` |
+| GET | `/sessions/active?token=...` | 查詢最新 active/pending_confirmation session |
+| GET | `/sessions/list?token=...` | 列出用戶所有 session（書櫃） |
+| GET | `/sessions/{session_id}?token=...` | 取得單一 session 詳細資訊 |
+| PATCH | `/sessions/{session_id}/title?token=...` | 更新 session 自訂標題 |
+| DELETE | `/sessions/{session_id}?token=...` | 刪除 session（含 qa/stage/source_chunks/decision，保留 mastery） |
+| GET | `/learner/stats?token=...` | 取得學習統計（concepts + misconceptions + weak_count） |
 | GET | `/health` | 健康檢查 |
 
 ### 檔案上傳流程（Phase 1 後）
 
-1. 前端 `POST /upload` → 伺服器用 `backend/files/upload_store.py` 儲存在記憶體（單 process 有效）並回傳 `file_id`
+1. 前端 `POST /upload` → 伺服器用 `backend/files/upload_store.py` 儲存至磁碟（`data/uploads/*.bin` + `*.meta.json`）並回傳 `file_id`
 2. 前端發送 `start_session` WebSocket 訊息，帶入 `uploaded_file_id`
 3. 後端執行本地解析（主路徑）：
    - `text_extractor.extract_text(filename, raw_bytes)` → 純文字（PDF/DOCX/PPTX/MD/TXT）
@@ -96,12 +104,13 @@ JWT_SECRET=change-me
 
 ### LLM 抽象層（`backend/llm/`）
 
-`BaseLLMProvider` 定義統一介面：`chat()` 和 `stream_chat()`。三個 Provider 的差異：
-- **ClaudeProvider**：`system_prompt` 作為獨立參數傳給 Anthropic API
-- **OpenAIProvider**：`system_prompt` 插入 messages[0] 作為 system role
-- **GeminiProvider**：`system_prompt` 設定為 `config.system_instruction`；使用 `google.genai`（新 SDK，非棄用的 `google.generativeai`）
+`BaseLLMProvider` 定義統一介面：`chat()` 和 `stream_chat()`。四個 Provider 的差異：
+- **ClaudeProvider**：`system_prompt` 作為獨立參數傳給 Anthropic API；預設模型 `claude-sonnet-4-6`
+- **OpenAIProvider**：`system_prompt` 插入 messages[0] 作為 system role；預設模型 `gpt-5.4-mini`
+- **GeminiProvider**：`system_prompt` 設定為 `config.system_instruction`；使用 `google.genai`（新 SDK，非棄用的 `google.generativeai`）；預設模型 `gemini-3-flash-preview`
+- **MonicaProvider**：OpenAI 相容格式代理，透過 `MONICA_BASE_URL` / `MONICA_API_KEY` 設定；預設模型 `claude-4.6-sonnet`
 
-工廠函式：`create_provider("claude" | "openai" | "gemini")`
+工廠函式：`create_provider("claude" | "openai" | "gemini" | "monica")`
 
 ### Agent 上下文隔離（`backend/agents/`）
 
@@ -115,7 +124,7 @@ JWT_SECRET=change-me
 
 **DriftVerifier Citation Accuracy（Phase 4）**：`_extract_cited_chunks()` 使用 `\bchunk_\w+\b` 正則同時支援 Markdown `[chunk_0001]` 與 JSON `["chunk_0001"]` 兩種格式提取引用，配對原文後傳遞 `cited_chunks_lookup` 給 LLM，實現逐條 claim 驗證而非形式引用檢查。後端強制：`found=False` 的 chunk_id 標記為 `supported=False`。注意：舊版 `\[([^\]]+)\]` 會在 JSON 格式中抓到含引號的 `"chunk_0000"` 導致全部 `found=False`，已於 2026-04-30 修正。
 
-**ProgressManager 決策優先序（Phase 4）**：`high_severity` misconception（任何嘗試次數）或 `_detect_repeated_patterns()`（同一 pattern ≥ 2 次）立即觸發 `reteach`，優先於 `attempts < max_attempts → retry`。
+**ProgressManager 決策優先序（Phase 4）**：`high_severity` misconception（任何嘗試次數）或 `_detect_repeated_patterns()`（同一 pattern ≥ 2 次）立即觸發 `reteach`，優先於 `attempts < max_attempts → retry`。**動態節點特例**：`remediate_count >= 2`（同一 stage 已補強 ≥ 2 次）時強制 `advance`，避免無限補強循環。
 
 **ContentSplitter 小 stage 合併（2026-04-30）**：`_normalize_splitter_output()` 完成後呼叫 `_merge_thin_stages()`，前向掃描並將 `source_chunk_ids < 2` 的 stage 合併至後繼 stage（最後一個合往前），合併後重新編號 `stage_id`。這消除了 LLM 把單一 chunk 切成獨立 stage 時產生的 `possibly_too_small` 警告。
 
@@ -123,7 +132,7 @@ JWT_SECRET=change-me
 
 ### 記憶三層（`backend/memory/`）
 
-- **WorkingMemory**（in-process dict）：以 `session_id` 為 key；`wm.stages` 存整份 stage 列表，`wm.pending_questions` 存當前 stage 問題，`wm.current_teaching_intent`（Phase 3）存 TeacherAgent 提取的教學意圖，`reset_for_new_stage()` 切換 stage 時清空含 `current_teaching_intent`
+- **WorkingMemory**（in-process dict）：以 `session_id` 為 key；`wm.stages` 存整份 stage 列表，`wm.pending_questions` 存當前 stage 問題，`wm.current_teaching_intent`（Phase 3）存 TeacherAgent 提取的教學意圖，`wm.question_mode` 存題目模式，`wm.remediate_count` 追蹤當前 stage 已補強次數（`reset_for_new_stage()` 切換 stage 時全數清空）
 - **SessionMemory**（SQLite）：`sessions`、`stage_progress`、`qa_records`、`source_chunks`（Phase 1）表；新增 `get_source_chunks()`、`get_recent_qa_summary()`、`get_last_decision_record()` 函式（Phase 2）
 - **LongtermMemory**（SQLite）：`concept_mastery`（EMA 掌握度）、`user_learning_profile`；Phase 2 新增 `get_misconceptions()`；Phase 3 `update_concept_mastery()` 新增 `misconception_pattern`（結構化，存入 confusion_patterns）和 `analogy_used`/`lesson_was_effective`（存入 successful_analogies）
 
@@ -153,11 +162,17 @@ JWT_SECRET=change-me
 
 **WebSocket URL 硬編碼**：`frontend/src/api/websocket.ts` 中 `WS_BASE` 固定為 `ws://localhost:8000`，部署時需手動修改或改成環境變數。
 
+**上傳檔案磁碟持久化**：`backend/files/upload_store.py` 將上傳檔寫入 `data/uploads/{file_id}.bin`（原始 bytes）與 `{file_id}.meta.json`（filename/mime_type/size），跨重啟仍可讀取，`load_upload(file_id)` 從磁碟讀回。
+
+**sessions.title 欄位（Migration 010）**：`sessions` 表新增 `title TEXT DEFAULT NULL`，可透過 `PATCH /sessions/{session_id}/title` 更新。`GET /sessions/list` 供書櫃功能列出所有 session。
+
+**Migration 實際編號**：database.py 中 002–008 用 `try/except` 冪等執行；008 = `sessions.question_mode`（非 `source_chunks`）；009 = `source_chunks` 表；010 = `sessions.title`；006 = `decision_records` 表（程式碼中標記 006，但在 010 之後執行）。
+
 ### WebSocket 訊息協定
 
-**客戶端 → 伺服器**：`start_session`、`submit_answer`、`request_hint`
+**客戶端 → 伺服器**：`start_session`、`confirm_map`、`submit_answer`、`resume_session`、`ask_tutor`、`request_hint`
 
-**伺服器 → 客戶端**：`session_started`、`explanation_chunk`（串流，`is_final: bool`）、`explanation_complete`、`question`、`feedback`、`stage_decision`（含 `decision: advance|retry|remediate|reteach`）、`course_completed`、`error`
+**伺服器 → 客戶端**：`kicked`（同帳號重連踢舊線）、`session_generating`（開始生成中）、`knowledge_map`（等待確認）、`session_started`、`session_snapshot`（全量恢復）、`explanation_chunk`（串流，`is_final: bool`）、`explanation_complete`、`explanation_reset`（僅 reteach 換框架時）、`question`、`feedback`、`stage_decision`（含 `decision: advance|retry|remediate|reteach`）、`qa_history`、`resume_state`、`tutor_reply`、`hint`、`course_completed`、`error`
 
 完整型別定義在 `frontend/src/types/messages.ts`。
 

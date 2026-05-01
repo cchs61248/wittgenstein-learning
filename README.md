@@ -22,9 +22,11 @@
 - ProgressManager 智能決策（Phase 4）：高嚴重度根本誤解或同一錯誤重複 ≥ 2 次，立即觸發換框架重教
 - retry / remediate 決策不清除原文，改為在現有講解尾端附加內容；remediate 會完整串流補強教學文章（TeacherAgent），並持久化至 DB，頁面重整後不重新生成
 - 跨會話長期記憶：結構化追蹤每個概念的掌握度（EMA）、混淆模式、成功類比，選課時傳遞理由給 TeacherAgent
-- 支援四個 LLM Provider（Claude、OpenAI、Gemini、Monica）
+- 支援四個 LLM Provider（Claude、OpenAI、Gemini、Monica），Monica 為 OpenAI 相容代理，透過 `MONICA_BASE_URL`/`MONICA_API_KEY` 設定
 - 學生追問（Ask Tutor）：可詢問教材內外問題，回答以可收縮筆記方式記錄，透過 localStorage 持久化，頁面重整後自動恢復
 - 頁面重整、多裝置切換後完整恢復學習進度（含講解、答題歷史、追問記錄）
+- 書櫃管理：列出所有學習 session，支援自訂標題與刪除（保留長期掌握度記錄）
+- 學習統計（`GET /learner/stats`）：查詢所有概念掌握度、結構化混淆模式與弱點概念數
 
 ---
 
@@ -73,7 +75,9 @@ npm run dev
 | `ANTHROPIC_API_KEY` | Claude API 金鑰 | — |
 | `OPENAI_API_KEY` | OpenAI API 金鑰 | — |
 | `GOOGLE_API_KEY` | Gemini API 金鑰 | — |
-| `DEFAULT_PROVIDER` | 預設 LLM | `claude` |
+| `MONICA_API_KEY` | Monica 代理 API 金鑰（可選） | — |
+| `MONICA_BASE_URL` | Monica 代理基底 URL（可選） | — |
+| `DEFAULT_PROVIDER` | 預設 LLM（claude｜openai｜gemini｜monica） | `claude` |
 | `PASS_THRESHOLD` | 進入下一階段的分數門檻 | `0.75` |
 | `MAX_STAGE_ATTEMPTS` | 同一階段最大嘗試次數 | `3` |
 | `DB_PATH` | SQLite 資料庫路徑 | `../data/learning.db` |
@@ -93,9 +97,10 @@ backend/
 ├── run.py                    # uvicorn 入口（修正相對匯入問題）
 ├── llm/                      # LLM 抽象層
 │   ├── base_provider.py      # BaseLLMProvider 介面
-│   ├── claude_provider.py
-│   ├── openai_provider.py
-│   ├── gemini_provider.py
+│   ├── claude_provider.py    # 預設 claude-sonnet-4-6
+│   ├── openai_provider.py    # 預設 gpt-5.4-mini
+│   ├── gemini_provider.py    # 預設 gemini-3-flash-preview
+│   ├── monica_provider.py    # OpenAI 相容代理，預設 claude-4.6-sonnet
 │   └── provider_factory.py
 ├── agents/                   # 六個功能 Agent
 │   ├── content_splitter.py   # 語義切分（只回傳 chunk_id，不生成原文）
@@ -108,15 +113,25 @@ backend/
 │   ├── learning_orchestrator.py  # 協調所有元件的主控流程
 │   └── context_builder.py        # 學生狀態包組裝（Phase 2）
 ├── memory/
-│   ├── working_memory.py     # 當次輪次狀態（含 current_teaching_intent，Phase 3）
-│   ├── session_memory.py     # 本次學習進度 + source_chunks（SQLite，Phase 1）
-│   └── longterm_memory.py    # 跨會話掌握度 + misconceptions（SQLite，Phase 2+3）
+│   ├── working_memory.py     # 當次輪次狀態（含 current_teaching_intent、remediate_count）
+│   ├── session_memory.py     # 本次學習進度 + source_chunks（SQLite）
+│   └── longterm_memory.py    # 跨會話掌握度 + misconceptions（SQLite）
+├── routers/
+│   ├── session.py            # 書櫃：sessions CRUD（list/detail/title/delete）
+│   ├── upload.py             # 檔案上傳（寫入 data/uploads/ 磁碟）
+│   └── learner.py            # 學習統計（concepts/misconceptions/weak_count）
 ├── utils/
-│   ├── text_extractor.py     # 本地文件解析（PDF/DOCX/PPTX/MD/TXT，Phase 1）
-│   ├── chunker.py            # 機械切分，建立 source_chunks（Phase 1）
-│   └── prompt_templates.py   # 所有 LLM System Prompt
+│   ├── text_extractor.py     # 本地文件解析（PDF/DOCX/PPTX/MD/TXT）
+│   ├── chunker.py            # 機械切分，建立 source_chunks
+│   ├── prompt_templates.py   # 所有 LLM System Prompt
+│   ├── token_counter.py      # tiktoken cl100k_base Token 計數
+│   └── logger.py             # 輪替檔 log 設定
+├── files/
+│   └── upload_store.py       # 上傳檔磁碟讀寫（data/uploads/*.bin + *.meta.json）
+├── tools/
+│   └── web_search.py         # DuckDuckGo Instant Answer API（ask_tutor 離題時使用）
 ├── auth/                     # JWT 帳號系統
-└── db/                       # SQLite 連線與 migrations（含 source_chunks 表，Phase 1）
+└── db/                       # SQLite 連線與 migrations（010 個 migration）
 ```
 
 **Agent 運作方式**：每個 Agent 擁有獨立的 `_messages` 列表，`run()` 開始與結束時都呼叫 `_reset()` 清除，避免跨呼叫上下文累積。各 Agent 有各自的 token 預算（800–4000 tokens）。
@@ -160,13 +175,18 @@ frontend/src/
 **Client → Server**
 
 ```json
-{ "type": "start_session", "payload": { "content": "...", "provider": "claude", "target_depth": "intermediate" } }
+{ "type": "start_session",  "payload": { "uploaded_file_id": "upl_...", "provider": "claude", "target_depth": "intermediate", "question_mode": "short_answer" } }
+{ "type": "confirm_map",    "payload": { "provider": "claude" } }
 { "type": "submit_answer",  "payload": { "question_id": "q_1_0", "answer": "..." } }
+{ "type": "resume_session", "payload": { "session_id": "..." } }
+{ "type": "ask_tutor",      "payload": { "question": "..." } }
 ```
 
 **Server → Client**
 
 ```
+session_generating  → {}   （start_session 開始解析時）
+knowledge_map       → { nodes, summary }   （等待確認）
 session_started     → { session_id, stages, stage_statuses }
 session_snapshot    → { stage_explanations, stage_qa_histories, decision_history }
 explanation_chunk   → { chunk, is_final }
@@ -178,6 +198,7 @@ stage_decision      → { decision, message, next_stage_id, best_score, strategy
 tutor_reply         → { question, answer, in_scope }
 qa_history          → { records }
 resume_state        → { current_question?, last_feedback? }
+hint                → { message }
 course_completed    → { message }
 kicked              → { message }
 error               → { message }
@@ -185,9 +206,9 @@ error               → { message }
 
 ### 資料庫 Schema
 
-八張資料表：`users`、`sessions`、`stage_progress`、`qa_records`、`concept_mastery`、`user_learning_profile`、`decision_records`、`source_chunks`（Phase 1，後端 source truth）。
+八張資料表：`users`、`sessions`（含 `question_mode`、`title` 欄位）、`stage_progress`、`qa_records`、`concept_mastery`、`user_learning_profile`、`decision_records`、`source_chunks`（後端 source truth）。
 
-資料庫在首次啟動時自動建立（`data/learning.db`），透過 migration 系統增量更新。
+資料庫在首次啟動時自動建立（`data/learning.db`），透過內嵌於 `database.py` 的 10 個 migration 步驟增量更新（002–008、010 冪等 ALTER，006、009 `CREATE TABLE IF NOT EXISTS`）。
 
 ---
 
