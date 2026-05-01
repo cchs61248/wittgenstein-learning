@@ -2866,7 +2866,8 @@ textarea:disabled {
 
 /* ── 平板（769–1024px） ── */
 @media (min-width: 769px) and (max-width: 1024px) {
-  .stat-cards-row { grid-template-columns: repeat(2, 1fr); }
+  .stats-overview-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .stats-dual-col { grid-template-columns: 1fr !important; }
   .stats-page { padding: 24px 28px 36px; }
 }
 
@@ -2883,6 +2884,9 @@ textarea:disabled {
     padding-left: max(16px, env(safe-area-inset-left, 0px));
     padding-right: max(16px, env(safe-area-inset-right, 0px));
   }
+  .stats-overview-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .stats-dual-col { grid-template-columns: 1fr !important; }
+  /* 舊版 class 保留相容 */
   .stat-cards-row { grid-template-columns: 1fr; }
   .mastery-concept-row { grid-template-columns: 1fr 90px 40px; gap: 8px; }
   .mastery-exposures { display: none; }
