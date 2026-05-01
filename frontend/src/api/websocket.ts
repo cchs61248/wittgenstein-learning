@@ -1,6 +1,17 @@
 import type { ServerMessage, StartSessionMessage, SubmitAnswerMessage } from '../types/messages';
 
 const WS_BASE = 'ws://localhost:8000';
+const CLIENT_ID_KEY = 'wl_client_id';
+
+function getOrCreateClientId(): string {
+  const existing = localStorage.getItem(CLIENT_ID_KEY);
+  if (existing) return existing;
+  const generated = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `cid_${Math.random().toString(36).slice(2, 12)}`;
+  localStorage.setItem(CLIENT_ID_KEY, generated);
+  return generated;
+}
 
 export class LearningWebSocket {
   private ws: WebSocket | null = null;
@@ -9,6 +20,7 @@ export class LearningWebSocket {
   private onMessage: (msg: ServerMessage) => void;
   private onOpen: () => void;
   private onClose: () => void;
+  private clientId: string;
 
   constructor(
     sessionId: string,
@@ -21,13 +33,16 @@ export class LearningWebSocket {
   ) {
     this.sessionId = sessionId;
     this.token = token;
+    this.clientId = getOrCreateClientId();
     this.onMessage = handlers.onMessage;
     this.onOpen = handlers.onOpen ?? (() => {});
     this.onClose = handlers.onClose ?? (() => {});
   }
 
   connect(): void {
-    this.ws = new WebSocket(`${WS_BASE}/ws/${this.sessionId}?token=${this.token}`);
+    this.ws = new WebSocket(
+      `${WS_BASE}/ws/${this.sessionId}?token=${encodeURIComponent(this.token)}&client_id=${encodeURIComponent(this.clientId)}`
+    );
     this.ws.onopen = () => this.onOpen();
     this.ws.onclose = () => this.onClose();
     this.ws.onmessage = (e) => {

@@ -23,6 +23,7 @@ from .files.upload_store import load_upload
 from .utils.text_extractor import extract_text
 from .utils.chunker import build_source_chunks
 from .utils.logger import setup_logging, ws_logger
+from .ws.connection_manager import WebSocketManager
 
 
 @asynccontextmanager
@@ -51,54 +52,6 @@ app.include_router(session_router)
 app.include_router(learner_router)
 
 
-class WebSocketManager:
-    def __init__(self):
-        self._sid_to_ws: dict[str, WebSocket] = {}   # session_id → WebSocket
-        self._uid_to_sid: dict[str, str] = {}          # user_id → 當前 session_id
-
-    async def connect(self, session_id: str, user_id: str, ws: WebSocket) -> None:
-        """接受新連線。
-        同一 session_id 重連（換裝置／視窗）時踢掉舊連線。
-        不同 session_id（如背景新材料生成）直接並存，不影響現有連線。
-        """
-        await ws.accept()
-
-        old_session_id = self._uid_to_sid.get(user_id)
-
-        # 僅在同一 session 重連時才踢掉舊連線（多裝置保護）
-        if old_session_id == session_id:
-            old_ws = self._sid_to_ws.pop(session_id, None)
-            if old_ws:
-                try:
-                    await old_ws.send_text(json.dumps(
-                        {"type": "kicked", "payload": {"message": "你已在其他裝置或視窗登入，此連線已中斷。"}},
-                        ensure_ascii=False,
-                    ))
-                    await old_ws.close(code=4002)
-                except Exception:
-                    pass
-
-        self._sid_to_ws[session_id] = ws
-        self._uid_to_sid[user_id] = session_id
-
-    async def send(self, session_id: str, message: dict) -> None:
-        ws = self._sid_to_ws.get(session_id)
-        if ws:
-            await ws.send_text(json.dumps(message, ensure_ascii=False))
-
-    def disconnect(self, session_id: str, user_id: str, ws: WebSocket) -> None:
-        # 只在 _sid_to_ws 中儲存的 WS 與傳入的 ws 是同一個物件時才移除，
-        # 避免新連線進來後被舊連線的斷線事件誤刪。
-        current = self._sid_to_ws.get(session_id)
-        if current is ws:
-            self._sid_to_ws.pop(session_id, None)
-            if self._uid_to_sid.get(user_id) == session_id:
-                self._uid_to_sid.pop(user_id, None)
-
-    def has_active_ws(self, session_id: str) -> bool:
-        return session_id in self._sid_to_ws
-
-
 ws_manager = WebSocketManager()
 
 
@@ -107,6 +60,7 @@ async def websocket_endpoint(
     websocket: WebSocket,
     session_id: str,
     token: str = Query(...),
+    client_id: str | None = Query(default=None),
 ):
     payload = decode_token(token)
     if not payload:
@@ -116,7 +70,8 @@ async def websocket_endpoint(
     user_id: str = payload["sub"]
     _ws_log = ws_logger()
     _ws_log.info("WS CONNECT  session=%s  user=%s", session_id, user_id)
-    await ws_manager.connect(session_id, user_id, websocket)
+    effective_client_id = client_id or f"legacy-{session_id}"
+    await ws_manager.connect(session_id, user_id, effective_client_id, websocket)
 
     async def emit(msg: dict) -> None:
         try:
@@ -293,7 +248,7 @@ async def websocket_endpoint(
 
     except (WebSocketDisconnect, RuntimeError):
         _ws_log.info("WS DISCONNECT  session=%s  user=%s", session_id, user_id)
-        ws_manager.disconnect(session_id, user_id, websocket)
+        ws_manager.disconnect(session_id, websocket)
         # 只有在此 WS 確實是當前連線（disconnect 後 session 已無 WS）時才清除資源，
         # 避免把後繼裝置的 orchestrator / working memory 一起清掉。
         if not ws_manager.has_active_ws(session_id):

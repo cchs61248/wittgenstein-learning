@@ -327,8 +327,12 @@ export default function App() {
         break;
       case 'kicked':
         wsRef.current?.close();
+        bgWsRef.current?.close();
         wsRef.current = null;
+        bgWsRef.current = null;
         setKickedMessage(msg.payload.message);
+        clearSession();
+        clearAuth();
         break;
       case 'course_completed':
         setPendingCourseComplete(true);
@@ -399,6 +403,13 @@ export default function App() {
             setBgPendingMap(null);
             // 移除樂觀佔位
             setBookshelf((prev) => prev.filter((b) => b.sessionId !== newSid));
+          } else if (msg.type === 'kicked') {
+            wsRef.current?.close();
+            bgWsRef.current?.close();
+            wsRef.current = null;
+            bgWsRef.current = null;
+            clearSession();
+            clearAuth();
           }
         },
         onOpen: () => {
