@@ -106,13 +106,12 @@ export default function App() {
       clearSession();
       return;
     }
+    // 必須在 clearSession 之前讀取，clearSession 會移除 wl_session_id
+    const lastSessionId = localStorage.getItem('wl_session_id');
     setBookshelf([]);
     clearSession(); // 切換帳號前清空舊帳號的 session state
     let cancelled = false;
     setIsSessionLoading(true);
-
-    // 優先載入上次學習的 session，避免 pending_confirmation 的背景 session 強佔畫面
-    const lastSessionId = localStorage.getItem('wl_session_id');
     const getSession = lastSessionId
       ? getSessionDetail(token, lastSessionId).then(s => s ?? getActiveSession(token))
       : getActiveSession(token);
