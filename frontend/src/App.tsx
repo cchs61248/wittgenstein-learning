@@ -370,9 +370,26 @@ export default function App() {
           if (msg.type === 'session_generating') {
             // stub 已建立，樂觀佔位已存在，輪詢會自動追蹤後續狀態
           } else if (msg.type === 'knowledge_map') {
-            setBgPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
+            const kmap = { nodes: msg.payload.nodes, summary: msg.payload.summary };
+            setBgPendingMap(kmap);
             // 此時 session 已在 DB，以真實資料取代樂觀佔位
             listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
+            // 若用戶已主動切換到這個 bg session（點了書本後等待），直接顯示知識地圖
+            if (sessionIdRef.current === newSid) {
+              setPendingMap(kmap);
+              setBgPendingMap(null);
+              const ws = new LearningWebSocket(newSid, token!, {
+                onMessage: handleMessage,
+                onOpen: () => setConnected(true),
+                onClose: () => setConnected(false),
+              });
+              ws.connect();
+              wsRef.current = ws;
+              bgWsRef.current?.close();
+              bgWsRef.current = null;
+              bgSessionIdRef.current = null;
+              setIsWaitingForCurrentGeneration(false);
+            }
           } else if (msg.type === 'session_started') {
             listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
           } else if (msg.type === 'error') {
@@ -492,8 +509,15 @@ export default function App() {
       return;
     }
 
-    // bgSession 仍在生成中（記憶體無地圖）→ 不做任何事
-    if (isBgSession && entry.status === 'generating') return;
+    // bgSession 仍在生成中 → 切換到等待狀態，讓重整後能追蹤；主 WS 斷開，學習繼續由輪詢等待
+    if (isBgSession && entry.status === 'generating') {
+      wsRef.current?.close();
+      clearSession();
+      sessionIdRef.current = entry.sessionId;
+      localStorage.setItem('wl_session_id', entry.sessionId);
+      setIsWaitingForCurrentGeneration(true);
+      return;
+    }
 
     // 一般切換（非 bgSession，或 bgSession 的地圖記憶體遺失但 DB 已完成）
     if (isBgSession) {
@@ -657,20 +681,28 @@ export default function App() {
             </button>
           </div>
           {activePage === 'learn' ? (
-            <>
-              <ExplanationPanel />
-              <AskTutorPanel
-                onAskTutor={handleAskTutor}
-                isCollapsed={isAskTutorCollapsed}
-                onToggle={() => setIsAskTutorCollapsed((v) => !v)}
-                isLoading={isTutorLoading}
-              />
-              <QuestionPanel
-                onSubmit={handleSubmitAnswer}
-                isCollapsed={isQuestionPanelCollapsed}
-                onToggle={() => setIsQuestionPanelCollapsed((v) => !v)}
-              />
-            </>
+            isWaitingForCurrentGeneration ? (
+              <div className="generating-wait-state">
+                <div className="generating-wait-spinner" />
+                <p className="generating-wait-title">AI 正在分析教材</p>
+                <p className="generating-wait-hint">完成後將自動顯示知識地圖，請稍候…</p>
+              </div>
+            ) : (
+              <>
+                <ExplanationPanel />
+                <AskTutorPanel
+                  onAskTutor={handleAskTutor}
+                  isCollapsed={isAskTutorCollapsed}
+                  onToggle={() => setIsAskTutorCollapsed((v) => !v)}
+                  isLoading={isTutorLoading}
+                />
+                <QuestionPanel
+                  onSubmit={handleSubmitAnswer}
+                  isCollapsed={isQuestionPanelCollapsed}
+                  onToggle={() => setIsQuestionPanelCollapsed((v) => !v)}
+                />
+              </>
+            )
           ) : (
             <LearningStatsPage token={token!} />
           )}

@@ -12,7 +12,9 @@ export function ExplanationPanel() {
   const setSelectedStage = useSessionStore((s) => s.setSelectedStage);
 
   const reviewText = selectedStageId !== null ? (stageExplanations[selectedStageId] ?? null) : null;
-  const displayText = reviewText ?? explanationText;
+  // 切換 session 後 explanationText 被清空，但已完成章節的文字仍在 stageExplanations
+  const currentStageStoredText = currentStageId !== null ? (stageExplanations[currentStageId] ?? '') : '';
+  const displayText = reviewText ?? (explanationText || currentStageStoredText);
   const stageIdForDisplay = selectedStageId ?? currentStageId;
   const chunks = stageIdForDisplay !== null ? (stageSourceChunks[stageIdForDisplay] ?? []) : [];
   const refs = Array.from(new Set((displayText.match(/\[([A-Za-z0-9_.:-]+)\]/g) ?? []).map((m) => m.slice(1, -1))));
