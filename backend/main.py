@@ -14,7 +14,7 @@ from .auth.router import router as auth_router
 from .routers.upload import router as upload_router
 from .routers.session import router as session_router
 from .routers.learner import router as learner_router
-from .auth.utils import decode_token
+from .auth.utils import decode_token_active
 from .llm.provider_factory import create_provider
 from .orchestrator.learning_orchestrator import LearningOrchestrator
 from .memory.working_memory import get_working_memory, delete_working_memory
@@ -62,7 +62,7 @@ async def websocket_endpoint(
     token: str = Query(...),
     client_id: str | None = Query(default=None),
 ):
-    payload = decode_token(token)
+    payload = await decode_token_active(token)
     if not payload:
         await websocket.close(code=4001)
         return

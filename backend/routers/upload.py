@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 
-from ..auth.utils import decode_token
+from ..auth.utils import decode_token_active
 from ..files.upload_store import save_upload
 
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -19,7 +19,7 @@ async def upload_file(
 ):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="未授權")
-    if not decode_token(authorization.removeprefix("Bearer ")):
+    if not await decode_token_active(authorization.removeprefix("Bearer ")):
         raise HTTPException(status_code=401, detail="Token 無效")
 
     filename = file.filename or "unknown"

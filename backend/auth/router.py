@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, status
 from ..db.database import get_db
 from .models import UserRegister, UserLogin, TokenOut, UserOut
-from .utils import hash_password, verify_password, create_token
+from .utils import hash_password, verify_password, create_token, decode_token_active
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -17,13 +17,14 @@ async def register(body: UserRegister):
 
     user_id = str(uuid.uuid4())
     pw_hash = hash_password(body.password)
+    session_version = 1
     await db.execute(
-        "INSERT INTO users (user_id, email, password_hash) VALUES (?, ?, ?)",
-        (user_id, body.email, pw_hash),
+        "INSERT INTO users (user_id, email, password_hash, session_version) VALUES (?, ?, ?, ?)",
+        (user_id, body.email, pw_hash, session_version),
     )
     await db.commit()
 
-    token = create_token(user_id, body.email)
+    token = create_token(user_id, body.email, session_version=session_version)
     return TokenOut(access_token=token, user_id=user_id, email=body.email)
 
 
@@ -39,14 +40,21 @@ async def login(body: UserLogin):
     if not row or not verify_password(body.password, row[1]):
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
 
-    token = create_token(row[0], body.email)
+    await db.execute(
+        "UPDATE users SET session_version = session_version + 1 WHERE user_id = ?",
+        (row[0],),
+    )
+    await db.commit()
+    async with db.execute("SELECT session_version FROM users WHERE user_id = ?", (row[0],)) as cur:
+        sv_row = await cur.fetchone()
+    session_version = int(sv_row[0]) if sv_row else 1
+    token = create_token(row[0], body.email, session_version=session_version)
     return TokenOut(access_token=token, user_id=row[0], email=body.email)
 
 
 @router.get("/me", response_model=UserOut)
 async def me(token: str):
-    from .utils import decode_token
-    payload = decode_token(token)
+    payload = await decode_token_active(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token 無效")
     return UserOut(user_id=payload["sub"], email=payload["email"])

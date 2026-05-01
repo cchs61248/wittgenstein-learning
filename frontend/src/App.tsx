@@ -8,6 +8,7 @@ import { QuestionPanel } from './components/QuestionPanel';
 import { AskTutorPanel } from './components/AskTutorPanel';
 import { LearningWebSocket } from './api/websocket';
 import { getActiveSession, listSessions, getSessionDetail, renameSession, deleteSession } from './api/session';
+import { verifyAuth } from './api/auth';
 import type { BookEntry } from './api/session';
 import type { ServerMessage, ProviderType, DepthType } from './types/messages';
 import { LearningStatsPage } from './components/LearningStatsPage';
@@ -174,6 +175,28 @@ export default function App() {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  // 週期驗證 token：若其他裝置重新登入造成 token 失效，這端自動回登入頁
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    const runCheck = async () => {
+      const ok = await verifyAuth(token);
+      if (cancelled || ok) return;
+      wsRef.current?.close();
+      bgWsRef.current?.close();
+      wsRef.current = null;
+      bgWsRef.current = null;
+      clearSession();
+      clearAuth();
+    };
+    runCheck();
+    const timer = setInterval(runCheck, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [token, clearAuth, clearSession]);
 
   // 書櫃有「生成中」項目時輪詢，頁面重整後也能自動追蹤狀態轉換
   const hasGenerating = bookshelf.some(b => b.status === 'generating');

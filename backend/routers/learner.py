@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
-from ..auth.utils import decode_token
+from ..auth.utils import decode_token_active
 from ..memory import longterm_memory
 
 router = APIRouter(prefix="/learner", tags=["learner"])
@@ -7,7 +7,7 @@ router = APIRouter(prefix="/learner", tags=["learner"])
 
 @router.get("/stats")
 async def get_learner_stats(token: str = Query(...)):
-    payload = decode_token(token)
+    payload = await decode_token_active(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token 無效")
 

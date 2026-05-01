@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from ..auth.utils import decode_token
+from ..auth.utils import decode_token_active
 from ..memory import session_memory
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 @router.get("/active")
 async def get_active_session(token: str = Query(...)):
-    payload = decode_token(token)
+    payload = await decode_token_active(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token 無效")
 
@@ -59,7 +59,7 @@ async def get_active_session(token: str = Query(...)):
 
 @router.get("/list")
 async def list_sessions(token: str = Query(...)):
-    payload = decode_token(token)
+    payload = await decode_token_active(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token 無效")
     sessions = await session_memory.get_user_sessions(payload["sub"])
@@ -68,7 +68,7 @@ async def list_sessions(token: str = Query(...)):
 
 @router.get("/{session_id}")
 async def get_session_detail(session_id: str, token: str = Query(...)):
-    payload = decode_token(token)
+    payload = await decode_token_active(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token 無效")
     session = await session_memory.get_session(session_id)
@@ -122,7 +122,7 @@ class TitleUpdate(BaseModel):
 
 @router.patch("/{session_id}/title")
 async def update_title(session_id: str, body: TitleUpdate, token: str = Query(...)):
-    payload = decode_token(token)
+    payload = await decode_token_active(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token 無效")
     if not body.title.strip():
@@ -133,7 +133,7 @@ async def update_title(session_id: str, body: TitleUpdate, token: str = Query(..
 
 @router.delete("/{session_id}")
 async def delete_session_endpoint(session_id: str, token: str = Query(...)):
-    payload = decode_token(token)
+    payload = await decode_token_active(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Token 無效")
     ok = await session_memory.delete_session(session_id, payload["sub"])

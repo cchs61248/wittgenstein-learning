@@ -31,3 +31,12 @@ export async function login(email: string, password: string): Promise<AuthRespon
   }
   return res.json();
 }
+
+export async function verifyAuth(token: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/auth/me?token=${encodeURIComponent(token)}`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

@@ -108,6 +108,13 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
+    # Migration 011：users 加入 session_version，支援單一裝置登入
+    try:
+        await _connection.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
+        await _connection.commit()
+    except Exception:
+        pass
+
     # Migration 006：建立決策歷史表（跨裝置恢復教練趨勢）
     await _connection.execute(
         """CREATE TABLE IF NOT EXISTS decision_records (
