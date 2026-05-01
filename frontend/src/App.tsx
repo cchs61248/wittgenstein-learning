@@ -183,6 +183,8 @@ export default function App() {
     const runCheck = async () => {
       const ok = await verifyAuth(token);
       if (cancelled || ok) return;
+      const logoutMessage = '你已在其他裝置登入，此裝置已登出。';
+      setKickedMessage(logoutMessage);
       wsRef.current?.close();
       bgWsRef.current?.close();
       wsRef.current = null;
@@ -622,8 +624,31 @@ export default function App() {
     );
   };
 
+  const kickedModal = kickedMessage ? (
+    <div className="modal-overlay kicked-overlay">
+      <div className="modal-card kicked-card">
+        <h2>連線已中斷</h2>
+        <p>{kickedMessage}</p>
+        <button
+          className="btn-primary btn-large"
+          onClick={() => {
+            setKickedMessage(null);
+            clearAuth();
+          }}
+        >
+          前往登入頁面
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   if (!token) {
-    return <AuthForm />;
+    return (
+      <>
+        <AuthForm />
+        {kickedModal}
+      </>
+    );
   }
 
   if (isSessionLoading) {
@@ -762,23 +787,7 @@ export default function App() {
         />
       )}
 
-      {kickedMessage && (
-        <div className="modal-overlay kicked-overlay">
-          <div className="modal-card kicked-card">
-            <h2>連線已中斷</h2>
-            <p>{kickedMessage}</p>
-            <button
-              className="btn-primary btn-large"
-              onClick={() => {
-                setKickedMessage(null);
-                clearAuth();
-              }}
-            >
-              前往登入頁面
-            </button>
-          </div>
-        </div>
-      )}
+      {kickedModal}
     </div>
   );
 }
