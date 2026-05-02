@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSessionStore } from './store/sessionStore';
 import { AuthForm } from './components/AuthForm';
 import { UploadModal } from './components/UploadModal';
@@ -7,33 +7,30 @@ import { ExplanationPanel } from './components/ExplanationPanel';
 import { QuestionPanel } from './components/QuestionPanel';
 import { AskTutorPanel } from './components/AskTutorPanel';
 import { LearningWebSocket } from './api/websocket';
-import { getActiveSession, listSessions, getSessionDetail, renameSession, deleteSession } from './api/session';
+import {
+  getActiveSession,
+  listSessions,
+  getSessionDetail,
+  renameSession,
+  deleteSession,
+  syntheticGeneratingSession,
+} from './api/session';
 import { verifyAuth } from './api/auth';
 import type { BookEntry } from './api/session';
 import type { ServerMessage, ProviderType, DepthType } from './types/messages';
 import { LearningStatsPage } from './components/LearningStatsPage';
 import { BookshelfPanel } from './components/BookshelfPanel';
 import './App.css';
+import {
+  getSessionLayoutPrefs,
+  patchSessionLayoutPrefs,
+  removeSessionLayoutPrefs,
+  readInitialChromeFromStorage,
+} from './utils/sessionLayoutPrefs';
+import { reconcileBookshelf, prependBookToBookshelf, saveBookOrder } from './utils/bookshelfOrder';
 
 function generateSessionId() {
   return 'sess_' + Math.random().toString(36).slice(2, 11);
-}
-
-// 穩定合併書櫃：既有項目保持原位，只把真正新的推到最上面
-function mergeBookshelf(existing: BookEntry[], fresh: BookEntry[]): BookEntry[] {
-  const freshMap = new Map(fresh.map(e => [e.sessionId, e]));
-  const existingIds = new Set(existing.map(e => e.sessionId));
-  const newItems = fresh.filter(e => !existingIds.has(e.sessionId));
-  const updatedExisting = existing
-    .filter(e => freshMap.has(e.sessionId) || e.status === 'generating')
-    .map(e => {
-      const freshEntry = freshMap.get(e.sessionId);
-      if (!freshEntry) return e; // 仍在生成中，DB 尚無記錄
-      // generating 期間保留本地描述性標題，避免被 DB stub 的占位標題覆蓋
-      if (freshEntry.status === 'generating') return { ...freshEntry, title: e.title };
-      return freshEntry;
-    });
-  return [...newItems, ...updatedExisting];
 }
 
 export default function App() {
@@ -72,10 +69,14 @@ export default function App() {
   const [bookshelf, setBookshelf] = useState<BookEntry[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [kickedMessage, setKickedMessage] = useState<string | null>(null);
-  const [activePage, setActivePage] = useState<'learn' | 'stats'>('learn');
-  const [isStageSidebarCollapsed, setIsStageSidebarCollapsed] = useState(false);
-  const [isAskTutorCollapsed, setIsAskTutorCollapsed] = useState(false);
-  const [isQuestionPanelCollapsed, setIsQuestionPanelCollapsed] = useState(false);
+  const [activePage, setActivePage] = useState<'learn' | 'stats'>(() => readInitialChromeFromStorage().activePage);
+  const [isStageSidebarCollapsed, setIsStageSidebarCollapsed] = useState(
+    () => readInitialChromeFromStorage().stageSidebarCollapsed
+  );
+  const [isAskTutorCollapsed, setIsAskTutorCollapsed] = useState(() => readInitialChromeFromStorage().askTutorCollapsed);
+  const [isQuestionPanelCollapsed, setIsQuestionPanelCollapsed] = useState(
+    () => readInitialChromeFromStorage().questionCollapsed
+  );
   const [isSessionLoading, setIsSessionLoading] = useState(false);
   const [isWaitingForCurrentGeneration, setIsWaitingForCurrentGeneration] = useState(false);
   const [bgPendingMap, setBgPendingMap] = useState<{
@@ -92,12 +93,115 @@ export default function App() {
   const bgModelRef = useRef<string | undefined>(undefined);
   const stagesRef = useRef(stages);
   stagesRef.current = stages;
+  const explanationScrollRef = useRef<HTMLDivElement | null>(null);
+  const statsScrollRef = useRef<HTMLDivElement | null>(null);
+  const storeSessionId = useSessionStore((s) => s.sessionId);
+  const selectedStageId = useSessionStore((s) => s.selectedStageId);
+
+  /** 不含捲動位置，避免與捲動還原 effect 競態覆寫已存捲動 */
+  const persistChromeLayoutForSession = useCallback(
+    (sid: string | null) => {
+      if (!sid) return;
+      patchSessionLayoutPrefs(sid, {
+        askTutorCollapsed: isAskTutorCollapsed,
+        questionCollapsed: isQuestionPanelCollapsed,
+        stageSidebarCollapsed: isStageSidebarCollapsed,
+        activePage,
+        selectedStageId: useSessionStore.getState().selectedStageId,
+      });
+    },
+    [isAskTutorCollapsed, isQuestionPanelCollapsed, isStageSidebarCollapsed, activePage]
+  );
+
+  const persistLayoutForSession = useCallback((sid: string | null) => {
+    if (!sid) return;
+    patchSessionLayoutPrefs(sid, {
+      askTutorCollapsed: isAskTutorCollapsed,
+      questionCollapsed: isQuestionPanelCollapsed,
+      learnScrollTop: explanationScrollRef.current?.scrollTop,
+      statsScrollTop: statsScrollRef.current?.scrollTop,
+      stageSidebarCollapsed: isStageSidebarCollapsed,
+      activePage,
+      selectedStageId: useSessionStore.getState().selectedStageId,
+    });
+  }, [isAskTutorCollapsed, isQuestionPanelCollapsed, isStageSidebarCollapsed, activePage]);
+
+  const applyLayoutForSession = useCallback((sid: string | null) => {
+    if (!sid) return;
+    const p = getSessionLayoutPrefs(sid);
+    setIsAskTutorCollapsed(p?.askTutorCollapsed ?? false);
+    setIsQuestionPanelCollapsed(p?.questionCollapsed ?? false);
+    setIsStageSidebarCollapsed(
+      p?.stageSidebarCollapsed !== undefined
+        ? p.stageSidebarCollapsed
+        : window.matchMedia('(max-width: 768px)').matches
+    );
+    setActivePage(p?.activePage === 'stats' ? 'stats' : 'learn');
+    useSessionStore.getState().setSelectedStage(p?.selectedStageId ?? null);
+  }, []);
+
+  useEffect(() => {
+    if (!storeSessionId || isSessionLoading) return;
+    persistChromeLayoutForSession(storeSessionId);
+  }, [
+    storeSessionId,
+    selectedStageId,
+    isAskTutorCollapsed,
+    isQuestionPanelCollapsed,
+    isStageSidebarCollapsed,
+    activePage,
+    isSessionLoading,
+    persistChromeLayoutForSession,
+  ]);
+
+  useEffect(() => {
+    if (!storeSessionId || activePage !== 'learn') return;
+    if (isWaitingForCurrentGeneration) return;
+    const top = getSessionLayoutPrefs(storeSessionId)?.learnScrollTop ?? 0;
+    const id = requestAnimationFrame(() => {
+      if (explanationScrollRef.current) explanationScrollRef.current.scrollTop = top;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [
+    storeSessionId,
+    activePage,
+    isExplanationLoading,
+    isWaitingForCurrentGeneration,
+    stages.length,
+    isSessionLoading,
+  ]);
+
+  useEffect(() => {
+    if (!storeSessionId || activePage !== 'learn' || isWaitingForCurrentGeneration) return;
+    const el = explanationScrollRef.current;
+    if (!el) return;
+    let tid: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      clearTimeout(tid);
+      tid = setTimeout(() => {
+        patchSessionLayoutPrefs(storeSessionId, { learnScrollTop: el.scrollTop });
+      }, 200);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      clearTimeout(tid);
+    };
+  }, [storeSessionId, activePage, isExplanationLoading, isWaitingForCurrentGeneration]);
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 768px)');
-    const applyDefault = (matches: boolean) => setIsStageSidebarCollapsed(matches);
-    applyDefault(media.matches);
-    const onChange = (e: MediaQueryListEvent) => applyDefault(e.matches);
+    const onChange = (e: MediaQueryListEvent) => {
+      const sid = useSessionStore.getState().sessionId;
+      if (!sid) {
+        setIsStageSidebarCollapsed(e.matches);
+        return;
+      }
+      const p = getSessionLayoutPrefs(sid);
+      if (p?.stageSidebarCollapsed === undefined) {
+        setIsStageSidebarCollapsed(e.matches);
+      }
+    };
     media.addEventListener('change', onChange);
     return () => media.removeEventListener('change', onChange);
   }, []);
@@ -115,21 +219,35 @@ export default function App() {
     clearSession(); // 切換帳號前清空舊帳號的 session state
     let cancelled = false;
     setIsSessionLoading(true);
-    const getSession = lastSessionId
-      ? getSessionDetail(token, lastSessionId).then(s => s ?? getActiveSession(token))
-      : getActiveSession(token);
 
-    Promise.all([getSession, listSessions(token)]).then(([session, books]) => {
+    Promise.all([
+      lastSessionId ? getSessionDetail(token, lastSessionId) : Promise.resolve(null),
+      listSessions(token),
+    ]).then(async ([detail, books]) => {
+      if (cancelled) return;
+      let session = detail;
+      if (!session && lastSessionId) {
+        const entry = books.find((b) => b.sessionId === lastSessionId && b.status === 'generating');
+        if (entry) {
+          session = syntheticGeneratingSession(lastSessionId);
+        }
+      }
+      if (!session) {
+        session = await getActiveSession(token);
+      }
+
       if (cancelled) return;
       setIsSessionLoading(false);
-      setBookshelf(books);
+      setBookshelf(reconcileBookshelf([], books));
       if (!session) {
         const generatingEntry = books.find((b) => b.status === 'generating');
         if (generatingEntry) {
           sessionIdRef.current = generatingEntry.sessionId;
           localStorage.setItem('wl_session_id', generatingEntry.sessionId);
+          useSessionStore.setState({ sessionId: generatingEntry.sessionId, stages: [], currentStageId: null });
           setIsWaitingForCurrentGeneration(true);
           setShowUpload(false);
+          applyLayoutForSession(generatingEntry.sessionId);
           return;
         }
         setShowUpload(true);
@@ -144,9 +262,12 @@ export default function App() {
 
       if (session.status === 'generating') {
         // ContentSplitter 仍在執行，輪詢會偵測轉換；isWaitingForCurrentGeneration 觸發自動顯示地圖
+        useSessionStore.setState({ sessionId: savedSessionId, stages: [], currentStageId: null });
         setIsWaitingForCurrentGeneration(true);
+        applyLayoutForSession(savedSessionId);
       } else if (session.status === 'pending_confirmation' && session.pending_map) {
         // 知識地圖已生成但用戶尚未確認，直接顯示地圖讓用戶確認
+        useSessionStore.setState({ sessionId: savedSessionId, stages: [], currentStageId: null });
         setPendingMap(session.pending_map);
         // 建立 WebSocket 連線，等待用戶確認後發送 confirm_map
         const ws = new LearningWebSocket(savedSessionId, token, {
@@ -156,10 +277,12 @@ export default function App() {
         });
         ws.connect();
         wsRef.current = ws;
+        applyLayoutForSession(savedSessionId);
       } else {
         // 先從 REST 回應預填 stages，讓新裝置立即看到進度，不卡在空白畫面
         setSession(savedSessionId, session.stages, session.stage_statuses);
         useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
+        applyLayoutForSession(savedSessionId);
 
         // 正常恢復進行中的學習
         const ws = new LearningWebSocket(savedSessionId, token, {
@@ -217,7 +340,7 @@ export default function App() {
     if (!hasGenerating || !token) return;
     const id = setInterval(() => {
       listSessions(token).then(fresh =>
-        setBookshelf(prev => mergeBookshelf(prev, fresh))
+        setBookshelf(prev => reconcileBookshelf(prev, fresh))
       );
     }, 5000);
     return () => clearInterval(id);
@@ -262,27 +385,27 @@ export default function App() {
           setIsWaitingForCurrentGeneration(true);
         }
         // 前景模式：stub 已建立，若書櫃中尚無此項目（例如使用者直接發送 start_session）則補上
-        setBookshelf(prev => {
+        setBookshelf((prev) => {
           const sid = msg.payload.session_id;
-          if (prev.some(b => b.sessionId === sid)) return prev;
-          return [{
+          if (prev.some((b) => b.sessionId === sid)) return prev;
+          return prependBookToBookshelf(prev, {
             sessionId: sid,
             title: '生成中…',
             status: 'generating' as const,
             totalStages: 0,
             completedStages: 0,
             updatedAt: null,
-          }, ...prev];
+          });
         });
         break;
       case 'knowledge_map':
         setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
-        listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
+        listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
       case 'session_started':
         setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
         useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
-        listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
+        listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
       case 'explanation_chunk': {
         const st = useSessionStore.getState();
@@ -445,7 +568,7 @@ export default function App() {
             const kmap = { nodes: msg.payload.nodes, summary: msg.payload.summary };
             setBgPendingMap(kmap);
             // 此時 session 已在 DB，以真實資料取代樂觀佔位
-            listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
+            listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
             // 若用戶已主動切換到這個 bg session（點了書本後等待），直接顯示知識地圖
             if (sessionIdRef.current === newSid) {
               setPendingMap(kmap);
@@ -463,14 +586,18 @@ export default function App() {
               setIsWaitingForCurrentGeneration(false);
             }
           } else if (msg.type === 'session_started') {
-            listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
+            listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
           } else if (msg.type === 'error') {
             bgWsRef.current?.close();
             bgWsRef.current = null;
             bgSessionIdRef.current = null;
             setBgPendingMap(null);
             // 移除樂觀佔位
-            setBookshelf((prev) => prev.filter((b) => b.sessionId !== newSid));
+            setBookshelf((prev) => {
+              const n = prev.filter((b) => b.sessionId !== newSid);
+              saveBookOrder(n);
+              return n;
+            });
           } else if (msg.type === 'kicked') {
             wsRef.current?.close();
             bgWsRef.current?.close();
@@ -492,17 +619,16 @@ export default function App() {
       bgWsRef.current = bgWs;
 
       // 立刻樂觀新增書本到最前面，讓使用者知道材料正在生成，不等 DB
-      setBookshelf((prev) => [
-        {
+      setBookshelf((prev) =>
+        prependBookToBookshelf(prev, {
           sessionId: newSid,
           title: '新材料生成中…',
           status: 'generating' as const,
           totalStages: 0,
           completedStages: 0,
           updatedAt: null,
-        },
-        ...prev,
-      ]);
+        })
+      );
       setShowUpload(false);
       return;
     }
@@ -511,6 +637,7 @@ export default function App() {
     activeProviderRef.current = provider;
     activeModelRef.current = model || undefined;
 
+    persistLayoutForSession(sessionIdRef.current);
     wsRef.current?.close();
     clearSession();
     const newSid = generateSessionId();
@@ -533,7 +660,7 @@ export default function App() {
     ws.connect();
     wsRef.current = ws;
     setShowUpload(false);
-    listSessions(token).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
+    listSessions(token).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
   };
 
   const handleSubmitAnswer = (questionId: string, answer: string) => {
@@ -559,6 +686,7 @@ export default function App() {
 
   const handleSwitchSession = async (entry: BookEntry) => {
     if (entry.sessionId === sessionIdRef.current) return;
+    persistLayoutForSession(sessionIdRef.current);
     setIsWaitingForCurrentGeneration(false);
 
     const isBgSession = entry.sessionId === bgSessionIdRef.current;
@@ -578,6 +706,7 @@ export default function App() {
       activeModelRef.current = bgModelRef.current;
       sessionIdRef.current = sid;
       localStorage.setItem('wl_session_id', sid);
+      useSessionStore.setState({ sessionId: sid, stages: [], currentStageId: null });
       setPendingMap(pendingMapData);
       const ws = new LearningWebSocket(sid, token!, {
         onMessage: handleMessage,
@@ -586,6 +715,7 @@ export default function App() {
       });
       ws.connect();
       wsRef.current = ws;
+      applyLayoutForSession(sid);
       return;
     }
 
@@ -595,7 +725,9 @@ export default function App() {
       clearSession();
       sessionIdRef.current = entry.sessionId;
       localStorage.setItem('wl_session_id', entry.sessionId);
+      useSessionStore.setState({ sessionId: entry.sessionId, stages: [], currentStageId: null });
       setIsWaitingForCurrentGeneration(true);
+      applyLayoutForSession(entry.sessionId);
       return;
     }
 
@@ -609,7 +741,10 @@ export default function App() {
 
     wsRef.current?.close();
     clearSession();
-    const session = await getSessionDetail(token!, entry.sessionId);
+    let session = await getSessionDetail(token!, entry.sessionId);
+    if (!session && entry.status === 'generating') {
+      session = syntheticGeneratingSession(entry.sessionId);
+    }
     if (!session) return;
 
     const sid = session.session_id;
@@ -618,7 +753,15 @@ export default function App() {
     sessionIdRef.current = sid;
     localStorage.setItem('wl_session_id', sid);
 
+    if (session.status === 'generating') {
+      useSessionStore.setState({ sessionId: sid, stages: [], currentStageId: null });
+      setIsWaitingForCurrentGeneration(true);
+      applyLayoutForSession(sid);
+      return;
+    }
+
     if (session.status === 'pending_confirmation' && session.pending_map) {
+      useSessionStore.setState({ sessionId: sid, stages: [], currentStageId: null });
       setPendingMap(session.pending_map);
       const ws = new LearningWebSocket(sid, token!, {
         onMessage: handleMessage,
@@ -627,6 +770,7 @@ export default function App() {
       });
       ws.connect();
       wsRef.current = ws;
+      applyLayoutForSession(sid);
     } else {
       setSession(sid, session.stages, session.stage_statuses);
       useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
@@ -643,6 +787,7 @@ export default function App() {
       });
       ws.connect();
       wsRef.current = ws;
+      applyLayoutForSession(sid);
     }
   };
 
@@ -654,7 +799,12 @@ export default function App() {
       setBgPendingMap(null);
     }
     await deleteSession(token!, sessionId);
-    setBookshelf((prev) => prev.filter((b) => b.sessionId !== sessionId));
+    removeSessionLayoutPrefs(sessionId);
+    setBookshelf((prev) => {
+      const n = prev.filter((b) => b.sessionId !== sessionId);
+      saveBookOrder(n);
+      return n;
+    });
     if (sessionId === sessionIdRef.current) {
       wsRef.current?.close();
       clearSession();
@@ -748,7 +898,7 @@ export default function App() {
             <div id="stage-map-panel" className="stage-map-panel-inner">
               <BookshelfPanel
                 books={bookshelf}
-                activeSessionId={sessionIdRef.current}
+                activeSessionId={storeSessionId}
                 onSwitch={handleSwitchSession}
                 onNewMaterial={() => setShowUpload(true)}
                 disableNewMaterial={hasGenerating}
@@ -795,7 +945,12 @@ export default function App() {
             ) : (
               <>
                 {isExplanationLoading ? (
-                  <div className="explanation-panel explanation-panel-loading" role="status" aria-live="polite">
+                  <div
+                    ref={explanationScrollRef}
+                    className="explanation-panel explanation-panel-loading"
+                    role="status"
+                    aria-live="polite"
+                  >
                     <div className="explanation-panel-loading-inner">
                       <div className="generating-wait-spinner" />
                       <p className="generating-wait-title">AI 正在生成本章講解</p>
@@ -803,7 +958,7 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <ExplanationPanel />
+                  <ExplanationPanel ref={explanationScrollRef} />
                 )}
                 <AskTutorPanel
                   onAskTutor={handleAskTutor}
@@ -819,7 +974,7 @@ export default function App() {
               </>
             )
           ) : (
-            <LearningStatsPage token={token!} />
+            <LearningStatsPage ref={statsScrollRef} token={token!} sessionId={storeSessionId} />
           )}
         </main>
       </div>

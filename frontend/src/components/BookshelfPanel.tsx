@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { BookEntry } from '../api/session';
 import { StageMap } from './StageMap';
+import { getSessionLayoutPrefs, patchSessionLayoutPrefs } from '../utils/sessionLayoutPrefs';
 
 interface BookshelfPanelProps {
   books: BookEntry[];
@@ -193,16 +194,84 @@ export function BookshelfPanel({
 }: BookshelfPanelProps) {
   const [view, setView] = useState<'list' | 'map'>('list');
   const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
+  const mapScrollRef = useRef<HTMLDivElement | null>(null);
+  const lastHydratedSession = useRef<string | null>(null);
 
   const viewingBook = viewingSessionId
     ? books.find((b) => b.sessionId === viewingSessionId) ?? null
     : null;
 
+  // 依目前前景 session 還原：是否在「章節列表」內（重整後不跳回書櫃總覽）
+  useEffect(() => {
+    if (!activeSessionId) {
+      setView('list');
+      setViewingSessionId(null);
+      lastHydratedSession.current = null;
+      return;
+    }
+    if (lastHydratedSession.current === activeSessionId) return;
+    lastHydratedSession.current = activeSessionId;
+    const p = getSessionLayoutPrefs(activeSessionId);
+    if (p?.bookshelfPanelView === 'map') {
+      setView('map');
+      setViewingSessionId(activeSessionId);
+    } else {
+      setView('list');
+      setViewingSessionId(null);
+    }
+  }, [activeSessionId]);
+
+  // 書本被刪除時若仍停在 map，退回列表
+  useEffect(() => {
+    if (view !== 'map' || !viewingSessionId) return;
+    if (!books.some((b) => b.sessionId === viewingSessionId)) {
+      setView('list');
+      setViewingSessionId(null);
+    }
+  }, [books, view, viewingSessionId]);
+
+  useEffect(() => {
+    if (view !== 'map' || !activeSessionId) return;
+    const el = mapScrollRef.current;
+    if (!el) return;
+    const top = getSessionLayoutPrefs(activeSessionId)?.bookshelfMapScrollTop ?? 0;
+    const id = requestAnimationFrame(() => {
+      if (mapScrollRef.current) mapScrollRef.current.scrollTop = top;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [view, activeSessionId, viewingSessionId, books.length]);
+
+  useEffect(() => {
+    if (view !== 'map' || !activeSessionId) return;
+    const el = mapScrollRef.current;
+    if (!el) return;
+    let tid: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      clearTimeout(tid);
+      tid = setTimeout(() => {
+        patchSessionLayoutPrefs(activeSessionId, { bookshelfMapScrollTop: el.scrollTop });
+      }, 200);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      clearTimeout(tid);
+    };
+  }, [view, activeSessionId]);
+
   const handleBookSelect = (entry: BookEntry) => {
     if (entry.status === 'generating') return;
+    patchSessionLayoutPrefs(entry.sessionId, { bookshelfPanelView: 'map' });
     setViewingSessionId(entry.sessionId);
     setView('map');
     onSwitch(entry);
+  };
+
+  const handleBackToList = () => {
+    const sid = viewingSessionId ?? activeSessionId;
+    if (sid) patchSessionLayoutPrefs(sid, { bookshelfPanelView: 'list' });
+    setView('list');
+    setViewingSessionId(null);
   };
 
   if (view === 'map') {
@@ -211,7 +280,7 @@ export function BookshelfPanel({
         <div className="bookshelf-map-header">
           <button
             className="bookshelf-back-btn"
-            onClick={() => setView('list')}
+            onClick={handleBackToList}
             aria-label="返回書櫃列表"
           >
             ← 書櫃
@@ -222,7 +291,7 @@ export function BookshelfPanel({
             </span>
           )}
         </div>
-        <div className="bookshelf-map-body">
+        <div ref={mapScrollRef} className="bookshelf-map-body">
           <StageMap hideHeading />
         </div>
       </div>

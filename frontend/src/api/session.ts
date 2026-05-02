@@ -94,3 +94,16 @@ export async function deleteSession(token: string, sessionId: string): Promise<b
     return false;
   }
 }
+
+/** REST 尚未寫入 stages 時，仍可用此物件代表「生成中」session（避免誤用 getActiveSession） */
+export function syntheticGeneratingSession(sessionId: string): ActiveSession {
+  return {
+    session_id: sessionId,
+    status: 'generating',
+    stages: [],
+    current_stage_id: 0,
+    total_stages: 0,
+    provider: null,
+    model: null,
+  };
+}

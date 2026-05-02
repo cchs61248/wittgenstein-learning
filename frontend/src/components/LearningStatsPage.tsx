@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, forwardRef, useCallback, useRef, type MutableRefObject } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar,
 } from 'recharts';
 import { useSessionStore } from '../store/sessionStore';
 import { fetchLearnerStats, type LearnerStats } from '../api/learner';
+import { getSessionLayoutPrefs, patchSessionLayoutPrefs } from '../utils/sessionLayoutPrefs';
 
 // ── Design tokens（對應 App.css CSS 變數）──────────────────────────────────
 const C = {
@@ -120,10 +121,21 @@ function ColorDot({ color }: { color: string }) {
 }
 
 // ── 主元件 ─────────────────────────────────────────────────────────────────
-export function LearningStatsPage({ token }: { token: string }) {
+export const LearningStatsPage = forwardRef<HTMLDivElement, { token: string; sessionId: string | null }>(
+  function LearningStatsPage({ token, sessionId }, ref) {
   const { stages, stageQaHistories, decisionHistory } = useSessionStore();
   const [stats, setStats] = useState<LearnerStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const rootElRef = useRef<HTMLDivElement | null>(null);
+
+  const setRootRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      rootElRef.current = node;
+      if (typeof ref === 'function') ref(node);
+      else if (ref) (ref as MutableRefObject<HTMLDivElement | null>).current = node;
+    },
+    [ref]
+  );
 
   useEffect(() => {
     fetchLearnerStats(token).then((data) => {
@@ -131,6 +143,35 @@ export function LearningStatsPage({ token }: { token: string }) {
       setIsLoading(false);
     });
   }, [token]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const el = rootElRef.current;
+    if (!el) return;
+    const top = getSessionLayoutPrefs(sessionId)?.statsScrollTop ?? 0;
+    const id = requestAnimationFrame(() => {
+      if (rootElRef.current) rootElRef.current.scrollTop = top;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [sessionId, isLoading, stats, stages.length, decisionHistory.length]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const el = rootElRef.current;
+    if (!el) return;
+    let tid: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      clearTimeout(tid);
+      tid = setTimeout(() => {
+        patchSessionLayoutPrefs(sessionId, { statsScrollTop: el.scrollTop });
+      }, 200);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      clearTimeout(tid);
+    };
+  }, [sessionId, isLoading]);
 
   // ── 派生資料 ─────────────────────────────────────────────────────────────
   const completedCount = stages.filter((s) => s.status === 'completed').length;
@@ -200,7 +241,7 @@ export function LearningStatsPage({ token }: { token: string }) {
   const hasAnyData = stages.length > 0 || (stats && stats.concepts.length > 0) || decisionHistory.length > 0;
   if (!isLoading && !hasAnyData) {
     return (
-      <div className="stats-page">
+      <div ref={setRootRef} className="stats-page">
         <div className="stats-empty-guide">
           <p>上傳學習材料並開始學習後，這裡會顯示你的概念掌握度、答題成效與決策記錄。</p>
         </div>
@@ -209,7 +250,7 @@ export function LearningStatsPage({ token }: { token: string }) {
   }
 
   return (
-    <div className="stats-page">
+    <div ref={setRootRef} className="stats-page">
 
       {/* ── Section 1：四格總覽 ──────────────────────────────────────────── */}
       <div className="stats-overview-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
@@ -542,4 +583,4 @@ export function LearningStatsPage({ token }: { token: string }) {
 
     </div>
   );
-}
+});

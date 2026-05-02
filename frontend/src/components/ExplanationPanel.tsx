@@ -1,8 +1,9 @@
+import { forwardRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSessionStore } from '../store/sessionStore';
 
-export function ExplanationPanel() {
+export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationPanel(_props, ref) {
   const explanationText = useSessionStore((s) => s.explanationText);
   const isStreaming = useSessionStore((s) => s.isStreaming);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
@@ -24,7 +25,7 @@ export function ExplanationPanel() {
 
   if (!displayText && !isStreaming) {
     return (
-      <div className="explanation-panel empty">
+      <div ref={ref} className="explanation-panel empty">
         <div className="empty-ornament" aria-hidden="true" />
         <p className="empty-lead">等待學習開始</p>
         <p className="empty-hint">上傳材料後，講解與提問會依序出現在這裡</p>
@@ -33,7 +34,7 @@ export function ExplanationPanel() {
   }
 
   return (
-    <div className="explanation-panel">
+    <div ref={ref} className="explanation-panel">
       {reviewText !== null && (
         <div className="review-banner">
           <span>回顧模式</span>
@@ -61,4 +62,4 @@ export function ExplanationPanel() {
       )}
     </div>
   );
-}
+});
