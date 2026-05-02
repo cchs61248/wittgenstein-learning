@@ -26,6 +26,36 @@ WSEmitter = Callable[[dict], Awaitable[None]]
 
 _log = logging.getLogger("wl.orchestrator")
 
+# 持久化用分隔符：僅存於 DB，不應出現在 WS／前端顯示字串中
+_EXPL_PERSIST_SEP = "\n<<WL_EXPL_BODY>>\n"
+
+
+def _pack_persisted_explanation(progress_md: str, teacher_body: str) -> str:
+    return progress_md + _EXPL_PERSIST_SEP + teacher_body
+
+
+def _persisted_progress_teacher_parts(stored: str) -> tuple[str | None, str]:
+    """(progress_md, teacher_body)；progress_md 為 None 表示舊版單欄位（整段當作教師區塊還原）。"""
+    if _EXPL_PERSIST_SEP in stored:
+        prog, teacher = stored.split(_EXPL_PERSIST_SEP, 1)
+        return prog, teacher
+    return None, stored
+
+
+def _markdown_for_client_from_persisted(stored: str, progress_fallback: str) -> str:
+    prog, teacher = _persisted_progress_teacher_parts(stored)
+    if prog is None:
+        return (progress_fallback + teacher).rstrip() if teacher else progress_fallback.rstrip()
+    body = teacher.strip()
+    if body:
+        return prog.rstrip() + "\n\n" + body
+    return prog.rstrip()
+
+
+def _teacher_only_from_persisted(stored: str) -> str:
+    prog, teacher = _persisted_progress_teacher_parts(stored)
+    return teacher if prog is not None else stored
+
 
 class LearningOrchestrator:
     def __init__(self, llm: BaseLLMProvider):
@@ -485,6 +515,7 @@ class LearningOrchestrator:
         stage_index: int,
         question_mode: str,
         emit: WSEmitter,
+        skip_progress_emit: bool = False,
     ) -> None:
         _t_stage = time.perf_counter()
         wm = get_working_memory(session_id)
@@ -522,9 +553,15 @@ class LearningOrchestrator:
             stages=stages,
         )
 
-        # 1. 進度表
+        # 1. 進度表（可跳過 emit：例如 resume 已先播出進度表，僅接續教師串流）
         progress_md = self._build_progress_table(stages, stage_index)
-        await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
+        if not skip_progress_emit:
+            await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
+        # 立即持久化：即使尚未收到第一段教師串流，重整後也能還原進度表、並走 _resume 而非重跑整段
+        await session_memory.store_stage_explanation(
+            session_id, stage["stage_id"],
+            _pack_persisted_explanation(progress_md, ""),
+        )
 
         # 2. 串流講解（📖 + 🔗）
         ctx = AgentContext(
@@ -540,6 +577,10 @@ class LearningOrchestrator:
         full_explanation = ""
         async for chunk in self.teacher.stream_explanation(ctx):
             full_explanation += chunk
+            await session_memory.store_stage_explanation(
+                session_id, stage["stage_id"],
+                _pack_persisted_explanation(progress_md, full_explanation),
+            )
             await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
         explanation_rewritten = False
         explain_verify = await self._verify_grounding(
@@ -567,13 +608,20 @@ class LearningOrchestrator:
             full_explanation = ""
             async for chunk in self.teacher.stream_explanation(retry_ctx):
                 full_explanation += chunk
+                await session_memory.store_stage_explanation(
+                    session_id, stage["stage_id"],
+                    _pack_persisted_explanation(progress_md, full_explanation),
+                )
             explanation_rewritten = True
         if explanation_rewritten:
             await emit({"type": "explanation_reset", "payload": {}})
             await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
             await emit({"type": "explanation_chunk", "payload": {"chunk": full_explanation, "is_final": False}})
         wm.current_explanation = full_explanation
-        await session_memory.store_stage_explanation(session_id, stage["stage_id"], full_explanation)
+        await session_memory.store_stage_explanation(
+            session_id, stage["stage_id"],
+            _pack_persisted_explanation(progress_md, full_explanation),
+        )
 
         # 3. 提取教學意圖（non-streaming call，供問題生成器對齊）
         teaching_intent = await self.teacher.extract_teaching_intent(full_explanation, stage)
@@ -1218,6 +1266,10 @@ class LearningOrchestrator:
 
             progress_md = self._build_progress_table(stages, current_idx)
             await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
+            await session_memory.store_stage_explanation(
+                session_id, stage["stage_id"],
+                _pack_persisted_explanation(progress_md, ""),
+            )
 
             user_profile_summary = await longterm_memory.get_user_profile_summary(user_id)
             prev_stage = stages[current_idx - 1] if current_idx > 0 else None
@@ -1247,6 +1299,10 @@ class LearningOrchestrator:
             full_explanation = ""
             async for chunk in self.teacher.stream_explanation(ctx):
                 full_explanation += chunk
+                await session_memory.store_stage_explanation(
+                    session_id, stage["stage_id"],
+                    _pack_persisted_explanation(progress_md, full_explanation),
+                )
                 await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
             explanation_rewritten = False
             explain_verify = await self._verify_grounding(
@@ -1274,6 +1330,10 @@ class LearningOrchestrator:
                 full_explanation = ""
                 async for chunk in self.teacher.stream_explanation(retry_ctx):
                     full_explanation += chunk
+                    await session_memory.store_stage_explanation(
+                        session_id, stage["stage_id"],
+                        _pack_persisted_explanation(progress_md, full_explanation),
+                    )
                 explanation_rewritten = True
             if explanation_rewritten:
                 await emit({"type": "explanation_reset", "payload": {}})
@@ -1338,7 +1398,10 @@ class LearningOrchestrator:
             wm.pending_questions = questions
 
             # 持久化：重教後存入新講解與問題，重整後 resume 可直接還原
-            await session_memory.store_stage_explanation(session_id, stage["stage_id"], wm.current_explanation)
+            await session_memory.store_stage_explanation(
+                session_id, stage["stage_id"],
+                _pack_persisted_explanation(progress_md, wm.current_explanation),
+            )
             await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
 
             questions_md = self._build_questions_section(questions)
@@ -1350,7 +1413,7 @@ class LearningOrchestrator:
                 "type": "explanation_complete",
                 "payload": {
                     "stage_id": stage["stage_id"],
-                    "full_explanation": wm.current_explanation + questions_md,
+                    "full_explanation": progress_md + wm.current_explanation + questions_md,
                 },
             })
 
@@ -1515,10 +1578,18 @@ class LearningOrchestrator:
         all_explanations = await session_memory.get_all_stage_explanations(session_id)
         all_histories = await session_memory.get_all_stage_qa_records(session_id)
         decision_history = await session_memory.get_decision_records(session_id)
+        idx_by_stage_id = {s["stage_id"]: i for i, s in enumerate(stages)}
+        client_explanations = {
+            str(sid): _markdown_for_client_from_persisted(
+                txt,
+                self._build_progress_table(stages, idx_by_stage_id.get(int(sid), 0)),
+            )
+            for sid, txt in all_explanations.items()
+        }
         await emit({
             "type": "session_snapshot",
             "payload": {
-                "stage_explanations": {str(k): v for k, v in all_explanations.items()},
+                "stage_explanations": client_explanations,
                 "stage_qa_histories": {
                     str(stage_id): [
                         {
@@ -1571,12 +1642,86 @@ class LearningOrchestrator:
         )
 
         progress_md = self._build_progress_table(stages, stage_index)
-        full_text = progress_md + stored_explanation
-        await emit({"type": "explanation_chunk", "payload": {"chunk": full_text, "is_final": False}})
-        wm.current_explanation = stored_explanation
+        teacher_only = _teacher_only_from_persisted(stored_explanation)
+        display_md = _markdown_for_client_from_persisted(stored_explanation, progress_md)
 
-        # 從 DB 還原已儲存的問題，完全跳過 LLM
         questions: list[dict] = await session_memory.get_stage_questions(session_id, stage["stage_id"])
+
+        # 僅進度表已持久化、教師串流尚未寫入任何字元：接續串流，不重播進度表
+        if not questions and not teacher_only.strip():
+            await emit({"type": "explanation_chunk", "payload": {"chunk": display_md, "is_final": False}})
+            wm.current_explanation = ""
+            await self.run_stage(
+                session_id,
+                user_id,
+                stages,
+                stage_index,
+                wm.question_mode,
+                emit,
+                skip_progress_emit=True,
+            )
+            return
+
+        await emit({"type": "explanation_chunk", "payload": {"chunk": display_md, "is_final": False}})
+        wm.current_explanation = teacher_only
+
+        if not questions:
+            # 若重整發生在講解串流中，可能已存到部分講解但尚未存題目；
+            # 這裡直接以已存講解補生成問題，避免使用者看到內容被截斷後重跑整段講解。
+            adaptive_ctx = await build_adaptive_context(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                current_attempt=wm.current_attempt,
+                stages=stages,
+            )
+            teaching_intent = await self.teacher.extract_teaching_intent(teacher_only, stage)
+            wm.current_teaching_intent = teaching_intent
+            q_ctx = AgentContext(
+                session_id=session_id,
+                user_id=user_id,
+                task_payload={
+                    "stage": stage,
+                    "teaching_intent": teaching_intent,
+                    "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
+                    "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
+                    if wm.question_mode == "multiple_choice"
+                    else stage.get("estimated_questions", 2),
+                    "attempt_number": 1,
+                    "previous_question_ids": [],
+                    "question_mode": wm.question_mode,
+                },
+            )
+            q_result = await self.questioner.run(q_ctx)
+            questions = q_result.get("questions", [])
+            questions_verify = await self._verify_grounding(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                content_type="questions",
+                candidate_text=json.dumps(questions, ensure_ascii=False),
+            )
+            if not questions_verify.get("aligned", False):
+                retry_q_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={
+                        "stage": {
+                            **stage,
+                            "content": stage.get("content", "")
+                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                        },
+                        "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
+                        if wm.question_mode == "multiple_choice"
+                        else stage.get("estimated_questions", 2),
+                        "attempt_number": 1,
+                        "previous_question_ids": [],
+                        "question_mode": wm.question_mode,
+                    },
+                )
+                q_result = await self.questioner.run(retry_q_ctx)
+                questions = q_result.get("questions", [])
+            await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
         wm.pending_questions = questions
 
         questions_md = self._build_questions_section(questions)
@@ -1589,7 +1734,7 @@ class LearningOrchestrator:
             "payload": {
                 "stage_id": stage["stage_id"],
                 "stage_title": stage["title"],
-                "full_explanation": full_text + questions_md,
+                "full_explanation": display_md + questions_md,
             },
         })
 

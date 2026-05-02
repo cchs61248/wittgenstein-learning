@@ -40,7 +40,6 @@ export default function App() {
   const { token, email, clearAuth } = useSessionStore();
   const {
     setSession,
-    appendExplanationChunk,
     setExplanationComplete,
     setQuestion,
     setQuestionImmediate,
@@ -57,7 +56,8 @@ export default function App() {
     clearSession,
     stages,
     setAwaitingFeedback,
-    storeStageExplanation,
+    finalizeStageExplanation,
+    endExplanationLoading,
     setPendingAnswer,
     setQaHistory,
     addTutorMessage,
@@ -66,6 +66,8 @@ export default function App() {
     hydrateSnapshot,
     hydrateDecisionHistory,
   } = useSessionStore();
+
+  const isExplanationLoading = useSessionStore((s) => s.isExplanationLoading);
 
   const [bookshelf, setBookshelf] = useState<BookEntry[]>([]);
   const [showUpload, setShowUpload] = useState(false);
@@ -122,6 +124,14 @@ export default function App() {
       setIsSessionLoading(false);
       setBookshelf(books);
       if (!session) {
+        const generatingEntry = books.find((b) => b.status === 'generating');
+        if (generatingEntry) {
+          sessionIdRef.current = generatingEntry.sessionId;
+          localStorage.setItem('wl_session_id', generatingEntry.sessionId);
+          setIsWaitingForCurrentGeneration(true);
+          setShowUpload(false);
+          return;
+        }
         setShowUpload(true);
         return;
       }
@@ -149,6 +159,7 @@ export default function App() {
       } else {
         // 先從 REST 回應預填 stages，讓新裝置立即看到進度，不卡在空白畫面
         setSession(savedSessionId, session.stages, session.stage_statuses);
+        useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
 
         // 正常恢復進行中的學習
         const ws = new LearningWebSocket(savedSessionId, token, {
@@ -246,6 +257,10 @@ export default function App() {
   const handleMessage = (msg: ServerMessage) => {
     switch (msg.type) {
       case 'session_generating':
+        // 與當前前景 session 一致時維持 loading（雙重保險，避免極短 race 漏設）
+        if (msg.payload.session_id === sessionIdRef.current) {
+          setIsWaitingForCurrentGeneration(true);
+        }
         // 前景模式：stub 已建立，若書櫃中尚無此項目（例如使用者直接發送 start_session）則補上
         setBookshelf(prev => {
           const sid = msg.payload.session_id;
@@ -266,18 +281,26 @@ export default function App() {
         break;
       case 'session_started':
         setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
+        useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
         listSessions(token!).then(fresh => setBookshelf(prev => mergeBookshelf(prev, fresh)));
         break;
-      case 'explanation_chunk':
-        appendExplanationChunk(msg.payload.chunk);
-        if (msg.payload.is_final) setExplanationComplete();
+      case 'explanation_chunk': {
+        const st = useSessionStore.getState();
+        if (!msg.payload.is_final) {
+          if (!st.isExplanationLoading) {
+            st.beginExplanationLoading(st.currentStageId);
+          }
+        } else {
+          setExplanationComplete();
+        }
         break;
+      }
       case 'explanation_complete':
-        setExplanationComplete();
-        storeStageExplanation(msg.payload.stage_id, msg.payload.full_explanation);
+        finalizeStageExplanation(msg.payload.stage_id, msg.payload.full_explanation);
         break;
       case 'explanation_reset':
         resetExplanation();
+        useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
         break;
       case 'question':
         setQuestion(msg.payload);
@@ -296,6 +319,16 @@ export default function App() {
       case 'stage_decision':
         pushDecisionHistory(msg.payload);
         setDecision(msg.payload);
+        {
+          const dec = msg.payload.decision;
+          // 在後端送出任何 explanation_chunk 之前就先進入 loading，避免仍看到問老師／答題區
+          if (dec === 'retry' || dec === 'remediate' || dec === 'reteach') {
+            useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
+          }
+          if (dec === 'advance' && msg.payload.next_stage_id !== null) {
+            useSessionStore.getState().beginExplanationLoading(msg.payload.next_stage_id);
+          }
+        }
         if (msg.payload.decision === 'advance') {
           if (msg.payload.next_stage_id !== null) {
             setPendingAdvance(msg.payload.next_stage_id);
@@ -313,11 +346,17 @@ export default function App() {
           feedbackText: r.feedback_text,
         })));
         break;
-      case 'session_snapshot':
+      case 'session_snapshot': {
+        const curStageId = useSessionStore.getState().currentStageId;
+        const filteredExpl: Record<number, string> = {};
+        for (const [k, v] of Object.entries(msg.payload.stage_explanations)) {
+          const sid = Number(k);
+          if (curStageId === null || sid !== curStageId) {
+            filteredExpl[sid] = v;
+          }
+        }
         hydrateSnapshot({
-          stageExplanations: Object.fromEntries(
-            Object.entries(msg.payload.stage_explanations).map(([k, v]) => [Number(k), v])
-          ),
+          stageExplanations: filteredExpl,
           stageQaHistories: Object.fromEntries(
             Object.entries(msg.payload.stage_qa_histories).map(([stageId, records]) => [
               Number(stageId),
@@ -347,6 +386,7 @@ export default function App() {
           );
         }
         break;
+      }
       case 'tutor_reply':
         addTutorMessage(msg.payload);
         break;
@@ -360,12 +400,15 @@ export default function App() {
         clearAuth();
         break;
       case 'course_completed':
+        endExplanationLoading();
         setPendingCourseComplete(true);
         break;
       case 'error':
         console.error('Server error:', msg.payload.message);
+        endExplanationLoading();
         // resume 或啟動失敗且尚未進入任何 stage，退回上傳畫面
         if (!stagesRef.current.length) {
+          setIsWaitingForCurrentGeneration(false);
           setShowUpload(true);
         }
         break;
@@ -473,7 +516,8 @@ export default function App() {
     const newSid = generateSessionId();
     sessionIdRef.current = newSid;
     localStorage.setItem('wl_session_id', newSid); // 讓重整後能定位到正確 session
-    setIsWaitingForCurrentGeneration(false); // 清除前次等待狀態
+    // 立刻進入「分析教材」loading，不等 session_generating／重整後 REST
+    setIsWaitingForCurrentGeneration(true);
 
     const ws = new LearningWebSocket(newSid, token, {
       onMessage: handleMessage,
@@ -585,6 +629,7 @@ export default function App() {
       wsRef.current = ws;
     } else {
       setSession(sid, session.stages, session.stage_statuses);
+      useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
       const ws = new LearningWebSocket(sid, token!, {
         onMessage: handleMessage,
         onOpen: () => {
@@ -706,6 +751,7 @@ export default function App() {
                 activeSessionId={sessionIdRef.current}
                 onSwitch={handleSwitchSession}
                 onNewMaterial={() => setShowUpload(true)}
+                disableNewMaterial={hasGenerating}
                 onRename={handleRenameBook}
                 onDelete={handleDeleteBook}
               />
@@ -748,7 +794,17 @@ export default function App() {
               </div>
             ) : (
               <>
-                <ExplanationPanel />
+                {isExplanationLoading ? (
+                  <div className="explanation-panel explanation-panel-loading" role="status" aria-live="polite">
+                    <div className="explanation-panel-loading-inner">
+                      <div className="generating-wait-spinner" />
+                      <p className="generating-wait-title">AI 正在生成本章講解</p>
+                      <p className="generating-wait-hint">完成後將自動顯示全文與題目，請稍候…</p>
+                    </div>
+                  </div>
+                ) : (
+                  <ExplanationPanel />
+                )}
                 <AskTutorPanel
                   onAskTutor={handleAskTutor}
                   isCollapsed={isAskTutorCollapsed}

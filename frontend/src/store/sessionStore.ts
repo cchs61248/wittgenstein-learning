@@ -34,11 +34,17 @@ interface SessionState {
   // 講解
   explanationText: string;
   isStreaming: boolean;
+  /** 講解由後端串流產生中：前端不顯示逐字串流，僅顯示 loading 至 explanation_complete */
+  isExplanationLoading: boolean;
+  beginExplanationLoading: (stageId: number | null) => void;
+  endExplanationLoading: () => void;
   appendExplanationChunk: (chunk: string) => void;
   setExplanationComplete: () => void;
   stageExplanations: Record<number, string>;
   stageSourceChunks: Record<number, SourceChunk[]>;
   storeStageExplanation: (stageId: number, text: string) => void;
+  /** 講解段落結束：寫入該章完整 Markdown 並清空串流緩衝，避免與已存檔內容重疊顯示 */
+  finalizeStageExplanation: (stageId: number, full: string) => void;
   selectedStageId: number | null;
   setSelectedStage: (id: number | null) => void;
 
@@ -165,7 +171,19 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_stage_qa_histories');
     localStorage.removeItem('wl_decision_history');
     localStorage.removeItem('wl_tutor_history');
-    set({ token: null, userId: null, email: null, sessionId: null, stages: [], pendingMap: null, tutorHistory: [], tutorReply: null, pendingAdvanceStageId: null, pendingCourseComplete: false });
+    set({
+      token: null,
+      userId: null,
+      email: null,
+      sessionId: null,
+      stages: [],
+      pendingMap: null,
+      tutorHistory: [],
+      tutorReply: null,
+      pendingAdvanceStageId: null,
+      pendingCourseComplete: false,
+      isExplanationLoading: false,
+    });
   },
 
   sessionId: localStorage.getItem('wl_session_id'),
@@ -199,6 +217,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       const stageReset = isNewSession ? {
         explanationText: '',
         isStreaming: false,
+        isExplanationLoading: false,
         currentQuestion: null,
         lastFeedback: null,
         lastDecision: null,
@@ -212,6 +231,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         // 同場次 stage advance：只更新 stages 清單，保留 lastFeedback 讓學生看完再繼續
         explanationText: '',
         isStreaming: false,
+        isExplanationLoading: false,
       };
       return {
         sessionId,
@@ -228,8 +248,23 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   explanationText: '',
   isStreaming: false,
-  appendExplanationChunk: (chunk) =>
-    set((s) => ({ explanationText: s.explanationText + chunk, isStreaming: true })),
+  isExplanationLoading: false,
+  beginExplanationLoading: (stageId) =>
+    set((s) => {
+      const nextExp = { ...s.stageExplanations };
+      if (stageId !== null) {
+        delete nextExp[stageId];
+      }
+      localStorage.setItem('wl_stage_explanations', JSON.stringify(nextExp));
+      return {
+        isExplanationLoading: true,
+        explanationText: '',
+        isStreaming: false,
+        stageExplanations: nextExp,
+      };
+    }),
+  endExplanationLoading: () => set({ isExplanationLoading: false }),
+  appendExplanationChunk: () => {},
   setExplanationComplete: () => set({ isStreaming: false }),
   stageExplanations: loadStageExplanations(),
   stageSourceChunks: {},
@@ -238,6 +273,17 @@ export const useSessionStore = create<SessionState>((set) => ({
       const updated = { ...s.stageExplanations, [stageId]: text };
       localStorage.setItem('wl_stage_explanations', JSON.stringify(updated));
       return { stageExplanations: updated };
+    }),
+  finalizeStageExplanation: (stageId, full) =>
+    set((s) => {
+      const updated = { ...s.stageExplanations, [stageId]: full };
+      localStorage.setItem('wl_stage_explanations', JSON.stringify(updated));
+      return {
+        explanationText: '',
+        isStreaming: false,
+        isExplanationLoading: false,
+        stageExplanations: updated,
+      };
     }),
   selectedStageId: null,
   setSelectedStage: (id) => set({ selectedStageId: id }),
@@ -352,6 +398,11 @@ export const useSessionStore = create<SessionState>((set) => ({
       if (updatedStageQaHistories !== s.stageQaHistories) {
         localStorage.setItem('wl_stage_qa_histories', JSON.stringify(updatedStageQaHistories));
       }
+      const nextExpl = { ...s.stageExplanations };
+      if (nextStageId !== null) {
+        delete nextExpl[nextStageId];
+      }
+      localStorage.setItem('wl_stage_explanations', JSON.stringify(nextExpl));
       return {
         stages: s.stages.map((st) => ({
           ...st,
@@ -363,7 +414,10 @@ export const useSessionStore = create<SessionState>((set) => ({
               : st.status,
         })),
         currentStageId: nextStageId,
-        // explanationText 不重置：下一章已在串流，保留已到達的內容
+        explanationText: '',
+        isStreaming: false,
+        isExplanationLoading: true,
+        stageExplanations: nextExpl,
         currentQuestion: null,
         lastFeedback: null,
         lastDecision: null,
@@ -430,6 +484,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingAdvanceStageId: null,
       pendingCourseComplete: false,
       decisionHistory: [],
+      isExplanationLoading: false,
     });
   },
 }));

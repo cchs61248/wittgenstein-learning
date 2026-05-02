@@ -34,3 +34,4 @@ Thumbs.db
 backend/logs/
 *.log*
 .cursor/*
+docs/*
