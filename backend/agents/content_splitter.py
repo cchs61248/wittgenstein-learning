@@ -99,8 +99,17 @@ class ContentSplitterAgent(BaseAgent):
     def _merge_thin_stages(self, stages: list[dict]) -> list[dict]:
         """將 source_chunk_ids < 2 的小型 stage 合併至後繼 stage（最後一個合往前）。"""
         if len(stages) <= 1:
-            return stages
+            result = stages
+        else:
+            result = self._merge_thin_stages_body(stages)
+        for j, s in enumerate(result):
+            s["stage_id"] = j + 1
+            chapter = (j // 3) + 1
+            section = (j % 3) + 1
+            s["node_id"] = f"{chapter}.{section}"
+        return result
 
+    def _merge_thin_stages_body(self, stages: list[dict]) -> list[dict]:
         result: list[dict] = []
         i = 0
         while i < len(stages):
@@ -134,9 +143,6 @@ class ContentSplitterAgent(BaseAgent):
             prev["key_concepts"] = list(dict.fromkeys(
                 prev["key_concepts"] + last["key_concepts"]
             ))
-
-        for j, s in enumerate(result):
-            s["stage_id"] = j + 1
 
         return result
 
