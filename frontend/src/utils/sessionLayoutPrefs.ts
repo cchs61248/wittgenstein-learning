@@ -1,6 +1,6 @@
-/** 每個 session（教材）獨立的版面狀態，存在 localStorage */
+/** 每個 session（教材）獨立的版面狀態；依帳號（wl_user_id）分開存在 localStorage，登出再登入仍保留 */
 
-export const SESSION_LAYOUT_PREFS_KEY = 'wl_session_layout_prefs_v1';
+export const LEGACY_SESSION_LAYOUT_PREFS_KEY = 'wl_session_layout_prefs_v1';
 
 export type SessionLayoutPrefs = {
   askTutorCollapsed?: boolean;
@@ -19,9 +19,29 @@ export type SessionLayoutPrefs = {
 
 type PrefsMap = Record<string, SessionLayoutPrefs>;
 
+function storageUserId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('wl_user_id');
+}
+
+function prefsKey(userId: string): string {
+  return `wl_session_layout_prefs_acc_${userId}`;
+}
+
 function loadMap(): PrefsMap {
+  const uid = storageUserId();
+  if (!uid) return {};
+  const key = prefsKey(uid);
   try {
-    const raw = localStorage.getItem(SESSION_LAYOUT_PREFS_KEY);
+    let raw = localStorage.getItem(key);
+    if (!raw) {
+      const legacy = localStorage.getItem(LEGACY_SESSION_LAYOUT_PREFS_KEY);
+      if (legacy) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(LEGACY_SESSION_LAYOUT_PREFS_KEY);
+        raw = localStorage.getItem(key);
+      }
+    }
     if (!raw) return {};
     const o = JSON.parse(raw) as unknown;
     return o && typeof o === 'object' ? (o as PrefsMap) : {};
@@ -30,12 +50,35 @@ function loadMap(): PrefsMap {
   }
 }
 
-function saveMap(m: PrefsMap) {
+function saveMap(m: PrefsMap, skipCloudPush = false) {
+  const uid = storageUserId();
+  if (!uid) return;
   try {
-    localStorage.setItem(SESSION_LAYOUT_PREFS_KEY, JSON.stringify(m));
+    localStorage.setItem(prefsKey(uid), JSON.stringify(m));
   } catch {
     /* ignore quota */
   }
+  if (!skipCloudPush && typeof window !== 'undefined') {
+    void import('./userUiStateSync').then((mod) => mod.schedulePushUserUiState());
+  }
+}
+
+export function getAllLayoutPrefs(): PrefsMap {
+  return { ...loadMap() };
+}
+
+/** 與伺服器同步：同 session_id 以伺服器為準，其餘保留本機。 */
+export function mergeLayoutPrefsFromServer(server: Record<string, SessionLayoutPrefs>) {
+  const uid = storageUserId();
+  if (!uid) return;
+  const local = loadMap();
+  const merged: PrefsMap = { ...local };
+  for (const [k, v] of Object.entries(server)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      merged[k] = v as SessionLayoutPrefs;
+    }
+  }
+  saveMap(merged, true);
 }
 
 export function getSessionLayoutPrefs(sessionId: string | null): Partial<SessionLayoutPrefs> | undefined {
@@ -44,7 +87,7 @@ export function getSessionLayoutPrefs(sessionId: string | null): Partial<Session
 }
 
 export function patchSessionLayoutPrefs(sessionId: string, patch: Partial<SessionLayoutPrefs>) {
-  if (!sessionId) return;
+  if (!sessionId || !storageUserId()) return;
   const map = loadMap();
   const prev = map[sessionId] ?? {};
   const clean = Object.fromEntries(
@@ -55,17 +98,14 @@ export function patchSessionLayoutPrefs(sessionId: string, patch: Partial<Sessio
 }
 
 export function removeSessionLayoutPrefs(sessionId: string) {
+  if (!storageUserId()) return;
   const map = loadMap();
   if (!(sessionId in map)) return;
   delete map[sessionId];
   saveMap(map);
 }
 
-export function clearAllSessionLayoutPrefs() {
-  localStorage.removeItem(SESSION_LAYOUT_PREFS_KEY);
-}
-
-/** 首屏用：在 React 掛載前從 wl_session_id + prefs 讀回分頁／收合，避免重整後被預設值覆蓋 */
+/** 首屏用：在 React 掛載前從 wl_user_id + wl_session_id + prefs 讀回分頁／收合 */
 export function readInitialChromeFromStorage(): {
   askTutorCollapsed: boolean;
   questionCollapsed: boolean;
@@ -80,8 +120,9 @@ export function readInitialChromeFromStorage(): {
       activePage: 'learn',
     };
   }
+  const uid = storageUserId();
   const sid = localStorage.getItem('wl_session_id');
-  if (!sid) {
+  if (!uid || !sid) {
     return {
       askTutorCollapsed: false,
       questionCollapsed: false,

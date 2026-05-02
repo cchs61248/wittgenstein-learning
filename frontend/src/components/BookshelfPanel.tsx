@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import type { BookEntry } from '../api/session';
 import { StageMap } from './StageMap';
 import { getSessionLayoutPrefs, patchSessionLayoutPrefs } from '../utils/sessionLayoutPrefs';
+import { UI_STATE_SYNCED_EVENT } from '../utils/userUiStateSync';
 
 interface BookshelfPanelProps {
   books: BookEntry[];
@@ -194,12 +195,22 @@ export function BookshelfPanel({
 }: BookshelfPanelProps) {
   const [view, setView] = useState<'list' | 'map'>('list');
   const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
+  const [hydrateTick, setHydrateTick] = useState(0);
   const mapScrollRef = useRef<HTMLDivElement | null>(null);
   const lastHydratedSession = useRef<string | null>(null);
 
   const viewingBook = viewingSessionId
     ? books.find((b) => b.sessionId === viewingSessionId) ?? null
     : null;
+
+  useEffect(() => {
+    const onSynced = () => {
+      lastHydratedSession.current = null;
+      setHydrateTick((t) => t + 1);
+    };
+    window.addEventListener(UI_STATE_SYNCED_EVENT, onSynced);
+    return () => window.removeEventListener(UI_STATE_SYNCED_EVENT, onSynced);
+  }, []);
 
   // 依目前前景 session 還原：是否在「章節列表」內（重整後不跳回書櫃總覽）
   useEffect(() => {
@@ -219,7 +230,7 @@ export function BookshelfPanel({
       setView('list');
       setViewingSessionId(null);
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, hydrateTick]);
 
   // 書本被刪除時若仍停在 map，退回列表
   useEffect(() => {

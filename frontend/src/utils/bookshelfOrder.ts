@@ -1,6 +1,15 @@
 import type { BookEntry } from '../api/session';
 
-export const BOOKSHELF_ORDER_KEY = 'wl_bookshelf_order_v1';
+export const LEGACY_BOOKSHELF_ORDER_KEY = 'wl_bookshelf_order_v1';
+
+function storageUserId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('wl_user_id');
+}
+
+function orderKey(userId: string): string {
+  return `wl_bookshelf_order_acc_${userId}`;
+}
 
 /** 與 App 原邏輯相同：合併輪詢結果與樂觀「生成中」標題 */
 export function mergeBookshelf(existing: BookEntry[], fresh: BookEntry[]): BookEntry[] {
@@ -19,8 +28,19 @@ export function mergeBookshelf(existing: BookEntry[], fresh: BookEntry[]): BookE
 }
 
 export function loadBookOrder(): string[] {
+  const uid = storageUserId();
+  if (!uid) return [];
+  const key = orderKey(uid);
   try {
-    const raw = localStorage.getItem(BOOKSHELF_ORDER_KEY);
+    let raw = localStorage.getItem(key);
+    if (!raw) {
+      const legacy = localStorage.getItem(LEGACY_BOOKSHELF_ORDER_KEY);
+      if (legacy) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(LEGACY_BOOKSHELF_ORDER_KEY);
+        raw = localStorage.getItem(key);
+      }
+    }
     if (!raw) return [];
     const o = JSON.parse(raw) as unknown;
     return Array.isArray(o) ? o.filter((x): x is string => typeof x === 'string') : [];
@@ -29,9 +49,27 @@ export function loadBookOrder(): string[] {
   }
 }
 
-export function saveBookOrder(books: BookEntry[]) {
+export function saveBookOrder(books: BookEntry[], skipCloudPush = false) {
+  const uid = storageUserId();
+  if (!uid) return;
   try {
-    localStorage.setItem(BOOKSHELF_ORDER_KEY, JSON.stringify(books.map((b) => b.sessionId)));
+    localStorage.setItem(orderKey(uid), JSON.stringify(books.map((b) => b.sessionId)));
+  } catch {
+    /* ignore */
+  }
+  if (!skipCloudPush && typeof window !== 'undefined') {
+    void import('./userUiStateSync').then((mod) => mod.schedulePushUserUiState());
+  }
+}
+
+export function replaceBookOrderFromServer(ids: string[]) {
+  const uid = storageUserId();
+  if (!uid) return;
+  try {
+    localStorage.setItem(
+      orderKey(uid),
+      JSON.stringify(ids.filter((x): x is string => typeof x === 'string'))
+    );
   } catch {
     /* ignore */
   }
@@ -62,8 +100,4 @@ export function prependBookToBookshelf(prev: BookEntry[], book: BookEntry): Book
   const ordered = orderBookshelfBySavedOrder(loadBookOrder(), next);
   saveBookOrder(ordered);
   return ordered;
-}
-
-export function clearBookOrder() {
-  localStorage.removeItem(BOOKSHELF_ORDER_KEY);
 }

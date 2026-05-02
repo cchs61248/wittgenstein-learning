@@ -115,6 +115,15 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
+    # Migration 012：user_learning_profile 儲存跨裝置 UI 狀態
+    try:
+        await _connection.execute(
+            "ALTER TABLE user_learning_profile ADD COLUMN ui_state_json TEXT DEFAULT '{}'"
+        )
+        await _connection.commit()
+    except Exception:
+        pass
+
     # Migration 006：建立決策歷史表（跨裝置恢復教練趨勢）
     await _connection.execute(
         """CREATE TABLE IF NOT EXISTS decision_records (

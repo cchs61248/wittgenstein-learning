@@ -16,6 +16,8 @@ import {
   syntheticGeneratingSession,
 } from './api/session';
 import { verifyAuth } from './api/auth';
+import { fetchUserUiState } from './api/userUiState';
+import { applyServerUiStateToLocal, dispatchUiStateSyncedFromServer } from './utils/userUiStateSync';
 import type { BookEntry } from './api/session';
 import type { ServerMessage, ProviderType, DepthType } from './types/messages';
 import { LearningStatsPage } from './components/LearningStatsPage';
@@ -223,8 +225,13 @@ export default function App() {
     Promise.all([
       lastSessionId ? getSessionDetail(token, lastSessionId) : Promise.resolve(null),
       listSessions(token),
-    ]).then(async ([detail, books]) => {
+      fetchUserUiState(token),
+    ]).then(async ([detail, books, serverUi]) => {
       if (cancelled) return;
+      if (serverUi) {
+        applyServerUiStateToLocal(serverUi);
+        dispatchUiStateSyncedFromServer();
+      }
       let session = detail;
       if (!session && lastSessionId) {
         const entry = books.find((b) => b.sessionId === lastSessionId && b.status === 'generating');

@@ -14,6 +14,7 @@ from .auth.router import router as auth_router
 from .routers.upload import router as upload_router
 from .routers.session import router as session_router
 from .routers.learner import router as learner_router
+from .routers.user_ui import router as user_ui_router
 from .auth.utils import decode_token_active
 from .llm.provider_factory import create_provider
 from .orchestrator.learning_orchestrator import LearningOrchestrator
@@ -50,6 +51,7 @@ app.include_router(auth_router)
 app.include_router(upload_router)
 app.include_router(session_router)
 app.include_router(learner_router)
+app.include_router(user_ui_router)
 
 
 ws_manager = WebSocketManager()

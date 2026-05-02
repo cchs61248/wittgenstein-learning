@@ -1,7 +1,5 @@
 import { create } from 'zustand';
 import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode, SourceChunk } from '../types/messages';
-import { clearAllSessionLayoutPrefs } from '../utils/sessionLayoutPrefs';
-import { clearBookOrder } from '../utils/bookshelfOrder';
 
 export type StageStatus = 'pending' | 'current' | 'completed';
 
@@ -169,8 +167,6 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_user_id');
     localStorage.removeItem('wl_email');
     localStorage.removeItem('wl_session_id');
-    clearAllSessionLayoutPrefs();
-    clearBookOrder();
     localStorage.removeItem('wl_stage_explanations');
     localStorage.removeItem('wl_stage_qa_histories');
     localStorage.removeItem('wl_decision_history');
