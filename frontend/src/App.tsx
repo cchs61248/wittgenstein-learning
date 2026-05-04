@@ -889,7 +889,9 @@ export default function App() {
         </div>
       </header>
 
-      <div className="app-body">
+      <div
+        className={`app-body${isStageSidebarCollapsed ? ' is-stage-sidebar-collapsed' : ''}`}
+      >
         <section className={`stage-sidebar${isStageSidebarCollapsed ? ' is-collapsed' : ''}`}>
           <button
             className="stage-sidebar-toggle"
