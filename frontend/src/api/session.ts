@@ -73,6 +73,55 @@ export async function getSessionDetail(token: string, sessionId: string): Promis
   }
 }
 
+/** 從伺服器讀取已持久化之章節講解全文（與 WS snapshot 相同邏輯），供回顧時不必重整頁面 */
+export async function fetchStageExplanation(
+  token: string,
+  sessionId: string,
+  stageId: number,
+  signal?: AbortSignal
+): Promise<{ stage_id: number; explanation: string } | null> {
+  try {
+    const res = await fetch(
+      `${BASE}/sessions/${encodeURIComponent(sessionId)}/stages/${stageId}/explanation?token=${encodeURIComponent(token)}`,
+      { signal }
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as { stage_id: number; explanation: string };
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    return null;
+  }
+}
+
+/** 與 WS session_snapshot 內單筆答題紀錄欄位一致 */
+export interface StageQaRecordDto {
+  question_id: string;
+  question_text: string;
+  question_type: string;
+  user_answer: string;
+  score: number;
+  feedback_text: string;
+}
+
+export async function fetchStageQaHistory(
+  token: string,
+  sessionId: string,
+  stageId: number,
+  signal?: AbortSignal
+): Promise<{ stage_id: number; records: StageQaRecordDto[] } | null> {
+  try {
+    const res = await fetch(
+      `${BASE}/sessions/${encodeURIComponent(sessionId)}/stages/${stageId}/qa_history?token=${encodeURIComponent(token)}`,
+      { signal }
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as { stage_id: number; records: StageQaRecordDto[] };
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    return null;
+  }
+}
+
 export async function renameSession(token: string, sessionId: string, title: string): Promise<boolean> {
   try {
     const res = await fetch(

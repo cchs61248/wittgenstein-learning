@@ -68,12 +68,11 @@ export default function App() {
 
   const isExplanationLoading = useSessionStore((s) => s.isExplanationLoading);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
-  const stageExplanations = useSessionStore((s) => s.stageExplanations);
-  /** 回顧已快取的章節時，主欄改顯示講解內容，不佔滿 loading；新章節仍於背景生成 */
+  const currentStageId = useSessionStore((s) => s.currentStageId);
+  /** 僅在「視角為正在生成的那一章」時全螢幕 loading；回顧其他章（含本地尚無快取全文）一律走主欄 */
   const showFullExplanationLoading =
     isExplanationLoading &&
-    (selectedStageId === null ||
-      !String(stageExplanations[selectedStageId] ?? '').trim());
+    (selectedStageId === null || selectedStageId === currentStageId);
 
   const [bookshelf, setBookshelf] = useState<BookEntry[]>([]);
   const [showUpload, setShowUpload] = useState(false);

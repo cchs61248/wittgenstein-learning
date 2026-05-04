@@ -1,17 +1,22 @@
-import { forwardRef } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSessionStore } from '../store/sessionStore';
+import { fetchStageExplanation } from '../api/session';
 
 export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationPanel(_props, ref) {
   const explanationText = useSessionStore((s) => s.explanationText);
   const isStreaming = useSessionStore((s) => s.isStreaming);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const currentStageId = useSessionStore((s) => s.currentStageId);
+  const sessionId = useSessionStore((s) => s.sessionId);
+  const token = useSessionStore((s) => s.token);
+  const stages = useSessionStore((s) => s.stages);
   const stageExplanations = useSessionStore((s) => s.stageExplanations);
   const stageSourceChunks = useSessionStore((s) => s.stageSourceChunks);
   const setSelectedStage = useSessionStore((s) => s.setSelectedStage);
   const isExplanationLoading = useSessionStore((s) => s.isExplanationLoading);
+  const [persistedFetch, setPersistedFetch] = useState<'idle' | 'loading' | 'done' | 'error' | 'empty'>('idle');
 
   const reviewStored =
     selectedStageId !== null ? (stageExplanations[selectedStageId] ?? '') : '';
@@ -27,9 +32,61 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
     .map((id) => ({ id, chunk: chunks.find((c) => c.chunk_id === id) }))
     .filter((x) => x.chunk);
 
+  useEffect(() => {
+    if (selectedStageId === null || !sessionId || !token) {
+      setPersistedFetch('idle');
+      return;
+    }
+    const stage = stages.find((s) => s.stage_id === selectedStageId);
+    if (!stage || stage.status !== 'completed') {
+      setPersistedFetch('idle');
+      return;
+    }
+    const cached = (useSessionStore.getState().stageExplanations[selectedStageId] ?? '').trim();
+    if (cached) {
+      setPersistedFetch('idle');
+      return;
+    }
+    const ac = new AbortController();
+    setPersistedFetch('loading');
+    fetchStageExplanation(token, sessionId, selectedStageId, ac.signal)
+      .then((payload) => {
+        if (ac.signal.aborted) return;
+        if (!payload) {
+          setPersistedFetch('error');
+          return;
+        }
+        const text = (payload.explanation ?? '').trim();
+        if (text) {
+          useSessionStore.getState().storeStageExplanation(selectedStageId, text);
+          setPersistedFetch('done');
+        } else {
+          setPersistedFetch('empty');
+        }
+      })
+      .catch((e: unknown) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        setPersistedFetch((prev) => (prev === 'loading' ? 'error' : prev));
+      });
+    return () => {
+      ac.abort();
+    };
+  }, [selectedStageId, sessionId, token, stages]);
+
+  const reviewingOtherWhileGenerating =
+    isExplanationLoading &&
+    selectedStageId !== null &&
+    currentStageId !== null &&
+    selectedStageId !== currentStageId;
+
   if (selectedStageId !== null && !hasReviewBody) {
     return (
       <div ref={ref} className="explanation-panel empty">
+        {reviewingOtherWhileGenerating && (
+          <div className="explanation-bg-gen-banner" role="status" aria-live="polite">
+            新章節講解仍在背景生成。此處若無內文，代表本機尚未快取該章全文；可於目前章節完成後或重新整理頁面再試。
+          </div>
+        )}
         <div className="review-banner">
           <span>回顧模式</span>
           <button className="btn-ghost btn-sm" onClick={() => setSelectedStage(null)}>
@@ -37,10 +94,29 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
           </button>
         </div>
         <div className="empty-ornament" aria-hidden="true" />
-        <p className="empty-lead">此章講解尚未載入</p>
-        <p className="empty-hint">
-          可稍後再試，或完成目前章節生成／重新整理頁面後，通常可從伺服器還原全文。
-        </p>
+        {persistedFetch === 'loading' ? (
+          <>
+            <p className="empty-lead">正在從伺服器載入講解全文…</p>
+            <p className="empty-hint">無需重新整理頁面；載入完成後會自動顯示。</p>
+          </>
+        ) : persistedFetch === 'error' ? (
+          <>
+            <p className="empty-lead">無法載入講解</p>
+            <p className="empty-hint">請確認網路連線後，再點側欄該章重試。</p>
+          </>
+        ) : persistedFetch === 'empty' ? (
+          <>
+            <p className="empty-lead">伺服器尚無此章存檔</p>
+            <p className="empty-hint">可能尚未寫入資料庫；請稍後再試或重新整理頁面。</p>
+          </>
+        ) : (
+          <>
+            <p className="empty-lead">此章講解尚未載入</p>
+            <p className="empty-hint">
+              若為已完成章節，將自動向伺服器請求全文；否則可於目前章節完成後或重新整理頁面再試。
+            </p>
+          </>
+        )}
       </div>
     );
   }
@@ -57,7 +133,7 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
 
   return (
     <div ref={ref} className="explanation-panel">
-      {hasReviewBody && isExplanationLoading && (
+      {reviewingOtherWhileGenerating && (
         <div className="explanation-bg-gen-banner" role="status" aria-live="polite">
           新章節講解仍在背景生成中；完成後請點「返回當前學習」即可閱讀新章全文與題目。
         </div>

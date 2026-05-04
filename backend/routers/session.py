@@ -1,13 +1,36 @@
 import json
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ..auth.utils import decode_token_active
 from ..memory import session_memory
+from ..orchestrator.learning_orchestrator import _markdown_for_client_from_persisted
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+def _build_progress_table_markdown(stages: list[dict], current_idx: int) -> str:
+    """與 LearningOrchestrator._build_progress_table 一致，供 REST 還原與 WS snapshot 相同的顯示用 Markdown。"""
+    if not stages or current_idx < 0 or current_idx >= len(stages):
+        return ""
+    current = stages[current_idx]
+    lines = [
+        "### 📊 學習進度\n\n",
+        f"> 當前節點：**{current['node_id']} — {current['title']}**\n\n",
+        "| 節點編號 | 知識點名稱 | 狀態 |\n",
+        "|----------|------------|------|\n",
+    ]
+    for i, s in enumerate(stages):
+        if i < current_idx:
+            status = "✅ 已完成"
+        elif i == current_idx:
+            status = "🔄 進行中"
+        else:
+            status = "⏳ 待學習"
+        lines.append(f"| {s['node_id']} | {s['title']} | {status} |\n")
+    lines.append("\n---\n\n")
+    return "".join(lines)
 
 
 @router.get("/active")
@@ -64,6 +87,56 @@ async def list_sessions(token: str = Query(...)):
         raise HTTPException(status_code=401, detail="Token 無效")
     sessions = await session_memory.get_user_sessions(payload["sub"])
     return {"sessions": sessions}
+
+
+@router.get("/{session_id}/stages/{stage_id}/explanation")
+async def get_persisted_stage_explanation(session_id: str, stage_id: int, token: str = Query(...)):
+    """回傳資料庫中該章已持久化的講解 Markdown（與 session_snapshot 相同轉換邏輯），供前端回顧時不必重整。"""
+    payload = await decode_token_active(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token 無效")
+    session = await session_memory.get_session(session_id)
+    if not session or session["user_id"] != payload["sub"]:
+        raise HTTPException(status_code=404, detail="Session 不存在")
+    stages: list[dict] = json.loads(session["stages_json"] or "[]")
+    if not stages:
+        raise HTTPException(status_code=404, detail="此 Session 尚無章節資料")
+    idx = next((i for i, s in enumerate(stages) if int(s["stage_id"]) == int(stage_id)), -1)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="章節不存在於此 Session")
+    raw = await session_memory.get_stage_explanation(session_id, stage_id)
+    if not (raw or "").strip():
+        return {"stage_id": stage_id, "explanation": ""}
+    progress_md = _build_progress_table_markdown(stages, idx)
+    display = _markdown_for_client_from_persisted(raw, progress_md)
+    return {"stage_id": stage_id, "explanation": display}
+
+
+@router.get("/{session_id}/stages/{stage_id}/qa_history")
+async def get_persisted_stage_qa_history(session_id: str, stage_id: int, token: str = Query(...)):
+    """回傳該章已持久化之答題紀錄（與 session_snapshot 之 stage_qa_histories 單章格式一致）。"""
+    payload = await decode_token_active(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token 無效")
+    session = await session_memory.get_session(session_id)
+    if not session or session["user_id"] != payload["sub"]:
+        raise HTTPException(status_code=404, detail="Session 不存在")
+    stages: list[dict] = json.loads(session["stages_json"] or "[]")
+    if not any(int(s["stage_id"]) == int(stage_id) for s in stages):
+        raise HTTPException(status_code=404, detail="章節不存在於此 Session")
+    rows = await session_memory.get_stage_qa_records(session_id, stage_id)
+    records = [
+        {
+            "question_id": r["question_id"],
+            "question_text": r["question_text"],
+            "question_type": r.get("question_type") or "understand",
+            "user_answer": r.get("user_answer") or "",
+            "score": float(r["score"]) if r.get("score") is not None else 0.0,
+            "feedback_text": r.get("feedback") or "",
+        }
+        for r in rows
+    ]
+    return {"stage_id": stage_id, "records": records}
 
 
 @router.get("/{session_id}")

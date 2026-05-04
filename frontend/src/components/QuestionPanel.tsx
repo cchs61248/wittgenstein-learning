@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSessionStore } from '../store/sessionStore';
 import type { QaHistoryItem } from '../store/sessionStore';
+import { fetchStageQaHistory, type StageQaRecordDto } from '../api/session';
 import { LearningCoachPanel } from './LearningCoachPanel';
 
 interface Props {
@@ -18,6 +19,18 @@ const typeLabel: Record<string, string> = {
   understand: '理解型',
   create: '創作型',
 };
+
+function mapDtoToQaItems(records: StageQaRecordDto[]): QaHistoryItem[] {
+  const types = new Set(['apply', 'understand', 'create']);
+  return records.map((r) => ({
+    questionId: r.question_id,
+    questionText: r.question_text,
+    questionType: (types.has(r.question_type) ? r.question_type : 'understand') as QaHistoryItem['questionType'],
+    userAnswer: r.user_answer,
+    score: r.score,
+    feedbackText: r.feedback_text,
+  }));
+}
 
 function HistoryDetail({ item }: { item: QaHistoryItem }) {
   return (
@@ -64,14 +77,64 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
   const setPendingCourseComplete = useSessionStore((s) => s.setPendingCourseComplete);
   const qaHistory = useSessionStore((s) => s.qaHistory);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
+  const sessionId = useSessionStore((s) => s.sessionId);
+  const token = useSessionStore((s) => s.token);
+  const stages = useSessionStore((s) => s.stages);
   const stageQaHistories = useSessionStore((s) => s.stageQaHistories);
   const stageSourceChunks = useSessionStore((s) => s.stageSourceChunks);
   const [answer, setAnswer] = useState('');
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [selectedHistoryIdx, setSelectedHistoryIdx] = useState<number | null>(null);
+  const [reviewQaLoad, setReviewQaLoad] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
 
-  const reviewHistory = selectedStageId !== null ? (stageQaHistories[selectedStageId] ?? []) : null;
+  const reviewingCompletedStage =
+    selectedStageId !== null &&
+    stages.some((s) => s.stage_id === selectedStageId && s.status === 'completed');
+
+  const reviewQaHasKey =
+    reviewingCompletedStage &&
+    selectedStageId !== null &&
+    Object.prototype.hasOwnProperty.call(stageQaHistories, selectedStageId);
+  const reviewHistoryList: QaHistoryItem[] =
+    reviewingCompletedStage && selectedStageId !== null
+      ? (stageQaHistories[selectedStageId] ?? [])
+      : [];
+
+  useEffect(() => {
+    if (selectedStageId === null || !sessionId || !token) {
+      setReviewQaLoad('idle');
+      return;
+    }
+    const stage = stages.find((s) => s.stage_id === selectedStageId);
+    if (!stage || stage.status !== 'completed') {
+      setReviewQaLoad('idle');
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(useSessionStore.getState().stageQaHistories, selectedStageId)) {
+      setReviewQaLoad('ready');
+      return;
+    }
+    const ac = new AbortController();
+    setReviewQaLoad('loading');
+    fetchStageQaHistory(token, sessionId, selectedStageId, ac.signal)
+      .then((payload) => {
+        if (ac.signal.aborted) return;
+        if (!payload) {
+          setReviewQaLoad('error');
+          return;
+        }
+        useSessionStore.getState().mergeStageQaHistory(selectedStageId, mapDtoToQaItems(payload.records));
+        setReviewQaLoad('ready');
+      })
+      .catch((e: unknown) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        setReviewQaLoad((prev) => (prev === 'loading' ? 'error' : prev));
+      });
+    return () => {
+      ac.abort();
+    };
+  }, [selectedStageId, sessionId, token, stages, stageQaHistories]);
   const currentStageChunks = currentQuestion ? (stageSourceChunks[currentQuestion.stage_id] ?? []) : [];
   const evidenceDetails = (currentQuestion?.evidence_chunk_ids ?? []).map((chunkId) => ({
     chunkId,
@@ -93,7 +156,14 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
   };
 
   const renderBody = () => {
-    if (reviewHistory !== null) {
+    if (reviewingCompletedStage) {
+      if (!reviewQaHasKey && reviewQaLoad !== 'error') {
+        return <p className="panel-placeholder">正在載入答題記錄…</p>;
+      }
+      if (reviewQaLoad === 'error') {
+        return <p className="panel-placeholder">無法載入答題記錄，請稍後再試。</p>;
+      }
+      const reviewHistory = reviewHistoryList;
       if (reviewHistory.length === 0) {
         return <p className="panel-placeholder">此節點無答題記錄</p>;
       }

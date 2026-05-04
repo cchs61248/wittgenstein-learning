@@ -84,6 +84,8 @@ interface SessionState {
   setTutorReply: (reply: { question: string; answer: string; in_scope?: boolean } | null) => void;
   clearTutorHistory: () => void;
   hydrateSnapshot: (snapshot: { stageExplanations: Record<number, string>; stageQaHistories: Record<number, QaHistoryItem[]> }) => void;
+  /** 合併單章答題紀錄（例如 REST 回顧載入），寫入 localStorage */
+  mergeStageQaHistory: (stageId: number, records: QaHistoryItem[]) => void;
   hydrateDecisionHistory: (history: Array<{
     at: string;
     decision: StageDecisionPayload['decision'];
@@ -379,6 +381,12 @@ export const useSessionStore = create<SessionState>((set) => ({
       localStorage.setItem('wl_stage_explanations', JSON.stringify(mergedExpl));
       localStorage.setItem('wl_stage_qa_histories', JSON.stringify(mergedQa));
       return { stageExplanations: mergedExpl, stageQaHistories: mergedQa };
+    }),
+  mergeStageQaHistory: (stageId, records) =>
+    set((s) => {
+      const merged = { ...s.stageQaHistories, [stageId]: records };
+      localStorage.setItem('wl_stage_qa_histories', JSON.stringify(merged));
+      return { stageQaHistories: merged };
     }),
   hydrateDecisionHistory: (history) =>
     set(() => {
