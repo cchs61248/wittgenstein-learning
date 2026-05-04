@@ -14,7 +14,6 @@ export function StageMap({ hideHeading = false }: StageMapProps) {
   const stages = useSessionStore((s) => s.stages);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const setSelectedStage = useSessionStore((s) => s.setSelectedStage);
-  const stageExplanations = useSessionStore((s) => s.stageExplanations);
   const total = stages.length;
   const completed = stages.filter((s) => s.status === 'completed').length;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -35,7 +34,8 @@ export function StageMap({ hideHeading = false }: StageMapProps) {
 
       <ul className="stage-list">
         {stages.map((stage) => {
-          const canReview = stage.status === 'completed' && stageExplanations[stage.stage_id];
+          // 已完成章節應隨時可點回顧；講解文字是否已在快取由主欄處理（避免新章節生成中因快取條件誤擋側欄）
+          const canReview = stage.status === 'completed';
           const isSelected = selectedStageId === stage.stage_id;
           return (
             <li

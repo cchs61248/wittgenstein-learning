@@ -67,6 +67,13 @@ export default function App() {
   } = useSessionStore();
 
   const isExplanationLoading = useSessionStore((s) => s.isExplanationLoading);
+  const selectedStageId = useSessionStore((s) => s.selectedStageId);
+  const stageExplanations = useSessionStore((s) => s.stageExplanations);
+  /** 回顧已快取的章節時，主欄改顯示講解內容，不佔滿 loading；新章節仍於背景生成 */
+  const showFullExplanationLoading =
+    isExplanationLoading &&
+    (selectedStageId === null ||
+      !String(stageExplanations[selectedStageId] ?? '').trim());
 
   const [bookshelf, setBookshelf] = useState<BookEntry[]>([]);
   const [showUpload, setShowUpload] = useState(false);
@@ -98,7 +105,6 @@ export default function App() {
   const explanationScrollRef = useRef<HTMLDivElement | null>(null);
   const statsScrollRef = useRef<HTMLDivElement | null>(null);
   const storeSessionId = useSessionStore((s) => s.sessionId);
-  const selectedStageId = useSessionStore((s) => s.selectedStageId);
 
   /** 不含捲動位置，避免與捲動還原 effect 競態覆寫已存捲動 */
   const persistChromeLayoutForSession = useCallback(
@@ -953,7 +959,7 @@ export default function App() {
               </div>
             ) : (
               <>
-                {isExplanationLoading ? (
+                {showFullExplanationLoading ? (
                   <div
                     ref={explanationScrollRef}
                     className="explanation-panel explanation-panel-loading"

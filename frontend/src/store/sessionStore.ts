@@ -373,10 +373,12 @@ export const useSessionStore = create<SessionState>((set) => ({
   setQaHistory: (records) => set({ qaHistory: records }),
   setTutorReply: (reply) => set({ tutorReply: reply }),
   hydrateSnapshot: ({ stageExplanations, stageQaHistories }) =>
-    set(() => {
-      localStorage.setItem('wl_stage_explanations', JSON.stringify(stageExplanations));
-      localStorage.setItem('wl_stage_qa_histories', JSON.stringify(stageQaHistories));
-      return { stageExplanations, stageQaHistories };
+    set((s) => {
+      const mergedExpl = { ...s.stageExplanations, ...stageExplanations };
+      const mergedQa = { ...s.stageQaHistories, ...stageQaHistories };
+      localStorage.setItem('wl_stage_explanations', JSON.stringify(mergedExpl));
+      localStorage.setItem('wl_stage_qa_histories', JSON.stringify(mergedQa));
+      return { stageExplanations: mergedExpl, stageQaHistories: mergedQa };
     }),
   hydrateDecisionHistory: (history) =>
     set(() => {

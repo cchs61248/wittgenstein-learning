@@ -2028,6 +2028,18 @@ textarea:disabled {
   box-shadow: var(--shadow-xs);
 }
 
+/* 回顧舊章時：提示新章仍在背景生成（不阻擋閱讀） */
+.explanation-bg-gen-banner {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+
 /* ── 側欄可點擊 stage ── */
 .stage-clickable {
   cursor: pointer;

@@ -11,11 +11,15 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
   const stageExplanations = useSessionStore((s) => s.stageExplanations);
   const stageSourceChunks = useSessionStore((s) => s.stageSourceChunks);
   const setSelectedStage = useSessionStore((s) => s.setSelectedStage);
+  const isExplanationLoading = useSessionStore((s) => s.isExplanationLoading);
 
-  const reviewText = selectedStageId !== null ? (stageExplanations[selectedStageId] ?? null) : null;
+  const reviewStored =
+    selectedStageId !== null ? (stageExplanations[selectedStageId] ?? '') : '';
+  const hasReviewBody = selectedStageId !== null && reviewStored.trim().length > 0;
   // 切換 session 後 explanationText 被清空，但已完成章節的文字仍在 stageExplanations
   const currentStageStoredText = currentStageId !== null ? (stageExplanations[currentStageId] ?? '') : '';
-  const displayText = reviewText ?? (explanationText || currentStageStoredText);
+  // 已選「回顧某章」時勿 fallback 到當前章串流／快取，避免無快取時誤顯示進行中章節內容
+  const displayText = selectedStageId !== null ? reviewStored : explanationText || currentStageStoredText;
   const stageIdForDisplay = selectedStageId ?? currentStageId;
   const chunks = stageIdForDisplay !== null ? (stageSourceChunks[stageIdForDisplay] ?? []) : [];
   const refs = Array.from(new Set((displayText.match(/\[([A-Za-z0-9_.:-]+)\]/g) ?? []).map((m) => m.slice(1, -1))));
@@ -23,7 +27,25 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
     .map((id) => ({ id, chunk: chunks.find((c) => c.chunk_id === id) }))
     .filter((x) => x.chunk);
 
-  if (!displayText && !isStreaming) {
+  if (selectedStageId !== null && !hasReviewBody) {
+    return (
+      <div ref={ref} className="explanation-panel empty">
+        <div className="review-banner">
+          <span>回顧模式</span>
+          <button className="btn-ghost btn-sm" onClick={() => setSelectedStage(null)}>
+            返回當前學習 →
+          </button>
+        </div>
+        <div className="empty-ornament" aria-hidden="true" />
+        <p className="empty-lead">此章講解尚未載入</p>
+        <p className="empty-hint">
+          可稍後再試，或完成目前章節生成／重新整理頁面後，通常可從伺服器還原全文。
+        </p>
+      </div>
+    );
+  }
+
+  if (!displayText.trim() && !isStreaming) {
     return (
       <div ref={ref} className="explanation-panel empty">
         <div className="empty-ornament" aria-hidden="true" />
@@ -35,7 +57,12 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
 
   return (
     <div ref={ref} className="explanation-panel">
-      {reviewText !== null && (
+      {hasReviewBody && isExplanationLoading && (
+        <div className="explanation-bg-gen-banner" role="status" aria-live="polite">
+          新章節講解仍在背景生成中；完成後請點「返回當前學習」即可閱讀新章全文與題目。
+        </div>
+      )}
+      {hasReviewBody && (
         <div className="review-banner">
           <span>回顧模式</span>
           <button className="btn-ghost btn-sm" onClick={() => setSelectedStage(null)}>
@@ -45,7 +72,7 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
       )}
       <div className="markdown-content">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayText}</ReactMarkdown>
-        {isStreaming && reviewText === null && <span className="cursor-blink">▋</span>}
+        {isStreaming && !hasReviewBody && <span className="cursor-blink">▋</span>}
       </div>
       {referencedChunks.length > 0 && (
         <div className="source-reference-panel">
