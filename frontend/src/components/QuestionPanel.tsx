@@ -92,10 +92,6 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
     selectedStageId !== null &&
     stages.some((s) => s.stage_id === selectedStageId && s.status === 'completed');
 
-  const reviewQaHasKey =
-    reviewingCompletedStage &&
-    selectedStageId !== null &&
-    Object.prototype.hasOwnProperty.call(stageQaHistories, selectedStageId);
   const reviewHistoryList: QaHistoryItem[] =
     reviewingCompletedStage && selectedStageId !== null
       ? (stageQaHistories[selectedStageId] ?? [])
@@ -111,10 +107,8 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
       setReviewQaLoad('idle');
       return;
     }
-    if (Object.prototype.hasOwnProperty.call(useSessionStore.getState().stageQaHistories, selectedStageId)) {
-      setReviewQaLoad('ready');
-      return;
-    }
+    // 一律向後端拉最新答題紀錄：session_snapshot／advance 寫入的 stageQaHistories 可能早於
+    // 重教後多答的題目，若因有 key 就跳過 fetch，回顧會永遠缺漏。
     const ac = new AbortController();
     setReviewQaLoad('loading');
     fetchStageQaHistory(token, sessionId, selectedStageId, ac.signal)
@@ -134,7 +128,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
     return () => {
       ac.abort();
     };
-  }, [selectedStageId, sessionId, token, stages, stageQaHistories]);
+  }, [selectedStageId, sessionId, token, stages]);
   const currentStageChunks = currentQuestion ? (stageSourceChunks[currentQuestion.stage_id] ?? []) : [];
   const evidenceDetails = (currentQuestion?.evidence_chunk_ids ?? []).map((chunkId) => ({
     chunkId,
@@ -157,7 +151,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
 
   const renderBody = () => {
     if (reviewingCompletedStage) {
-      if (!reviewQaHasKey && reviewQaLoad !== 'error') {
+      if (reviewQaLoad === 'idle' || reviewQaLoad === 'loading') {
         return <p className="panel-placeholder">正在載入答題記錄…</p>;
       }
       if (reviewQaLoad === 'error') {
