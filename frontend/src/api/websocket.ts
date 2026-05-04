@@ -1,6 +1,5 @@
 import type { ServerMessage, StartSessionMessage, SubmitAnswerMessage } from '../types/messages';
-
-const WS_BASE = 'ws://localhost:8000';
+import { getWsBase } from './apiBase';
 const CLIENT_ID_KEY = 'wl_client_id';
 
 function getOrCreateClientId(): string {
@@ -40,8 +39,9 @@ export class LearningWebSocket {
   }
 
   connect(): void {
+    const wsBase = getWsBase();
     this.ws = new WebSocket(
-      `${WS_BASE}/ws/${this.sessionId}?token=${encodeURIComponent(this.token)}&client_id=${encodeURIComponent(this.clientId)}`
+      `${wsBase}/ws/${this.sessionId}?token=${encodeURIComponent(this.token)}&client_id=${encodeURIComponent(this.clientId)}`
     );
     this.ws.onopen = () => this.onOpen();
     this.ws.onclose = () => this.onClose();

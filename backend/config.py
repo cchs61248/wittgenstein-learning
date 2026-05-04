@@ -21,7 +21,7 @@ _cors_env = os.getenv("CORS_ORIGINS", "")
 if _cors_env:
     CORS_ORIGINS: list[str] = [o.strip() for o in _cors_env.split(",") if o.strip()]
 else:
-    # 開發預設：允許 Vite dev server 常用埠號範圍
+    # 開發預設：允許 Vite dev server 常用埠號（不可與 allow_credentials 並用 "*"）
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
@@ -32,3 +32,12 @@ else:
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
+
+# Quick Tunnel 每次子網域不同，用 regex 白名單；設 CORS_ORIGIN_REGEX= 可關閉
+_raw_cors_regex = os.getenv("CORS_ORIGIN_REGEX")
+if _raw_cors_regex is None:
+    CORS_ORIGIN_REGEX: str | None = r"https://.*\.trycloudflare\.com"
+elif not _raw_cors_regex.strip():
+    CORS_ORIGIN_REGEX = None
+else:
+    CORS_ORIGIN_REGEX = _raw_cors_regex.strip()

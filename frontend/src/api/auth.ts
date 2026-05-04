@@ -1,4 +1,6 @@
-const BASE = 'http://localhost:8000';
+import { getApiBase } from './apiBase';
+
+const BASE = getApiBase();
 
 export interface AuthResponse {
   access_token: string;

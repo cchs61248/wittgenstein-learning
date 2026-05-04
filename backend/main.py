@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from .config import DB_PATH, CORS_ORIGINS, DEFAULT_PROVIDER
+from .config import DB_PATH, CORS_ORIGINS, CORS_ORIGIN_REGEX, DEFAULT_PROVIDER
 from .db.database import init_db, close_db
 from .auth.router import router as auth_router
 from .routers.upload import router as upload_router
@@ -42,6 +42,7 @@ app = FastAPI(title="Wittgenstein Learning System", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

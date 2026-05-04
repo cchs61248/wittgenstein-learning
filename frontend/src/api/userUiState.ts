@@ -1,4 +1,6 @@
-const BASE = 'http://localhost:8000';
+import { getApiBase } from './apiBase';
+
+const BASE = getApiBase();
 
 export type UserUiStatePayload = {
   v?: number;
