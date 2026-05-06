@@ -71,7 +71,7 @@ async def upload_url(
     try:
         title, text = fetch_url_content(url)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"擷取失敗：{e}")
 

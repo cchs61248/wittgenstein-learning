@@ -10,7 +10,23 @@ from bs4 import BeautifulSoup
 
 _MAX_CHARS = 500_000
 _YOUTUBE_RE = re.compile(r"(?:youtube\.com/watch\?.*v=|youtu\.be/)([A-Za-z0-9_-]{11})")
-_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; WittgensteinBot/1.0)"}
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.8,en-US;q=0.5,en;q=0.3",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+}
 
 
 def _extract_video_id(url: str) -> str | None:
@@ -60,7 +76,13 @@ def _fetch_webpage(url: str) -> tuple[str, str]:
     except httpx.TimeoutException:
         raise ValueError(f"連線逾時：{url}")
     except httpx.HTTPStatusError as e:
-        raise ValueError(f"HTTP {e.response.status_code}：{url}")
+        code = e.response.status_code
+        if code == 403:
+            raise ValueError(
+                f"此網站拒絕自動擷取（HTTP 403），通常是 Cloudflare 或登入保護。"
+                f"請直接複製網頁文字後選「貼上純文字」方式加入。"
+            )
+        raise ValueError(f"HTTP {code}：{url}")
     except Exception as e:
         raise ValueError(f"無法連線至 {url}：{e}")
 
