@@ -90,15 +90,19 @@ class ProgressManagerAgent(BaseAgent):
         repeated_patterns = _detect_repeated_patterns(evaluations)
         unique_confused = _unique_confused_concepts(evaluations)
         mastery = _mastery_state(scores, unique_confused, pass_threshold)
-        is_child_stage = stage_kind in {"reteach", "remediation"} or (
-            is_dynamic and stage_kind != "main"
-        )
+        is_child_stage = stage_kind in {"reteach", "remediation"}
 
         if is_child_stage:
             if mastery == "complete":
                 decision = "advance"
                 next_stage = None
                 message = f"很好！你已掌握這個補充章節（校正得分：{best_score:.0%}），讓我們繼續。"
+            elif high_severity and source_reteach_count < max_reteach:
+                # 子章節中仍出現根本性誤解，且重教預算未耗盡 → 升級為重教
+                decision = "reteach"
+                next_stage = None
+                concept = high_severity[0].get("concept", "這個概念")
+                message = f"你在「{concept}」上仍有根本性的誤解，我會再用一個新框架重新說明。"
             elif stage_kind == "reteach" and mastery == "none" and source_reteach_count < max_reteach:
                 decision = "reteach"
                 next_stage = None
@@ -115,16 +119,15 @@ class ProgressManagerAgent(BaseAgent):
                 decision = "advance"
                 next_stage = None
                 message = "你已達到此章補強上限，先繼續前進，後續可再回顧這些概念。"
-        # 超過最大補強次數：強制前進（舊同節點補強路徑）
-        elif remediate_count >= max_remediation:
-            decision = "advance"
-            next_stage = None
-            message = f"你已完成 {remediate_count} 次補強練習，讓我們繼續前進。"
-
-        elif best_score >= pass_threshold:
+        elif mastery == "complete":
             decision = "advance"
             next_stage = current_stage_id + 1 if current_stage_id + 1 < total_stages else None
-            message = f"很好！你已理解這個階段（校正得分：{best_score:.0%}），讓我們繼續。"
+            message = f"很好！你已完全掌握這個階段（校正得分：{best_score:.0%}），讓我們繼續。"
+        elif best_score >= pass_threshold and unique_confused:
+            # 分數達標但仍有弱點概念，先針對性補強再前進
+            decision = "remediate"
+            next_stage = None
+            message = f"分數不錯（{best_score:.0%}），但還有幾個概念需要釐清，我會針對這些弱點新增補強子章節。"
         elif high_severity:
             decision = "reteach"
             next_stage = None
@@ -134,6 +137,11 @@ class ProgressManagerAgent(BaseAgent):
             decision = "reteach"
             next_stage = None
             message = "我注意到你在同一個概念上重複出現相同的錯誤，讓我換個完全不同的比喻框架來解釋。"
+        elif mastery == "none" and attempts == 1:
+            # 首次嘗試全錯，先給一次重試機會再決定是否重教
+            decision = "retry"
+            next_stage = None
+            message = "這次還沒抓到要點，讓我們再試一次，我會調整題目角度。"
         elif mastery == "none":
             decision = "reteach"
             next_stage = None

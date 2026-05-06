@@ -47,29 +47,32 @@
 
 ### 3.2 觸發分類
 
-觸發判斷採「分數與錯誤覆蓋率為主，high severity / 重複錯誤作為升級條件」：
+觸發判斷採「真正掌握才前進，有弱點就補強，根本誤解就重教」：
 
 | 使用者狀態 | 目標決策 | 說明 |
 |------------|----------|------|
-| 完全掌握 | `advance` | 進入下一個未完成章節。 |
-| 只有少數題目、少數概念或局部 misconception 未掌握 | `remediate` | 觸發補強流程，插入補強子章節。 |
+| 完全掌握（best ≥ 0.75 且無混淆概念） | `advance` | 真正掌握才進入下一個章節。 |
+| 分數達標（≥ 0.75）但仍有混淆概念 | `remediate` | 表面過關，針對弱點補強後再前進。 |
+| 只有少數局部概念未掌握，分數未達標 | `remediate` | 觸發補強流程，插入補強子章節。 |
 | 多數題目、核心概念或整體章節結構未掌握 | `reteach` | 觸發重教流程，插入重教子章節。 |
 | 出現 high severity misconception 或同一錯誤模式反覆出現 | 升級為 `reteach` | 即使錯題數不多，也代表原本理解框架可能錯位。 |
 
-### 3.2.1 Retry（同章再測）策略（2026-05-06）
+### 3.2.1 Retry（同章再測）策略（2026-05-06 更新）
 
 `retry` 只代表「主章節內低成本再測一次」，避免與重教／補強重疊：
 
-- 僅允許在主章節（`kind == "main"`）發生。
-- 需為 `mastery == "partial"`（不可 `none`）。
-- 不可有 `high_severity` 或 `repeated_patterns`。
-- 需 `attempts < max_attempts` 且 `best_score >= 0.5`。
+**允許條件（同時成立）：**
+- `mastery == "partial"` 且 `attempts < max_attempts` 且 `best_score >= 0.5`
+- 無 `high_severity`、無 `repeated_patterns`
 
-明確不屬於 retry：
+**特例：首次全錯（mastery == "none"）允許一次 retry：**
+- `mastery == "none"` 且 `attempts == 1` → `retry`（給一次補救機會）
+- `mastery == "none"` 且 `attempts > 1` → `reteach`（確認無法靠自己翻轉，插重教子章節）
 
-- `mastery == "none"`（例如全 0 分）→ `reteach`
+**明確不屬於 retry：**
+- `mastery == "none"` 且 `attempts > 1` → `reteach`
 - `partial` 且已達 retry 上限且仍有弱點 → `remediate`
-- 動態子章節（`reteach` / `remediation`）收斂後分流，不使用 retry
+- 動態子章節（`reteach` / `remediation`）內部不使用 retry
 
 ### 3.3 重教流程
 
@@ -95,54 +98,78 @@
 
 ---
 
-## 4. 目標狀態轉移
+## 4. 實際狀態轉移（已實作）
 
-以下為優化後應採用的決策模型；與現況最大的差異是：**動態子章節完成後不再一律 advance**，而是仍依掌握結果分流，但受同一原章節的重教／補強次數上限約束。
+以下為目前程式實際運作的決策模型（2026-05-06 更新）。
 
 ### 4.1 主章節答題後
 
 | 結果 | 下一步 |
 |------|--------|
-| 完全掌握 | 進入下一個主章節或排序後的下一個待學章節。 |
-| 局部未掌握 | 插入補強子章節，使用者直接進入該補強子章節。 |
-| 整體未掌握 | 插入重教子章節，使用者直接進入該重教子章節。 |
+| 完全掌握（best ≥ 0.75 且無混淆概念） | 進入下一個待學章節（依弱點/掌握度加權排序）。 |
+| 分數達標（≥ 0.75）但仍有混淆概念 | 插入補強子章節，針對混淆概念強化。 |
+| 局部未掌握（partial） | 先 retry（若有機會），次數用完後插入補強子章節。 |
+| 整體未掌握（none），首次嘗試 | retry 一次（給補救機會）。 |
+| 整體未掌握（none），非首次 | 插入重教子章節，換框架重新說明。 |
+| 出現 high severity 或 repeated_patterns | 升級為插入重教子章節（優先於 retry 和 remediate）。 |
 
 ### 4.2 重教子章節答題後
 
 | 結果 | 下一步 |
 |------|--------|
 | 完全掌握 | 進入下一個章節。 |
-| 部分掌握、部分未掌握 | 插入補強子章節，只補仍未掌握內容。 |
-| 完全未掌握，且同一原章節重教次數 < 2 | 再插入新的重教子章節。 |
-| 完全未掌握，但同一原章節重教次數已達 2 | 不再重教；轉補強或交由產品定義後續協助。 |
+| high_severity 且 source_reteach_count < 2 | 再插入新的重教子章節（升級）。 |
+| mastery == "none" 且 source_reteach_count < 2 | 再插入新的重教子章節。 |
+| mastery == "none" 且重教已達 2 次，補強未達上限 | 改插入補強子章節。 |
+| mastery == "partial"（部分掌握） | 插入補強子章節，只補仍未掌握內容。 |
+| 雙上限皆滿（重教 ≥ 2、補強 ≥ 2） | 強制 advance，後續可回顧。 |
 
 ### 4.3 補強子章節答題後
 
 | 結果 | 下一步 |
 |------|--------|
 | 完全掌握 | 進入下一個章節。 |
-| 部分掌握、部分未掌握，且同一原章節補強次數 < 2 | 插入新的補強子章節，只包含仍未掌握部分。 |
-| 完全未掌握，且同一原章節補強次數 < 2 | 再生成一筆新的補強內容，插入新的補強子章節。 |
-| 仍未掌握，但同一原章節補強次數已達 2 | 不再插入補強；進入下一章或交由產品定義後續協助。 |
+| high_severity 且 source_reteach_count < 2 | 升級為插入重教子章節。 |
+| 未完全掌握，source_remediation_count < 2 | 再插入新的補強子章節。 |
+| 補強已達 2 次上限 | 強制 advance，後續可回顧。 |
 
-### 4.4 不變條件
+### 4.4 整合挑戰節點（enrichment）答題後
 
-- 子章節必須記錄 `source_stage_id`，所有重教／補強次數都以同一個原章節為統計範圍，而不是以目前動態節點自身計算。
-- 重教子章節與補強子章節應有不同 `kind`，例如 `kind: "reteach"` 與 `kind: "remediation"`，避免再以單一 `is_dynamic` 分支處理所有動態節點。
-- 插入新子章節後，應更新 `stages_json` 與 `stage_progress`，但不得修改原章節的講解、題目與答題紀錄。
-- 前端收到新子章節後應呈現為獨立章節，回顧時也要能分辨「原章節」、「重教子章節」、「補強子章節」。
+| 結果 | 下一步 |
+|------|--------|
+| 任何結果 | 視為課程完成，不觸發任何子章節。 |
+
+> enrichment 是所有主章節完成後才觸發的加分節點，答完即結束課程。
+
+### 4.5 不變條件
+
+- 子章節記錄 `source_stage_id`，重教/補強次數以原章節為統計單位（`_count_child_stages` 計算）。
+- `is_child_stage` 只判斷 `kind in {"reteach", "remediation"}`，enrichment 不落入子章節邏輯。
+- 插入新子章節後更新 `stages_json` 與 `stage_progress`，原章節的講解、題目與答題紀錄不修改。
+- 最壞情況：主章節 → T.1.1 → T.1.2 → R.1.1 → R.1.2 → advance，共 4 個子章節後必定前進。
 
 ---
 
-## 5. 實作改造重點
+## 5. 實作狀態
 
-- [ ] 將 `_insert_remediation_stage` 拆成明確的子章節插入介面，例如 `_insert_reteach_stage` 與 `_insert_remediation_stage`，兩者都只新增 stage，不覆寫來源 stage。
-- [ ] 調整 `ProgressManagerAgent.run`：不要用 `is_dynamic == True` 直接 `advance`；改依 `kind`、`source_stage_id`、掌握程度與次數上限做分流。
-- [ ] 補上同一原章節的 `reteach_count` 與 `remediation_count` 統計；計數範圍應包含由該原章節衍生出的所有子章節。
-- [ ] 調整 orchestrator 的 `reteach` 分支：不再送 `explanation_reset` 覆蓋原畫面，而是插入重教子章節並 `run_stage` 新節點。
-- [ ] 調整 orchestrator 的 `remediate` 分支：不再把補強內容附加在原章節尾端，而是插入補強子章節並 `run_stage` 新節點。
-- [ ] 更新前端章節列表與回顧顯示：子章節要可被獨立進入、獨立答題、獨立回顧，同時保留與原章節的關聯。
-- [ ] 補測試：至少覆蓋「主章節 → 重教」、「重教 → 補強」、「重教最多 2 次」、「補強最多 2 次」、「所有生成內容不覆寫原章節」。
+### 已完成
+
+- [x] `_insert_reteach_stage` 與 `_insert_remediation_stage` 分開實作，只新增 stage，不覆寫來源 stage。
+- [x] `ProgressManagerAgent.run`：`is_child_stage` 改為只看 `kind in {"reteach","remediation"}`，不再用 `is_dynamic` 判斷。
+- [x] `source_reteach_count` 與 `source_remediation_count` 由 `_count_child_stages()` 統計，計數範圍包含所有衍生子章節。
+- [x] orchestrator 的 `reteach` 分支：插入重教子章節並 `run_stage` 新節點，不再送 `explanation_reset` 覆蓋原畫面。
+- [x] orchestrator 的 `remediate` 分支：插入補強子章節並 `run_stage` 新節點，不再附加在原章節尾端。
+- [x] **advance bug 修正**：advance 條件改為 `mastery == "complete"`（best ≥ 0.75 且無混淆概念），不再只看 `best_score`。
+- [x] **高分有弱點**：`best_score >= 0.75 AND unique_confused` → remediate，先補強再前進。
+- [x] **死碼清除**：移除從未被遞增的 `remediate_count >= max_remediation` 條件。
+- [x] **首次全錯 retry**：`mastery == "none" AND attempts == 1` → retry，給一次補救機會後再判斷是否重教。
+- [x] **子章節 high_severity 升級**：子章節中出現 high severity misconception 且 `source_reteach_count < 2` → reteach。
+- [x] **enrichment 保護**：`is_child_stage` 不含 enrichment；orchestrator 的 reteach/remediate 分支若 stage.kind == "enrichment" 強制轉為 advance，不插子章節。
+
+### 待完成
+
+- [ ] 前端章節列表與回顧顯示：子章節要可被獨立進入、獨立答題、獨立回顧，同時保留與原章節的關聯。
+- [ ] 補測試：至少覆蓋「主章節 → 重教」、「重教 → 補強」、「重教最多 2 次」、「補強最多 2 次」、「高分有弱點 → 補強」、「首次全錯 → retry」、「enrichment 不觸發子章節」。
 
 ---
 

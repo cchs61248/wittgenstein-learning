@@ -679,27 +679,55 @@ _make_progress_decision(...)
     │       不可用 len(evaluations)（當輪已答題目數，stage_evaluations 每輪重置）
     │       Orchestrator 必須傳入 "current_attempt": wm.current_attempt
     │
-    │   從 evaluations 收集 misconception_patterns：
-    │       all_misconceptions = [m for ev in evaluations for m in ev.misconception_patterns]
-    │       high_severity = [m for m in all_misconceptions if m.severity == "high"]
-    │       repeated_patterns = _detect_repeated_patterns(evaluations)
-    │           # 同一 pattern 字串出現 >= 2 次 → True
+    │   前置計算：
+    │       scores          = 各題分數（MC 先套猜測校正，short_answer 直接用原始分）
+    │       best_score      = max(scores)
+    │       latest_score    = scores[-1]
+    │       high_severity   = misconception_patterns 中 severity=="high" 的項目
+    │       repeated_patterns = 同一 pattern 字串出現 >= 2 次
+    │       unique_confused = 所有評估的 confused_concepts 去重
+    │       mastery         = _mastery_state(scores, unique_confused, pass_threshold)
+    │           "complete"  ← best >= 0.75 AND confused 為空
+    │           "none"      ← best < 0.5 AND avg < 0.5
+    │           "partial"   ← 其餘
+    │       is_child_stage  = stage_kind in {"reteach", "remediation"}
+    │           ⚠️ enrichment stage 不落入子章節分支（2026-05-06 修正）
     │
-   │      決策優先序（2026-05-06 更新）：
-   │   1. best_score >= 0.75                               → advance
-   │   2. high_severity 存在                               → reteach（根本誤解，立即換框架）
-   │   3. repeated_patterns = True                         → reteach（同一錯誤重複）
-   │   4. mastery == "none"                                → reteach（整章尚未建立理解）
-   │   5. mastery == "partial" AND attempts >= max_attempts
-   │      AND unique_confused 非空                          → remediate（局部缺口改走補強）
-   │   6. mastery == "partial" AND attempts < max_attempts
-   │      AND best_score >= 0.5                            → retry（只做同章再測）
-   │   7. attempts == max_attempts AND latest_score < 0.5  → reteach
-   │   8. otherwise                                        → remediate
-   │
-   │   ⚠️ 動態子章節不再一律 advance：
-   │       依 stage.kind（reteach/remediation）、source_stage_id、
-   │       source_reteach_count/source_remediation_count 與掌握程度分流
+    │   子章節（kind = reteach / remediation）決策優先序：
+    │   1. mastery == "complete"
+    │      → advance
+    │   2. high_severity AND source_reteach_count < max_reteach
+    │      → reteach（子章節仍有根本誤解，升級重教）
+    │   3. stage_kind=="reteach" AND mastery=="none" AND source_reteach_count < max_reteach
+    │      → reteach（重教子章節全失，再插一輪）
+    │   4. stage_kind=="reteach" AND mastery=="none" AND source_remediation_count < max_remediation
+    │      → remediate（重教次數達上限，改補強）
+    │   5. source_remediation_count < max_remediation
+    │      → remediate（partial 或 remediation 子章節的預設）
+    │   6. else（reteach + remediation 雙上限皆滿）
+    │      → advance（強制前進）
+    │
+    │   主章節決策優先序（2026-05-06 重新整理）：
+    │   1. mastery == "complete"
+    │      → advance（best >= 0.75 且無混淆概念，真正掌握才前進）
+    │   2. best_score >= 0.75 AND unique_confused 非空
+    │      → remediate（分數到標但仍有弱點，補強後再前進）
+    │   3. high_severity 存在
+    │      → reteach（根本誤解，立即換框架）
+    │   4. repeated_patterns == True
+    │      → reteach（同一錯誤重複）
+    │   5. mastery == "none" AND attempts == 1
+    │      → retry（首次全錯，先給一次機會再決定是否重教）
+    │   6. mastery == "none"
+    │      → reteach（整章尚未建立理解）
+    │   7. mastery == "partial" AND attempts >= max_attempts AND unique_confused 非空
+    │      → remediate（局部缺口，次數用完改走補強）
+    │   8. mastery == "partial" AND attempts < max_attempts AND best_score >= 0.5
+    │      → retry（只做同章再測）
+    │   9. attempts == max_attempts AND latest_score < 0.5
+    │      → reteach
+    │  10. otherwise
+    │      → remediate
     │
     │   回傳：{decision, message, best_score, remediation_focus,
     │          high_severity_misconceptions, repeated_patterns_detected}
@@ -727,10 +755,12 @@ _make_progress_decision(...)
     │   }
     │
     ├── 【reteach】
+    │   ⚠️ enrichment stage 觸發 reteach → 轉為 advance，不插子章節
     │   _insert_reteach_stage(...)（T.source.N 重教子章節）
     │   原章節講解與 QA 不覆寫，使用者直接進入新子章節
     │
     ├── 【remediate】
+    │   ⚠️ enrichment stage 觸發 remediate → 轉為 advance，不插子章節
     │   _insert_remediation_stage(...)（R.source.N 補強子章節）
     │   原章節講解與 QA 不附加，使用者直接進入新子章節
     │
@@ -770,18 +800,31 @@ _make_progress_decision(...)
         ⚠️  reteach 不再送 explanation_reset，也不覆寫原章節 full_explanation
 ```
 
-**五種決策觸發條件（Phase 4 更新）**：
+**主章節決策觸發條件（2026-05-06 修正版）**：
 
 | 決策 | 觸發條件 | 優先序 |
 |------|----------|--------|
-| `advance` | best_score ≥ 0.75 | 1（最高） |
-| `reteach` | high severity misconception（任何嘗試次數） | 2 |
-| `reteach` | 同一 pattern 重複 ≥ 2 次 | 3 |
-| `reteach` | mastery == "none" | 4 |
-| `remediate` | mastery == "partial" 且 attempts >= max_attempts 且有明確 confused concepts | 5 |
-| `retry` | mastery == "partial" 且 attempts < max_attempts 且 best_score >= 0.5 | 6 |
-| `reteach` | attempts == max_attempts AND latest < 0.5 | 7 |
-| `remediate` | 其餘情況 | 8（最低） |
+| `advance` | mastery == "complete"（best ≥ 0.75 且無混淆概念） | 1（最高） |
+| `remediate` | best_score ≥ 0.75 但仍有 confused concepts | 2 |
+| `reteach` | high severity misconception（任何嘗試次數） | 3 |
+| `reteach` | 同一 pattern 重複 ≥ 2 次 | 4 |
+| `retry` | mastery == "none" 且 attempts == 1（首次全錯，先給機會） | 5 |
+| `reteach` | mastery == "none"（attempts > 1） | 6 |
+| `remediate` | mastery == "partial" 且 attempts >= max_attempts 且有明確 confused concepts | 7 |
+| `retry` | mastery == "partial" 且 attempts < max_attempts 且 best_score >= 0.5 | 8 |
+| `reteach` | attempts == max_attempts AND latest < 0.5 | 9 |
+| `remediate` | 其餘情況 | 10（最低） |
+
+**子章節決策觸發條件**：
+
+| 決策 | 觸發條件 | 優先序 |
+|------|----------|--------|
+| `advance` | mastery == "complete" | 1 |
+| `reteach` | high_severity 且 source_reteach_count < 2 | 2 |
+| `reteach` | stage_kind=="reteach" 且 mastery=="none" 且 source_reteach_count < 2 | 3 |
+| `remediate` | stage_kind=="reteach" 且 mastery=="none" 且 source_remediation_count < 2 | 4 |
+| `remediate` | source_remediation_count < 2 | 5 |
+| `advance` | 雙上限皆滿（強制前進） | 6（最低） |
 
 **動態節點類型**：
 
@@ -789,7 +832,14 @@ _make_progress_decision(...)
 |------|---------|---------|
 | 重教子章節 | `T.source.N` | reteach，且同一原章節重教次數 < 2 |
 | 補強子章節 | `R.source.N` | remediate，且同一原章節補強次數 < 2 |
-| 整合挑戰節點 | `E.N` | advance 且所有原始節點已完成 + stable_high |
+| 整合挑戰節點 | `E.N` | advance 且所有原始節點已完成 + stable_high；答完即結束課程，不觸發子章節 |
+
+**最壞情況套娃深度（上限保護）**：
+```
+主章節 → T.1.1（reteach）→ T.1.2（high_severity reteach）
+       → R.1.1（remediate）→ R.1.2（remediate）→ advance（雙上限滿）
+最多 4 個子章節後必定前進，不會無限套娃。
+```
 
 ### 7.7 恢復會話（resume_session）
 
@@ -1019,30 +1069,42 @@ stage["source_chunks"] = [{"chunk_id": cid, "quote": db_chunks[cid]["text"]}
 
 **輸入**：stage_evaluations（含 misconception_patterns）、pass_threshold=0.75、max_attempts=3
 
-**決策邏輯（Phase 4 升級 + 子章節解綁 + 2026-05-06 retry 邊界收斂）**：
+**決策邏輯（2026-05-06 重新整理）**：
 ```
-all_misconceptions = evaluations[*].misconception_patterns（展開）
-high_severity = [m for m if m.severity == "high"]
-repeated = 同一 pattern 字串出現 >= 2 次
+前置計算：
+    mastery = _mastery_state(scores, unique_confused, pass_threshold)
+        "complete" ← best >= 0.75 AND confused 為空
+        "none"     ← best < 0.5 AND avg < 0.5
+        "partial"  ← 其餘
+    is_child_stage = stage_kind in {"reteach", "remediation"}
+        ⚠️ enrichment 不落入子章節分支
 
-動態子章節（kind = reteach/remediation）：
-0. 完全掌握                         → advance
-1. 重教子章節完全未掌握且重教次數 < 2 → reteach（再插重教子章節）
-2. 未完全掌握且補強次數 < 2           → remediate（插補強子章節）
-3. 已達補強上限                       → advance
+子章節（kind = reteach / remediation）：
+1. mastery == "complete"                                    → advance
+2. high_severity AND source_reteach_count < 2               → reteach（升級重教）
+3. stage_kind=="reteach" AND mastery=="none"
+   AND source_reteach_count < 2                             → reteach（再插重教）
+4. stage_kind=="reteach" AND mastery=="none"
+   AND source_remediation_count < 2                         → remediate（重教上限改補強）
+5. source_remediation_count < 2                             → remediate
+6. else（雙上限滿）                                          → advance（強制前進）
 
 主章節：
-1. best_score >= 0.75               → advance
-2. high_severity 存在               → reteach（插重教子章節）
-3. repeated patterns                → reteach（插重教子章節）
-4. mastery == none                  → reteach（插重教子章節）
-5. mastery == partial 且 attempts >= max_attempts 且有 confused
-                                   → remediate（插補強子章節）
-6. mastery == partial 且 attempts < max_attempts 且 best_score >= 0.5
-                                   → retry（同章再測，不生成子章節）
-7. attempts == max_attempts
-   AND latest_score < 0.5           → reteach（插重教子章節）
-8. otherwise                        → remediate（插補強子章節）
+1. mastery == "complete"                                    → advance
+2. best_score >= 0.75 AND unique_confused 非空              → remediate（高分但有弱點）
+3. high_severity 存在                                        → reteach
+4. repeated_patterns == True                                → reteach
+5. mastery == "none" AND attempts == 1                      → retry（首次全錯先給機會）
+6. mastery == "none"                                        → reteach
+7. mastery == "partial" AND attempts >= max_attempts
+   AND unique_confused 非空                                  → remediate
+8. mastery == "partial" AND attempts < max_attempts
+   AND best_score >= 0.5                                    → retry
+9. attempts == max_attempts AND latest_score < 0.5          → reteach
+10. otherwise                                               → remediate
+
+orchestrator 保護：
+    enrichment stage 觸發 reteach/remediate → 強制轉為 advance，不插子章節
 ```
 
 **輸出**：`{decision, message, best_score, remediation_focus, high_severity_misconceptions, repeated_patterns_detected}`
