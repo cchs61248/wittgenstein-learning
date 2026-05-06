@@ -333,6 +333,11 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/config")
+async def get_config():
+    return {"default_provider": DEFAULT_PROVIDER.lower()}
+
+
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
     # 必須最後掛載，避免 StaticFiles 攔截 /ws/* 等非 HTTP 路由

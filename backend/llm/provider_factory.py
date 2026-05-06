@@ -5,6 +5,7 @@ from .claude_provider import ClaudeProvider
 from .openai_provider import OpenAIProvider
 from .gemini_provider import GeminiProvider
 from .monica_provider import MonicaProvider
+from .deepseek_provider import DeepSeekProvider
 
 
 class LLMProviderType(str, Enum):
@@ -12,13 +13,15 @@ class LLMProviderType(str, Enum):
     CLAUDE = "claude"
     GEMINI = "gemini"
     MONICA = "monica"
+    DEEPSEEK = "deepseek"
 
 
 _DEFAULTS: dict[LLMProviderType, tuple[str, type]] = {
-    LLMProviderType.CLAUDE:  ("claude-sonnet-4-6", ClaudeProvider),
-    LLMProviderType.OPENAI:  ("gpt-5.4-mini", OpenAIProvider),
-    LLMProviderType.GEMINI:  ("gemini-3-flash-preview", GeminiProvider),
-    LLMProviderType.MONICA:  ("claude-4.6-sonnet", MonicaProvider),
+    LLMProviderType.CLAUDE:    ("claude-sonnet-4-6", ClaudeProvider),
+    LLMProviderType.OPENAI:    ("gpt-5.4-mini", OpenAIProvider),
+    LLMProviderType.GEMINI:    ("gemini-3-flash-preview", GeminiProvider),
+    LLMProviderType.MONICA:    ("claude-4.6-sonnet", MonicaProvider),
+    LLMProviderType.DEEPSEEK:  ("deepseek-v4-flash", DeepSeekProvider),
 }
 
 

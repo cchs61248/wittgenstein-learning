@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { DragEvent, ChangeEvent, KeyboardEvent } from 'react';
 import { useSessionStore } from '../store/sessionStore';
 import { uploadFile, uploadUrl } from '../api/upload';
+import { fetchDefaultProvider } from '../api/config';
 import type { ProviderType, DepthType } from '../types/messages';
 
 // ── 型別 ─────────────────────────────────────────────────────────
@@ -114,6 +115,10 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
     { id: 'gemini-3-flash',        label: 'Gemini 3 Flash — 快速' },
     { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash' },
   ],
+  deepseek: [
+    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash — 快速/低成本' },
+    { id: 'deepseek-v4-pro',   label: 'DeepSeek V4 Pro — 品質優先' },
+  ],
 };
 
 const MAX_SOURCES = 50;
@@ -131,6 +136,14 @@ export function UploadModal({ onStart, onClose }: Props) {
   const [model, setModel] = useState(PROVIDER_MODELS.claude[0].id);
   const [depth, setDepth] = useState<DepthType>('intermediate');
   const [questionMode, setQuestionMode] = useState<'short_answer' | 'multiple_choice'>('short_answer');
+
+  // 從後端取得預設 provider
+  useEffect(() => {
+    fetchDefaultProvider().then((p) => {
+      setProvider(p);
+      setModel(PROVIDER_MODELS[p][0].id);
+    });
+  }, []);
 
   // URL 輸入
   const [urlInput, setUrlInput] = useState('');
@@ -461,6 +474,7 @@ export function UploadModal({ onStart, onClose }: Props) {
               <option value="openai">OpenAI</option>
               <option value="gemini">Google Gemini</option>
               <option value="monica">Monica（本地代理）</option>
+              <option value="deepseek">DeepSeek</option>
             </select>
           </div>
 
