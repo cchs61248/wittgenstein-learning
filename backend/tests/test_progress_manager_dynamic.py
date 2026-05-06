@@ -172,7 +172,8 @@ def test_dynamic_main_stage_with_source_stage_id_and_zero_scores_reteaches():
     assert result["best_score"] == 0.0
 
 
-def test_main_stage_all_zero_scores_without_high_severity_reteaches_instead_of_retry():
+def test_main_stage_all_zero_scores_first_attempt_retries():
+    """首次嘗試全錯（無 high_severity）→ retry，先給一次補救機會。"""
     agent = make_agent()
     result = run(agent.run(ctx({
         "evaluations": [
@@ -193,8 +194,30 @@ def test_main_stage_all_zero_scores_without_high_severity_reteaches_instead_of_r
         "source_remediation_count": 0,
     })))
 
-    assert result["decision"] == "reteach"
+    assert result["decision"] == "retry", "首次全錯應給 retry 機會，不立即 reteach"
     assert result["best_score"] == 0.0
+
+
+def test_main_stage_all_zero_scores_second_attempt_reteaches():
+    """第二次仍全錯（無 high_severity）→ reteach，確認無法靠自己翻轉。"""
+    agent = make_agent()
+    result = run(agent.run(ctx({
+        "evaluations": [
+            {"score": 0.0, "confused_concepts": ["同步處理"], "misconception_patterns": []},
+            {"score": 0.0, "confused_concepts": ["Job Queue"], "misconception_patterns": []},
+        ],
+        "pass_threshold": 0.75,
+        "current_stage_id": 1,
+        "total_stages": 9,
+        "current_attempt": 2,
+        "is_dynamic": False,
+        "stage_kind": "main",
+        "source_stage_id": 1,
+        "source_reteach_count": 0,
+        "source_remediation_count": 0,
+    })))
+
+    assert result["decision"] == "reteach", "第二次全錯應觸發 reteach"
 
 
 def test_main_stage_partial_near_threshold_retries():

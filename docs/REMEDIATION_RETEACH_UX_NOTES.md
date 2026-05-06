@@ -169,7 +169,7 @@
 ### 待完成
 
 - [x] 前端章節列表與回顧顯示：子章節要可被獨立進入、獨立答題、獨立回顧，同時保留與原章節的關聯。（`StageMap.tsx` 以 `source_stage_id` 分組，子章節縮排顯示於父章節下方，附類型 badge）
-- [ ] 補測試：至少覆蓋「主章節 → 重教」、「重教 → 補強」、「重教最多 2 次」、「補強最多 2 次」、「高分有弱點 → 補強」、「首次全錯 → retry」、「enrichment 不觸發子章節」。
+- [x] 補測試：至少覆蓋「主章節 → 重教」、「重教 → 補強」、「重教最多 2 次」、「補強最多 2 次」、「高分有弱點 → 補強」、「首次全錯 → retry」、「enrichment 不觸發子章節」。（共 25 個測試，全部通過；測試檔：`test_progress_manager.py`、`test_progress_manager_dynamic.py`、`test_progress_decision_new_rules.py`）
 
 ---
 
