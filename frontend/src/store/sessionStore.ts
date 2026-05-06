@@ -69,6 +69,7 @@ interface SessionState {
       source_stage_id?: number;
     }[];
   }>;
+  stageDecisions: Record<number, StageDecisionPayload>;
   isAwaitingFeedback: boolean;
   pendingNextQuestion: QuestionPayload | null;
   pendingAnswer: string | null;
@@ -101,6 +102,8 @@ interface SessionState {
     bestScore: number;
     nextStageId: number | null;
     nextStageScore?: number | null;
+    reasonLines?: string[];
+    strategySnapshot?: StageDecisionPayload['strategy_snapshot'];
     candidates?: {
       stage_id: number;
       title: string;
@@ -157,6 +160,15 @@ function loadDecisionHistory() {
   }
 }
 
+function loadStageDecisions(): Record<number, StageDecisionPayload> {
+  try {
+    const raw = localStorage.getItem('wl_stage_decisions');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 function loadTutorHistory(): { question: string; answer: string; in_scope?: boolean }[] {
   try {
     const raw = localStorage.getItem('wl_tutor_history');
@@ -186,6 +198,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_stage_explanations');
     localStorage.removeItem('wl_stage_qa_histories');
     localStorage.removeItem('wl_decision_history');
+    localStorage.removeItem('wl_stage_decisions');
     localStorage.removeItem('wl_tutor_history');
     set({
       token: null,
@@ -198,6 +211,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       tutorReply: null,
       pendingAdvanceStageId: null,
       pendingCourseComplete: false,
+      stageDecisions: {},
       isExplanationLoading: false,
     });
   },
@@ -211,6 +225,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       const isNewSession = s.sessionId !== sessionId;
       if (isNewSession) {
         localStorage.removeItem('wl_decision_history');
+        localStorage.removeItem('wl_stage_decisions');
       }
       // Preserve existing 'current' status when DB hasn't caught up yet
       // (e.g., advanceStage already ran but run_stage hasn't written in_progress to DB)
@@ -230,6 +245,19 @@ export const useSessionStore = create<SessionState>((set) => ({
         return { ...stage, status };
       });
       const currentStage = mappedStages.find((st) => st.status === 'current');
+      const currentStageChanged =
+        !isNewSession &&
+        s.currentStageId !== null &&
+        currentStage?.stage_id !== undefined &&
+        currentStage.stage_id !== s.currentStageId;
+      const previousStageId = s.currentStageId;
+      const stageQaHistories =
+        currentStageChanged && previousStageId !== null && s.qaHistory.length > 0
+          ? { ...s.stageQaHistories, [previousStageId]: s.qaHistory }
+          : s.stageQaHistories;
+      if (stageQaHistories !== s.stageQaHistories) {
+        localStorage.setItem('wl_stage_qa_histories', JSON.stringify(stageQaHistories));
+      }
       const stageReset = isNewSession ? {
         explanationText: '',
         isStreaming: false,
@@ -244,19 +272,32 @@ export const useSessionStore = create<SessionState>((set) => ({
         pendingAdvanceStageId: null,
         pendingCourseComplete: false,
       } : {
-        // 同場次 stage advance：只更新 stages 清單，保留 lastFeedback 讓學生看完再繼續
+        // 同場次同章節更新只刷新 stages；真正換章時才清掉新畫面的上一章暫存問答。
         explanationText: '',
         isStreaming: false,
         isExplanationLoading: false,
+        ...(currentStageChanged
+          ? {
+              currentQuestion: null,
+              lastFeedback: null,
+              lastDecision: null,
+              pendingNextQuestion: null,
+              isAwaitingFeedback: false,
+              pendingAnswer: null,
+              qaHistory: [],
+            }
+          : {}),
       };
       return {
         sessionId,
         stages: mappedStages,
         currentStageId: currentStage?.stage_id ?? stages[0]?.stage_id ?? null,
+        stageQaHistories,
         stageSourceChunks: Object.fromEntries(
           stages.map((stage) => [stage.stage_id, stage.source_chunks ?? []])
         ),
         decisionHistory: isNewSession ? [] : s.decisionHistory,
+        stageDecisions: isNewSession ? {} : s.stageDecisions,
         ...stageReset,
       };
     });
@@ -308,6 +349,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   lastFeedback: null,
   lastDecision: null,
   decisionHistory: loadDecisionHistory(),
+  stageDecisions: loadStageDecisions(),
   isAwaitingFeedback: false,
   pendingNextQuestion: null,
   pendingAnswer: null,
@@ -377,7 +419,16 @@ export const useSessionStore = create<SessionState>((set) => ({
       isAwaitingFeedback: false,
       pendingAnswer: null,
     }),
-  setDecision: (d) => set({ lastDecision: d }),
+  setDecision: (d) =>
+    set((s) => {
+      const stageId = d.strategy_snapshot?.current_stage_id;
+      if (stageId === undefined) {
+        return { lastDecision: d };
+      }
+      const updated = { ...s.stageDecisions, [stageId]: d };
+      localStorage.setItem('wl_stage_decisions', JSON.stringify(updated));
+      return { lastDecision: d, stageDecisions: updated };
+    }),
   pushDecisionHistory: (d) =>
     set((s) => {
       const item = {
@@ -416,7 +467,24 @@ export const useSessionStore = create<SessionState>((set) => ({
     set(() => {
       const limited = history.slice(-DECISION_HISTORY_MAX);
       localStorage.setItem('wl_decision_history', JSON.stringify(limited));
-      return { decisionHistory: limited };
+      const stageDecisions = Object.fromEntries(
+        limited
+          .filter((h) => h.stageId !== null && h.strategySnapshot)
+          .map((h) => [
+            h.stageId as number,
+            {
+              decision: h.decision,
+              message: '',
+              next_stage_id: h.nextStageId,
+              next_stage_score: h.nextStageScore,
+              best_score: h.bestScore,
+              reason_lines: h.reasonLines ?? [],
+              strategy_snapshot: h.strategySnapshot,
+            } satisfies StageDecisionPayload,
+          ])
+      );
+      localStorage.setItem('wl_stage_decisions', JSON.stringify(stageDecisions));
+      return { decisionHistory: limited, stageDecisions };
     }),
   proceedToNextQuestion: () =>
     set((s) => ({
@@ -493,6 +561,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_stage_explanations');
     localStorage.removeItem('wl_stage_qa_histories');
     localStorage.removeItem('wl_decision_history');
+    localStorage.removeItem('wl_stage_decisions');
     localStorage.removeItem('wl_tutor_history');
     set({
       sessionId: null,
@@ -518,6 +587,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingAdvanceStageId: null,
       pendingCourseComplete: false,
       decisionHistory: [],
+      stageDecisions: {},
       isExplanationLoading: false,
     });
   },

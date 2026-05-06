@@ -65,6 +65,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
   const currentQuestion = useSessionStore((s) => s.currentQuestion);
   const lastFeedback = useSessionStore((s) => s.lastFeedback);
   const lastDecision = useSessionStore((s) => s.lastDecision);
+  const currentStageId = useSessionStore((s) => s.currentStageId);
   const courseCompleted = useSessionStore((s) => s.courseCompleted);
   const isAwaitingFeedback = useSessionStore((s) => s.isAwaitingFeedback);
   const pendingNextQuestion = useSessionStore((s) => s.pendingNextQuestion);
@@ -81,6 +82,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
   const token = useSessionStore((s) => s.token);
   const stages = useSessionStore((s) => s.stages);
   const stageQaHistories = useSessionStore((s) => s.stageQaHistories);
+  const stageDecisions = useSessionStore((s) => s.stageDecisions);
   const stageSourceChunks = useSessionStore((s) => s.stageSourceChunks);
   const [answer, setAnswer] = useState('');
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -96,6 +98,12 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
     reviewingCompletedStage && selectedStageId !== null
       ? (stageQaHistories[selectedStageId] ?? [])
       : [];
+  const selectedStageDecision =
+    reviewingCompletedStage && selectedStageId !== null
+      ? stageDecisions[selectedStageId]
+      : null;
+  const currentStageDecision =
+    lastDecision?.strategy_snapshot?.current_stage_id === currentStageId ? lastDecision : null;
 
   useEffect(() => {
     if (selectedStageId === null || !sessionId || !token) {
@@ -158,39 +166,59 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
         return <p className="panel-placeholder">無法載入答題記錄，請稍後再試。</p>;
       }
       const reviewHistory = reviewHistoryList;
-      if (reviewHistory.length === 0) {
+      if (reviewHistory.length === 0 && !selectedStageDecision) {
         return <p className="panel-placeholder">此節點無答題記錄</p>;
       }
       return (
-        <div className="qa-history-section">
-          <div className="qa-history-toggle" style={{ cursor: 'default' }}>
-            <span>答題記錄（共 {reviewHistory.length} 題）</span>
-          </div>
-          <div className="qa-history-list">
-            {reviewHistory.map((item, idx) => (
-              <div key={item.questionId}>
-                <button
-                  className={`qa-history-item ${selectedHistoryIdx === idx ? 'qa-history-item-selected' : ''}`}
-                  onClick={() => setSelectedHistoryIdx(selectedHistoryIdx === idx ? null : idx)}
-                >
-                  <span className="history-idx">{idx + 1}</span>
-                  <span className="question-type" style={{ fontSize: '11px' }}>
-                    {typeLabel[item.questionType] ?? '問題'}
-                  </span>
-                  <span className="history-question-text">
-                    {item.questionText.length > 45
-                      ? item.questionText.slice(0, 45) + '…'
-                      : item.questionText}
-                  </span>
-                  <span className={`score-badge ${item.score >= 0.75 ? 'score-pass' : 'score-fail'}`} style={{ fontSize: '13px' }}>
-                    {(item.score * 100).toFixed(0)} 分
-                  </span>
-                </button>
-                {selectedHistoryIdx === idx && <HistoryDetail item={item} />}
+        <>
+          {reviewHistory.length > 0 && (
+            <div className="qa-history-section">
+              <div className="qa-history-toggle" style={{ cursor: 'default' }}>
+                <span>答題記錄（共 {reviewHistory.length} 題）</span>
               </div>
-            ))}
-          </div>
-        </div>
+              <div className="qa-history-list">
+                {reviewHistory.map((item, idx) => (
+                  <div key={item.questionId}>
+                    <button
+                      className={`qa-history-item ${selectedHistoryIdx === idx ? 'qa-history-item-selected' : ''}`}
+                      onClick={() => setSelectedHistoryIdx(selectedHistoryIdx === idx ? null : idx)}
+                    >
+                      <span className="history-idx">{idx + 1}</span>
+                      <span className="question-type" style={{ fontSize: '11px' }}>
+                        {typeLabel[item.questionType] ?? '問題'}
+                      </span>
+                      <span className="history-question-text">
+                        {item.questionText.length > 45
+                          ? item.questionText.slice(0, 45) + '…'
+                          : item.questionText}
+                      </span>
+                      <span className={`score-badge ${item.score >= 0.75 ? 'score-pass' : 'score-fail'}`} style={{ fontSize: '13px' }}>
+                        {(item.score * 100).toFixed(0)} 分
+                      </span>
+                    </button>
+                    {selectedHistoryIdx === idx && <HistoryDetail item={item} />}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {selectedStageDecision && (
+            <>
+              <div className={`decision-banner decision-${selectedStageDecision.decision}`}>
+                {selectedStageDecision.message && <p>{selectedStageDecision.message}</p>}
+                {(selectedStageDecision.reason_lines ?? []).length > 0 && (
+                  <div className="qa-history-detail-block" style={{ marginTop: 8 }}>
+                    <span className="detail-label">路徑判斷依據</span>
+                    {(selectedStageDecision.reason_lines ?? []).map((line, idx) => (
+                      <p key={`${idx}-${line}`}>- {line}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <LearningCoachPanel decision={selectedStageDecision} />
+            </>
+          )}
+        </>
       );
     }
 
@@ -203,7 +231,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
       );
     }
 
-    if (!currentQuestion && !lastDecision && !lastFeedback) {
+    if (!currentQuestion && !currentStageDecision && !lastFeedback) {
       return <p className="panel-placeholder">講解完成後將出現問題...</p>;
     }
 
@@ -250,20 +278,20 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
           </div>
         )}
 
-        {lastDecision && !lastFeedback && (
+        {currentStageDecision && !lastFeedback && (
           <>
-            <div className={`decision-banner decision-${lastDecision.decision}`}>
-              <p>{lastDecision.message}</p>
-              {(lastDecision.reason_lines ?? []).length > 0 && (
+            <div className={`decision-banner decision-${currentStageDecision.decision}`}>
+              <p>{currentStageDecision.message}</p>
+              {(currentStageDecision.reason_lines ?? []).length > 0 && (
                 <div className="qa-history-detail-block" style={{ marginTop: 8 }}>
                   <span className="detail-label">路徑判斷依據</span>
-                  {(lastDecision.reason_lines ?? []).map((line, idx) => (
+                  {(currentStageDecision.reason_lines ?? []).map((line, idx) => (
                     <p key={`${idx}-${line}`}>- {line}</p>
                   ))}
                 </div>
               )}
             </div>
-            <LearningCoachPanel decision={lastDecision} />
+            <LearningCoachPanel decision={currentStageDecision} />
           </>
         )}
 

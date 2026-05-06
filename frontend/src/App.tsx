@@ -516,6 +516,8 @@ export default function App() {
               bestScore: h.best_score,
               nextStageId: h.next_stage_id,
               nextStageScore: h.next_stage_score,
+              reasonLines: h.reason_lines,
+              strategySnapshot: h.strategy_snapshot,
               candidates: h.strategy_snapshot?.next_stage_candidates ?? [],
             }))
           );
