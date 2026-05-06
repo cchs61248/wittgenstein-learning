@@ -1,4 +1,4 @@
-import pytest
+import asyncio
 from unittest.mock import MagicMock
 
 from backend.orchestrator.learning_orchestrator import LearningOrchestrator
@@ -8,8 +8,11 @@ def make_orchestrator() -> LearningOrchestrator:
     return LearningOrchestrator(MagicMock())
 
 
-@pytest.mark.asyncio
-async def test_insert_reteach_stage_preserves_source_stage(monkeypatch):
+def run(coro):
+    return asyncio.get_event_loop().run_until_complete(coro)
+
+
+def test_insert_reteach_stage_preserves_source_stage(monkeypatch):
     stored = {}
 
     async def store_stages(session_id, stages):
@@ -37,7 +40,7 @@ async def test_insert_reteach_stage_preserves_source_stage(monkeypatch):
         "source_chunks": [{"chunk_id": "chunk_0001", "quote": "原文"}],
     }]
 
-    updated, idx = await orchestrator._insert_reteach_stage("s1", stages, 0, ["語言遊戲"])
+    updated, idx = run(orchestrator._insert_reteach_stage("s1", stages, 0, ["語言遊戲"]))
 
     assert idx == 1
     assert updated[0]["content"] == "原始內容"

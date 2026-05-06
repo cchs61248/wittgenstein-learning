@@ -26,6 +26,9 @@ frontend/node_modules/
 .idea/
 *.swp
 
+# 隔離實作工作區
+.worktrees/
+
 # OS
 .DS_Store
 Thumbs.db
