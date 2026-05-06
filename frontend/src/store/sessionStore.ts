@@ -329,6 +329,16 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
   setQuestion: (q) =>
     set((s) => {
+      const isNewStageQuestion =
+        s.currentQuestion !== null && q.stage_id !== s.currentQuestion.stage_id;
+      if (isNewStageQuestion) {
+        return {
+          currentQuestion: q,
+          lastFeedback: null,
+          pendingNextQuestion: null,
+          isAwaitingFeedback: false,
+        };
+      }
       if (s.lastFeedback) {
         return { pendingNextQuestion: q, isAwaitingFeedback: false };
       }

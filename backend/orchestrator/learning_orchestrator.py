@@ -1149,6 +1149,18 @@ class LearningOrchestrator:
         if d == "advance":
             if next_stage_idx is not None:
                 await longterm_memory.update_user_profile(user_id, len(wm.stage_turns))
+                next_stage = stages[next_stage_idx]
+                await session_memory.update_current_stage(session_id, next_stage["stage_id"])
+                await session_memory.upsert_stage_progress(
+                    session_id=session_id,
+                    stage_id=next_stage["stage_id"],
+                    status="in_progress",
+                    attempts=0,
+                    best_score=0.0,
+                    understanding_notes={
+                        "source_stage_id": self._source_stage_id(next_stage),
+                    },
+                )
                 refreshed_statuses = await session_memory.get_stage_statuses(session_id)
                 await emit({
                     "type": "session_started",
@@ -1287,6 +1299,18 @@ class LearningOrchestrator:
                     "branched_to": d,
                     "focus": decision.get("remediation_focus") or [],
                     "source_stage_id": source_stage_id,
+                },
+            )
+            next_stage = stages[next_stage_idx]
+            await session_memory.update_current_stage(session_id, next_stage["stage_id"])
+            await session_memory.upsert_stage_progress(
+                session_id=session_id,
+                stage_id=next_stage["stage_id"],
+                status="in_progress",
+                attempts=0,
+                best_score=0.0,
+                understanding_notes={
+                    "source_stage_id": self._source_stage_id(next_stage),
                 },
             )
             refreshed_statuses = await session_memory.get_stage_statuses(session_id)
