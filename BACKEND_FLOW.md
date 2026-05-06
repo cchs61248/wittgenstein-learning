@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 master 分支（Phase 1–4 完整實作，最後更新：2026-05-01，含 retry/remediate 分離、補強文章串流、持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica Provider、上傳磁碟持久化）
+> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-06，含 retry/remediate 分離、重教／補強子章節解綁、持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica Provider、上傳磁碟持久化）
 
 ---
 
@@ -635,8 +635,9 @@ _make_progress_decision(...)
    │      AND latest_score < 0.5      → reteach
    │   6. otherwise                   → remediate
    │
-   │   ⚠️ 動態節點特例：wm.remediate_count >= 2（同一 stage 已補強 ≥ 2 次）
-   │       → 強制 advance，避免無限補強循環
+   │   ⚠️ 動態子章節不再一律 advance：
+   │       依 stage.kind（reteach/remediation）、source_stage_id、
+   │       source_reteach_count/source_remediation_count 與掌握程度分流
     │
     │   回傳：{decision, message, best_score, remediation_focus,
     │          high_severity_misconceptions, repeated_patterns_detected}
@@ -663,9 +664,13 @@ _make_progress_decision(...)
     │       stable_high: bool,
     │   }
     │
-    ├── 【remediate / reteach】
-    │   若有 remediation_focus 且無候選節點：
-    │       _insert_remediation_stage(...)（R.N 補強節點）
+    ├── 【reteach】
+    │   _insert_reteach_stage(...)（T.source.N 重教子章節）
+    │   原章節講解與 QA 不覆寫，使用者直接進入新子章節
+    │
+    ├── 【remediate】
+    │   _insert_remediation_stage(...)（R.source.N 補強子章節）
+    │   原章節講解與 QA 不附加，使用者直接進入新子章節
     │
     ├── session_memory.upsert_stage_progress(...)
     ├── strategy_snapshot = {
@@ -694,29 +699,11 @@ _make_progress_decision(...)
     │   emit: explanation_complete（full_explanation = 累積講解文字）
     │   emit: question（第一道新題）
     │
-    ├── 【remediate 後續】
-    │   wm.current_attempt += 1
-    │   ⚠️  不送 explanation_reset（保留原文於前端）
-    │   在 wm.current_explanation 尾端附加補強標題（含 focus 概念）
-    │   build_adaptive_context()（重新取 learner_state，current_attempt 已遞增）
-    │   TeacherAgent.stream_explanation（stage.content 附「補強模式」指示）→ 串流補強文章
-    │   extract_teaching_intent → wm.current_teaching_intent（更新）
-    │   QuestionGeneratorAgent（帶新 teaching_intent 與 allowed_evidence）
-    │   session_memory.store_stage_explanation(combined)  ← 原文 + 補強文章一起持久化
-    │   session_memory.store_stage_questions(questions)
-    │   emit: explanation_complete
-    │   emit: question（第一道新題）
-    │
-    └── 【reteach 後續】
-        wm.current_attempt += 1
-        session_memory.store_stage_explanation(current_explanation)  ← 換框架前先存舊版
-        session_memory.store_stage_questions(current_questions)      ← 換框架前先存舊版
-        emit: explanation_complete（將舊版通知前端，防止 resume 重新生成）
-        rebuild adaptive_ctx（current_attempt 已遞增）
-        TeacherAgent.stream_explanation（附「換框架」指引）
-        extract_teaching_intent → wm.current_teaching_intent（更新）
-        QuestionGeneratorAgent（帶新 teaching_intent）
-        emit: 新講解 + 新問題
+    └── 【remediate / reteach 後續】
+        將目前章節標記 completed（branched_to = decision）
+        emit: session_started（含新增子章節與 stage_statuses）
+        run_stage(next_stage_idx, ...)
+        ⚠️  reteach 不再送 explanation_reset，也不覆寫原章節 full_explanation
 ```
 
 **五種決策觸發條件（Phase 4 更新）**：
@@ -734,7 +721,8 @@ _make_progress_decision(...)
 
 | 類型 | node_id | 觸發時機 |
 |------|---------|---------|
-| 補強節點 | `R.N` | remediate/reteach 且無現成弱點節點 |
+| 重教子章節 | `T.source.N` | reteach，且同一原章節重教次數 < 2 |
+| 補強子章節 | `R.source.N` | remediate，且同一原章節補強次數 < 2 |
 | 整合挑戰節點 | `E.N` | advance 且所有原始節點已完成 + stable_high |
 
 ### 7.7 恢復會話（resume_session）
@@ -891,7 +879,7 @@ stage["source_chunks"] = [{"chunk_id": cid, "quote": db_chunks[cid]["text"]}
 
 **職責**：生成與教學意圖對齊的布魯姆式問題
 
-**呼叫時機**：`run_stage`、`retry/remediate/reteach` 後重新出題
+**呼叫時機**：`run_stage` 與 `retry` 後重新出題；`remediate` / `reteach` 先插入獨立子章節，再由該子章節的 `run_stage` 產題
 
 **輸入（Phase 3 升級）**：
 - `stage` — 節點定義
@@ -965,20 +953,26 @@ stage["source_chunks"] = [{"chunk_id": cid, "quote": db_chunks[cid]["text"]}
 
 **輸入**：stage_evaluations（含 misconception_patterns）、pass_threshold=0.75、max_attempts=3
 
-**決策邏輯（Phase 4 升級）**：
+**決策邏輯（Phase 4 升級 + 子章節解綁）**：
 ```
 all_misconceptions = evaluations[*].misconception_patterns（展開）
 high_severity = [m for m if m.severity == "high"]
 repeated = 同一 pattern 字串出現 >= 2 次
 
-0. wm.remediate_count >= 2         → 強制 advance（避免無限補強循環）
-1. best_score >= 0.75              → advance
-2. high_severity 存在              → reteach（根本誤解）
-3. repeated patterns               → reteach（同一錯誤重複）
-4. attempts < max_attempts         → retry
+動態子章節（kind = reteach/remediation）：
+0. 完全掌握                         → advance
+1. 重教子章節完全未掌握且重教次數 < 2 → reteach（再插重教子章節）
+2. 未完全掌握且補強次數 < 2           → remediate（插補強子章節）
+3. 已達補強上限                       → advance
+
+主章節：
+1. best_score >= 0.75               → advance
+2. high_severity 存在               → reteach（插重教子章節）
+3. repeated patterns                → reteach（插重教子章節）
+4. attempts < max_attempts          → retry
 5. attempts == max_attempts
-   AND latest_score < 0.5          → reteach
-6. otherwise                       → remediate
+   AND latest_score < 0.5           → reteach（插重教子章節）
+6. otherwise                        → remediate（插補強子章節）
 ```
 
 **輸出**：`{decision, message, best_score, remediation_focus, high_severity_misconceptions, repeated_patterns_detected}`
@@ -987,7 +981,7 @@ repeated = 同一 pattern 字串出現 >= 2 次
 
 **職責**：驗證 LLM 生成的講解或問題是否紮根於原始教材，防止幻覺與錯誤引用
 
-**呼叫時機**：TeacherAgent 串流完成後（explanation）、QuestionGeneratorAgent 完成後（questions）、reteach 重寫後
+**呼叫時機**：TeacherAgent 串流完成後（explanation）、QuestionGeneratorAgent 完成後（questions）；重教內容在獨立子章節的 `run_stage` 中驗證
 
 **Citation Accuracy 升級（Phase 4）**：
 

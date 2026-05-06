@@ -15,8 +15,11 @@ export interface KnowledgeMapPayload {
 
 export interface StageInfo {
   stage_id: number;
+  node_id?: string;
   title: string;
   source_chunks?: SourceChunk[];
+  kind?: 'reteach' | 'remediation' | 'enrichment' | string;
+  source_stage_id?: number;
 }
 
 export interface SourceChunk {
@@ -77,7 +80,14 @@ export interface StageDecisionPayload {
     weak_concepts?: string[];
     mastery_map?: Record<string, number>;
     score_trend?: number[];
-    next_stage_candidates?: { stage_id: number; title: string; score: number; is_dynamic?: boolean }[];
+    next_stage_candidates?: {
+      stage_id: number;
+      title: string;
+      score: number;
+      is_dynamic?: boolean;
+      kind?: string;
+      source_stage_id?: number;
+    }[];
     remediation_focus: string[];
     dynamic_stage_inserted: boolean;
   };

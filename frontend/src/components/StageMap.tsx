@@ -37,6 +37,14 @@ export function StageMap({ hideHeading = false }: StageMapProps) {
           // 已完成章節應隨時可點回顧；講解文字是否已在快取由主欄處理（避免新章節生成中因快取條件誤擋側欄）
           const canReview = stage.status === 'completed';
           const isSelected = selectedStageId === stage.stage_id;
+          const kindLabel =
+            stage.kind === 'reteach'
+              ? '重教子章節'
+              : stage.kind === 'remediation'
+              ? '補強子章節'
+              : stage.kind === 'enrichment'
+              ? '整合挑戰'
+              : null;
           return (
             <li
               key={stage.stage_id}
@@ -49,6 +57,7 @@ export function StageMap({ hideHeading = false }: StageMapProps) {
                 <span className="stage-status-label">
                   {isSelected ? '回顧中' : statusLabel[stage.status]}
                 </span>
+                {kindLabel && <span className="stage-kind-label">{kindLabel}</span>}
               </div>
             </li>
           );

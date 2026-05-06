@@ -62,6 +62,8 @@ async def get_active_session(token: str = Query(...)):
                 "stage_id": s["stage_id"],
                 "node_id": s.get("node_id", ""),
                 "title": s["title"],
+                "kind": s.get("kind"),
+                "source_stage_id": s.get("source_stage_id"),
                 "source_chunks": s.get("source_chunks", []),
             }
             for s in stages
@@ -175,6 +177,8 @@ async def get_session_detail(session_id: str, token: str = Query(...)):
                 "stage_id": s["stage_id"],
                 "node_id": s.get("node_id", ""),
                 "title": s["title"],
+                "kind": s.get("kind"),
+                "source_stage_id": s.get("source_stage_id"),
                 "source_chunks": s.get("source_chunks", []),
             }
             for s in stages

@@ -6,6 +6,8 @@ export interface ActiveSessionStage {
   stage_id: number;
   node_id: string;
   title: string;
+  kind?: 'reteach' | 'remediation' | 'enrichment' | string;
+  source_stage_id?: number;
   source_chunks?: { chunk_id: string; quote: string; note?: string }[];
 }
 

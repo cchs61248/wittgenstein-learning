@@ -60,7 +60,14 @@ interface SessionState {
     bestScore: number;
     nextStageId: number | null;
     nextStageScore?: number | null;
-    candidates?: { stage_id: number; title: string; score: number; is_dynamic?: boolean }[];
+    candidates?: {
+      stage_id: number;
+      title: string;
+      score: number;
+      is_dynamic?: boolean;
+      kind?: string;
+      source_stage_id?: number;
+    }[];
   }>;
   isAwaitingFeedback: boolean;
   pendingNextQuestion: QuestionPayload | null;
@@ -94,7 +101,14 @@ interface SessionState {
     bestScore: number;
     nextStageId: number | null;
     nextStageScore?: number | null;
-    candidates?: { stage_id: number; title: string; score: number; is_dynamic?: boolean }[];
+    candidates?: {
+      stage_id: number;
+      title: string;
+      score: number;
+      is_dynamic?: boolean;
+      kind?: string;
+      source_stage_id?: number;
+    }[];
   }>) => void;
   proceedToNextQuestion: () => void;
   advanceStage: (nextStageId: number | null) => void;

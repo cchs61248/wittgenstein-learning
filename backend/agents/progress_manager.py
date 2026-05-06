@@ -20,6 +20,28 @@ def _detect_repeated_patterns(evaluations: list[dict]) -> bool:
     return len(patterns) != len(set(patterns))
 
 
+def _unique_confused_concepts(evaluations: list[dict]) -> list[str]:
+    concepts: list[str] = []
+    for ev in evaluations:
+        concepts.extend(ev.get("confused_concepts", []))
+    return list(dict.fromkeys(c for c in concepts if c))
+
+
+def _mastery_state(scores: list[float], confused: list[str], pass_threshold: float) -> str:
+    if not scores:
+        return "none"
+    best_score = max(scores)
+    avg_score = sum(scores) / len(scores)
+    passed_count = sum(1 for score in scores if score >= pass_threshold)
+    if best_score >= pass_threshold and not confused:
+        return "complete"
+    if best_score < 0.5 and avg_score < 0.5:
+        return "none"
+    if passed_count > 0 or best_score >= pass_threshold:
+        return "partial"
+    return "partial" if confused else "none"
+
+
 class ProgressManagerAgent(BaseAgent):
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
         payload = ctx.task_payload
@@ -38,7 +60,12 @@ class ProgressManagerAgent(BaseAgent):
         question_mode: str = payload.get("question_mode", "short_answer")
         is_dynamic: bool = payload.get("is_dynamic", False)
         remediate_count: int = payload.get("remediate_count", 0)
-        max_remediate: int = 2
+        stage_kind: str = payload.get("stage_kind") or ("dynamic" if is_dynamic else "main")
+        source_stage_id = payload.get("source_stage_id")
+        source_reteach_count: int = int(payload.get("source_reteach_count", 0) or 0)
+        source_remediation_count: int = int(payload.get("source_remediation_count", remediate_count) or 0)
+        max_reteach: int = int(payload.get("max_reteach", 2) or 2)
+        max_remediation: int = int(payload.get("max_remediation", 2) or 2)
 
         raw_attempt = payload.get("current_attempt")
         try:
@@ -56,41 +83,43 @@ class ProgressManagerAgent(BaseAgent):
         best_score = max(scores) if scores else 0.0
         latest_score = scores[-1] if scores else 0.0
 
-        # 動態補強子節點：完成即前進，避免無限子節點
-        if is_dynamic:
-            result = {
-                "decision": "advance",
-                "message": "補強練習完成，繼續前進！",
-                "next_stage_id": None,
-                "best_score": best_score,
-                "remediation_focus": None,
-                "high_severity_misconceptions": [],
-                "repeated_patterns_detected": False,
-            }
-            self._log_end(ctx, t0, {"decision": "advance(dynamic)", "best_score": best_score})
-            return result
-
-        # 超過最大補強次數：強制前進
-        if remediate_count >= max_remediate:
-            result = {
-                "decision": "advance",
-                "message": f"你已完成 {remediate_count} 次補強練習，讓我們繼續前進。",
-                "next_stage_id": None,
-                "best_score": best_score,
-                "remediation_focus": None,
-                "high_severity_misconceptions": [],
-                "repeated_patterns_detected": False,
-            }
-            self._log_end(ctx, t0, {"decision": "advance(max_remediate)", "best_score": best_score})
-            return result
-
         all_misconceptions: list[dict] = []
         for ev in evaluations:
             all_misconceptions.extend(ev.get("misconception_patterns", []))
         high_severity = [m for m in all_misconceptions if m.get("severity") == "high"]
         repeated_patterns = _detect_repeated_patterns(evaluations)
+        unique_confused = _unique_confused_concepts(evaluations)
+        mastery = _mastery_state(scores, unique_confused, pass_threshold)
+        is_child_stage = stage_kind in {"reteach", "remediation"} or source_stage_id is not None
 
-        if best_score >= pass_threshold:
+        if is_child_stage:
+            if mastery == "complete":
+                decision = "advance"
+                next_stage = None
+                message = f"很好！你已掌握這個補充章節（校正得分：{best_score:.0%}），讓我們繼續。"
+            elif stage_kind == "reteach" and mastery == "none" and source_reteach_count < max_reteach:
+                decision = "reteach"
+                next_stage = None
+                message = "這一輪仍未建立整體理解，我會再插入一個新的重教子章節，用另一個框架重新說明。"
+            elif stage_kind == "reteach" and mastery == "none" and source_remediation_count < max_remediation:
+                decision = "remediate"
+                next_stage = None
+                message = "同一章節的重教次數已達上限，我會改插入補強子章節，針對仍卡住的概念練習。"
+            elif source_remediation_count < max_remediation:
+                decision = "remediate"
+                next_stage = None
+                message = "你已掌握部分內容，我會針對仍卡住的概念新增補強子章節。"
+            else:
+                decision = "advance"
+                next_stage = None
+                message = "你已達到此章補強上限，先繼續前進，後續可再回顧這些概念。"
+        # 超過最大補強次數：強制前進（舊同節點補強路徑）
+        elif remediate_count >= max_remediation:
+            decision = "advance"
+            next_stage = None
+            message = f"你已完成 {remediate_count} 次補強練習，讓我們繼續前進。"
+
+        elif best_score >= pass_threshold:
             decision = "advance"
             next_stage = current_stage_id + 1 if current_stage_id + 1 < total_stages else None
             message = f"很好！你已理解這個階段（校正得分：{best_score:.0%}），讓我們繼續。"
@@ -115,11 +144,6 @@ class ProgressManagerAgent(BaseAgent):
             decision = "remediate"
             next_stage = None
             message = "讓我補充一些額外的例子，幫助你從不同角度理解這個概念。"
-
-        confused_concepts: list[str] = []
-        for ev in evaluations:
-            confused_concepts.extend(ev.get("confused_concepts", []))
-        unique_confused = list(dict.fromkeys(confused_concepts))
 
         result = {
             "decision": decision,
