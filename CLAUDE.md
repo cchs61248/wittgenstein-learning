@@ -67,6 +67,30 @@ cd /c/Users/<username>/Documents/aaron/learn/wittgenstein-learning/frontend && n
 # 或使用 PowerShell 工具（更穩定）
 ```
 
+### 執行後端測試（pytest）
+
+**pytest 不在 `requirements.txt`**，`.venv` 預設沒有安裝。首次跑測試前必須先裝，且 `.venv` 不一定完整安裝了所有 `requirements.txt` 依賴，連帶缺少 `tiktoken` 等套件也會讓測試 collect 失敗。
+
+**正確流程（在 `backend/` 目錄下）：**
+```bash
+# 1. 確保 requirements.txt 的依賴全數安裝
+.venv/Scripts/pip install -r requirements.txt -q
+
+# 2. 安裝測試框架（不在 requirements.txt 中）
+.venv/Scripts/pip install pytest -q
+
+# 3. 跑測試
+.venv/Scripts/python.exe -m pytest tests/ -v
+```
+
+**常見錯誤訊息與原因：**
+| 錯誤 | 原因 |
+|------|------|
+| `No module named pytest` | pytest 未安裝，執行步驟 2 |
+| `No module named 'tiktoken'` | requirements.txt 依賴未完整安裝，執行步驟 1 |
+
+> 測試目錄：`backend/tests/`；測試以 `sys.path` 的 repo 根目錄為基準，使用 `from backend.xxx import ...` 格式匯入。
+
 ### Python 模組匯入測試
 
 測試後端模組匯入時，需將 `backend/` 的上層目錄加入 `sys.path`：
