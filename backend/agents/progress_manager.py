@@ -90,7 +90,9 @@ class ProgressManagerAgent(BaseAgent):
         repeated_patterns = _detect_repeated_patterns(evaluations)
         unique_confused = _unique_confused_concepts(evaluations)
         mastery = _mastery_state(scores, unique_confused, pass_threshold)
-        is_child_stage = stage_kind in {"reteach", "remediation"} or source_stage_id is not None
+        is_child_stage = stage_kind in {"reteach", "remediation"} or (
+            is_dynamic and stage_kind != "main"
+        )
 
         if is_child_stage:
             if mastery == "complete":

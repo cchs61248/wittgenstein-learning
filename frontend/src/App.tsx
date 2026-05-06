@@ -416,12 +416,14 @@ export default function App() {
         break;
       case 'session_started':
         setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
-        useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
+        if (useSessionStore.getState().pendingAdvanceStageId === null) {
+          useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
+        }
         listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
       case 'explanation_chunk': {
         const st = useSessionStore.getState();
-        if (!msg.payload.is_final) {
+        if (!msg.payload.is_final && st.pendingAdvanceStageId === null) {
           if (!st.isExplanationLoading) {
             st.beginExplanationLoading(st.currentStageId);
           }
@@ -456,19 +458,15 @@ export default function App() {
         setDecision(msg.payload);
         {
           const dec = msg.payload.decision;
-          // 在後端送出任何 explanation_chunk 之前就先進入 loading，避免仍看到問老師／答題區
-          if (dec === 'retry' || dec === 'remediate' || dec === 'reteach') {
+          if (dec === 'retry') {
             useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
           }
-          if (dec === 'advance' && msg.payload.next_stage_id !== null) {
-            useSessionStore.getState().beginExplanationLoading(msg.payload.next_stage_id);
-          }
-        }
-        if (msg.payload.decision === 'advance') {
-          if (msg.payload.next_stage_id !== null) {
+          if (
+            (dec === 'advance' || dec === 'remediate' || dec === 'reteach') &&
+            msg.payload.next_stage_id !== null
+          ) {
             setPendingAdvance(msg.payload.next_stage_id);
           }
-          // next_stage_id === null (最後一章) 等 course_completed 處理
         }
         break;
       case 'qa_history':

@@ -104,6 +104,16 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
       : null;
   const currentStageDecision =
     lastDecision?.strategy_snapshot?.current_stage_id === currentStageId ? lastDecision : null;
+  const pendingAdvanceStage =
+    pendingAdvanceStageId !== null
+      ? stages.find((s) => s.stage_id === pendingAdvanceStageId)
+      : null;
+  const pendingAdvanceLabel =
+    pendingAdvanceStage?.kind === 'remediation'
+      ? '進入補強章節'
+      : pendingAdvanceStage?.kind === 'reteach'
+      ? '進入重教章節'
+      : '進入下一章節';
 
   useEffect(() => {
     if (selectedStageId === null || !sessionId || !token) {
@@ -309,6 +319,22 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
             {lastFeedback.clarification_question && (
               <p className="clarification">💬 {lastFeedback.clarification_question}</p>
             )}
+            {currentStageDecision && (
+              <>
+                <div className={`decision-banner decision-${currentStageDecision.decision}`}>
+                  <p>{currentStageDecision.message}</p>
+                  {(currentStageDecision.reason_lines ?? []).length > 0 && (
+                    <div className="qa-history-detail-block" style={{ marginTop: 8 }}>
+                      <span className="detail-label">路徑判斷依據</span>
+                      {(currentStageDecision.reason_lines ?? []).map((line, idx) => (
+                        <p key={`${idx}-${line}`}>- {line}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <LearningCoachPanel decision={currentStageDecision} />
+              </>
+            )}
             <div className="feedback-card-footer">
               {pendingNextQuestion ? (
                 <button className="btn-primary btn-proceed" onClick={proceedToNextQuestion}>
@@ -319,7 +345,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
                   advanceStage(pendingAdvanceStageId);
                   setPendingAdvance(null);
                 }}>
-                  進入下一章節 →
+                  {pendingAdvanceLabel} →
                 </button>
               ) : pendingCourseComplete ? (
                 <button className="btn-primary btn-proceed" onClick={() => {

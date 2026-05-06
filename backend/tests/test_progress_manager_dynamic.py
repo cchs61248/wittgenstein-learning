@@ -105,3 +105,68 @@ def test_remediation_child_advances_at_remediation_limit():
 
     assert result["decision"] == "advance"
     assert result["next_stage_id"] is None
+
+
+def test_main_stage_with_source_stage_id_and_zero_scores_reteaches():
+    agent = make_agent()
+    result = run(agent.run(ctx({
+        "evaluations": [
+            {"score": 0.0, "confused_concepts": ["全表掃描"], "misconception_patterns": []},
+            {
+                "score": 0.0,
+                "confused_concepts": ["倒排索引方向性"],
+                "misconception_patterns": [
+                    {
+                        "concept": "倒排索引方向性",
+                        "pattern": "完全未嘗試作答，無法判斷是否有任何基礎概念",
+                        "severity": "high",
+                    }
+                ],
+            },
+            {"score": 0.0, "confused_concepts": ["文字分析"], "misconception_patterns": []},
+        ],
+        "pass_threshold": 0.75,
+        "current_stage_id": 1,
+        "total_stages": 8,
+        "current_attempt": 1,
+        "is_dynamic": False,
+        "stage_kind": "main",
+        "source_stage_id": 1,
+        "source_reteach_count": 0,
+        "source_remediation_count": 0,
+    })))
+
+    assert result["decision"] == "reteach"
+    assert result["best_score"] == 0.0
+
+
+def test_dynamic_main_stage_with_source_stage_id_and_zero_scores_reteaches():
+    agent = make_agent()
+    result = run(agent.run(ctx({
+        "evaluations": [
+            {
+                "score": 0.0,
+                "confused_concepts": ["語言遊戲"],
+                "misconception_patterns": [
+                    {
+                        "concept": "語言遊戲",
+                        "pattern": "完全無法連結例子與核心概念",
+                        "severity": "high",
+                    }
+                ],
+            },
+            {"score": 0.0, "confused_concepts": ["規則遵循"], "misconception_patterns": []},
+        ],
+        "pass_threshold": 0.75,
+        "current_stage_id": 7,
+        "total_stages": 8,
+        "current_attempt": 1,
+        "is_dynamic": True,
+        "stage_kind": "main",
+        "source_stage_id": 7,
+        "source_reteach_count": 0,
+        "source_remediation_count": 0,
+    })))
+
+    assert result["decision"] == "reteach"
+    assert result["best_score"] == 0.0

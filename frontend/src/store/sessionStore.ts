@@ -75,6 +75,7 @@ interface SessionState {
   pendingAnswer: string | null;
   qaHistory: QaHistoryItem[];
   stageQaHistories: Record<number, QaHistoryItem[]>;
+  stageQuestions: Record<number, QuestionPayload>;
   tutorReply: { question: string; answer: string; in_scope?: boolean } | null;
   tutorHistory: { question: string; answer: string; in_scope?: boolean }[];
   isTutorLoading: boolean;
@@ -212,6 +213,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingAdvanceStageId: null,
       pendingCourseComplete: false,
       stageDecisions: {},
+      stageQuestions: {},
       isExplanationLoading: false,
     });
   },
@@ -245,11 +247,16 @@ export const useSessionStore = create<SessionState>((set) => ({
         return { ...stage, status };
       });
       const currentStage = mappedStages.find((st) => st.status === 'current');
+      const shouldHoldCurrentStage =
+        s.pendingAdvanceStageId !== null && s.currentStageId !== null;
+      const nextCurrentStageId = shouldHoldCurrentStage
+        ? s.currentStageId
+        : currentStage?.stage_id ?? stages[0]?.stage_id ?? null;
       const currentStageChanged =
         !isNewSession &&
         s.currentStageId !== null &&
-        currentStage?.stage_id !== undefined &&
-        currentStage.stage_id !== s.currentStageId;
+        nextCurrentStageId !== null &&
+        nextCurrentStageId !== s.currentStageId;
       const previousStageId = s.currentStageId;
       const stageQaHistories =
         currentStageChanged && previousStageId !== null && s.qaHistory.length > 0
@@ -291,13 +298,14 @@ export const useSessionStore = create<SessionState>((set) => ({
       return {
         sessionId,
         stages: mappedStages,
-        currentStageId: currentStage?.stage_id ?? stages[0]?.stage_id ?? null,
+        currentStageId: nextCurrentStageId,
         stageQaHistories,
         stageSourceChunks: Object.fromEntries(
           stages.map((stage) => [stage.stage_id, stage.source_chunks ?? []])
         ),
         decisionHistory: isNewSession ? [] : s.decisionHistory,
         stageDecisions: isNewSession ? {} : s.stageDecisions,
+        stageQuestions: isNewSession ? {} : s.stageQuestions,
         ...stageReset,
       };
     });
@@ -355,6 +363,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   pendingAnswer: null,
   qaHistory: [],
   stageQaHistories: loadStageQaHistories(),
+  stageQuestions: {},
   tutorReply: null,
   tutorHistory: loadTutorHistory(),
   isTutorLoading: false,
@@ -371,6 +380,12 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
   setQuestion: (q) =>
     set((s) => {
+      if (q.stage_id !== s.currentStageId) {
+        return {
+          stageQuestions: { ...s.stageQuestions, [q.stage_id]: q },
+          isAwaitingFeedback: false,
+        };
+      }
       const isNewStageQuestion =
         s.currentQuestion !== null && q.stage_id !== s.currentQuestion.stage_id;
       if (isNewStageQuestion) {
@@ -501,10 +516,8 @@ export const useSessionStore = create<SessionState>((set) => ({
         localStorage.setItem('wl_stage_qa_histories', JSON.stringify(updatedStageQaHistories));
       }
       const nextExpl = { ...s.stageExplanations };
-      if (nextStageId !== null) {
-        delete nextExpl[nextStageId];
-      }
       localStorage.setItem('wl_stage_explanations', JSON.stringify(nextExpl));
+      const cachedQuestion = nextStageId !== null ? s.stageQuestions[nextStageId] ?? null : null;
       return {
         stages: s.stages.map((st) => ({
           ...st,
@@ -518,9 +531,9 @@ export const useSessionStore = create<SessionState>((set) => ({
         currentStageId: nextStageId,
         explanationText: '',
         isStreaming: false,
-        isExplanationLoading: true,
+        isExplanationLoading: nextStageId !== null && !nextExpl[nextStageId],
         stageExplanations: nextExpl,
-        currentQuestion: null,
+        currentQuestion: cachedQuestion,
         lastFeedback: null,
         lastDecision: null,
         pendingNextQuestion: null,
@@ -578,6 +591,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       stageExplanations: {},
       stageSourceChunks: {},
       stageQaHistories: {},
+      stageQuestions: {},
       selectedStageId: null,
       qaHistory: [],
       pendingAnswer: null,
