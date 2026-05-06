@@ -246,9 +246,20 @@ export const useSessionStore = create<SessionState>((set) => ({
         }
         return { ...stage, status };
       });
-      const currentStage = mappedStages.find((st) => st.status === 'current');
       const shouldHoldCurrentStage =
         s.pendingAdvanceStageId !== null && s.currentStageId !== null;
+      const viewStages: StageWithStatus[] = shouldHoldCurrentStage
+        ? mappedStages.map((stage) => ({
+            ...stage,
+            status:
+              stage.stage_id === s.currentStageId
+                ? 'current'
+                : stage.status === 'current'
+                ? 'pending'
+                : stage.status,
+          }))
+        : mappedStages;
+      const currentStage = viewStages.find((st) => st.status === 'current');
       const nextCurrentStageId = shouldHoldCurrentStage
         ? s.currentStageId
         : currentStage?.stage_id ?? stages[0]?.stage_id ?? null;
@@ -297,7 +308,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       };
       return {
         sessionId,
-        stages: mappedStages,
+        stages: viewStages,
         currentStageId: nextCurrentStageId,
         stageQaHistories,
         stageSourceChunks: Object.fromEntries(
