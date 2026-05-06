@@ -134,7 +134,15 @@ class ProgressManagerAgent(BaseAgent):
             decision = "reteach"
             next_stage = None
             message = "我注意到你在同一個概念上重複出現相同的錯誤，讓我換個完全不同的比喻框架來解釋。"
-        elif attempts < max_attempts:
+        elif mastery == "none":
+            decision = "reteach"
+            next_stage = None
+            message = "你目前對本章整體理解仍未建立，我會插入一個重教子章節，用新的框架重新說明。"
+        elif mastery == "partial" and unique_confused and attempts >= max_attempts:
+            decision = "remediate"
+            next_stage = None
+            message = "你已掌握部分內容，我會針對仍卡住的概念新增補強子章節。"
+        elif mastery == "partial" and attempts < max_attempts and best_score >= 0.5:
             decision = "retry"
             next_stage = None
             message = f"還差一點（校正得分：{latest_score:.0%}），讓我們再試一次，這次題目難度會調整。"

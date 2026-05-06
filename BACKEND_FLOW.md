@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-06，含 retry/remediate 分離、重教／補強子章節解綁、持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica Provider、上傳磁碟持久化）
+> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-06，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica Provider、上傳磁碟持久化）
 
 ---
 
@@ -626,14 +626,17 @@ _make_progress_decision(...)
     │       repeated_patterns = _detect_repeated_patterns(evaluations)
     │           # 同一 pattern 字串出現 >= 2 次 → True
     │
-    │      決策優先序（Phase 4 調整）：
-   │   1. best_score >= 0.75           → advance
-   │   2. high_severity 存在           → reteach（根本誤解，立即換框架）
-   │   3. repeated_patterns = True     → reteach（同一錯誤重複）
-   │   4. attempts < max_attempts      → retry
-   │   5. attempts == max_attempts
-   │      AND latest_score < 0.5      → reteach
-   │   6. otherwise                   → remediate
+   │      決策優先序（2026-05-06 更新）：
+   │   1. best_score >= 0.75                               → advance
+   │   2. high_severity 存在                               → reteach（根本誤解，立即換框架）
+   │   3. repeated_patterns = True                         → reteach（同一錯誤重複）
+   │   4. mastery == "none"                                → reteach（整章尚未建立理解）
+   │   5. mastery == "partial" AND attempts >= max_attempts
+   │      AND unique_confused 非空                          → remediate（局部缺口改走補強）
+   │   6. mastery == "partial" AND attempts < max_attempts
+   │      AND best_score >= 0.5                            → retry（只做同章再測）
+   │   7. attempts == max_attempts AND latest_score < 0.5  → reteach
+   │   8. otherwise                                        → remediate
    │
    │   ⚠️ 動態子章節不再一律 advance：
    │       依 stage.kind（reteach/remediation）、source_stage_id、
@@ -694,7 +697,9 @@ _make_progress_decision(...)
     │   ⚠️  不送 explanation_reset（保留原文於前端）
     │   在 wm.current_explanation 尾端附加「### 🔄 第 N 次嘗試」標題 + decision.message
     │   QuestionGeneratorAgent 重新出題（新題目）
-    │   session_memory.store_stage_explanation(combined)  ← 累積講解持久化
+   │   session_memory.store_stage_explanation(
+   │       _pack_persisted_explanation(progress_md, combined)
+   │   )                                                   ← 以統一格式持久化（含進度表 + 教師內容）
     │   session_memory.store_stage_questions(questions)
     │   emit: explanation_complete（full_explanation = 累積講解文字）
     │   emit: question（第一道新題）
@@ -713,9 +718,11 @@ _make_progress_decision(...)
 | `advance` | best_score ≥ 0.75 | 1（最高） |
 | `reteach` | high severity misconception（任何嘗試次數） | 2 |
 | `reteach` | 同一 pattern 重複 ≥ 2 次 | 3 |
-| `retry` | attempts < max_attempts | 4 |
-| `reteach` | attempts == max_attempts AND latest < 0.5 | 5 |
-| `remediate` | 其餘情況 | 6（最低） |
+| `reteach` | mastery == "none" | 4 |
+| `remediate` | mastery == "partial" 且 attempts >= max_attempts 且有明確 confused concepts | 5 |
+| `retry` | mastery == "partial" 且 attempts < max_attempts 且 best_score >= 0.5 | 6 |
+| `reteach` | attempts == max_attempts AND latest < 0.5 | 7 |
+| `remediate` | 其餘情況 | 8（最低） |
 
 **動態節點類型**：
 
@@ -953,7 +960,7 @@ stage["source_chunks"] = [{"chunk_id": cid, "quote": db_chunks[cid]["text"]}
 
 **輸入**：stage_evaluations（含 misconception_patterns）、pass_threshold=0.75、max_attempts=3
 
-**決策邏輯（Phase 4 升級 + 子章節解綁）**：
+**決策邏輯（Phase 4 升級 + 子章節解綁 + 2026-05-06 retry 邊界收斂）**：
 ```
 all_misconceptions = evaluations[*].misconception_patterns（展開）
 high_severity = [m for m if m.severity == "high"]
@@ -969,10 +976,14 @@ repeated = 同一 pattern 字串出現 >= 2 次
 1. best_score >= 0.75               → advance
 2. high_severity 存在               → reteach（插重教子章節）
 3. repeated patterns                → reteach（插重教子章節）
-4. attempts < max_attempts          → retry
-5. attempts == max_attempts
+4. mastery == none                  → reteach（插重教子章節）
+5. mastery == partial 且 attempts >= max_attempts 且有 confused
+                                   → remediate（插補強子章節）
+6. mastery == partial 且 attempts < max_attempts 且 best_score >= 0.5
+                                   → retry（同章再測，不生成子章節）
+7. attempts == max_attempts
    AND latest_score < 0.5           → reteach（插重教子章節）
-6. otherwise                        → remediate（插補強子章節）
+8. otherwise                        → remediate（插補強子章節）
 ```
 
 **輸出**：`{decision, message, best_score, remediation_focus, high_severity_misconceptions, repeated_patterns_detected}`

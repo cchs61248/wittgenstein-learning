@@ -6,16 +6,17 @@
 
 ## 1. 使用者觀察到的時間序（與實作對齊）
 
-1. **原章節講解被整篇取代**  
-   - 後端在 `decision == "reteach"` 時會送 `explanation_reset`，再以 `TeacherAgent.stream_explanation` **整段重寫**。  
-   - Prompt 會加上「請換一個**完全不同**的比喻框架重新解釋」——屬**刻意覆寫**，舊版講解不保留於 DB 同欄位。
+1. **原章節應保留、新內容進子章節**  
+   - `decision == "reteach"` 或 `decision == "remediate"` 時，後端會插入新動態子章節（`kind: "reteach"` / `kind: "remediation"`）。  
+   - 使用者直接進入新子章節 `run_stage`；原章節 `full_explanation`、題目與答題紀錄不覆寫。
 
-2. **多兩題**  
-   - 重教後 `QuestionGenerator` 在簡答模式下固定 **`num_questions: 2`**（與 `retry` 類似），答完這一輪才會進入下一個進度決策。
+2. **Retry 僅同章再測，不生成新文章**  
+   - `decision == "retry"` 只在同一 `stage_id` 追加「第 N 次嘗試」區塊並重出題。  
+   - 不插入子章節，也不重跑 `TeacherAgent` 生成全新教學文章。
 
-3. **之後才進「補強子節點」（R.x）並生成補強文**  
-   - 若決策為 `advance` 且 `next_stage_id` 指向已插入的動態補強節點，才會 `run_stage` 串流補強內容。  
-   - 動態補強節點在 `reteach`／`remediate` 決策且 `remediation_focus` 非空時，於 `_make_progress_decision` 內透過 `_insert_remediation_stage` 插入（插在**當前章**之後）。
+3. **重教／補強皆即時分流到子節點**  
+   - 動態子節點在 `_make_progress_decision` 中插入，並立即切換 `current_stage_id` 到新子章節。  
+   - 不需要先 `advance` 才看到補強內容；重教與補強都會直接進入各自子章節開始講解與答題。
 
 4. **回顧時少顯示後面幾題**（已修正一處前端）  
    - 原因：`stage_qa_histories` 已有該章 key 時曾**跳過** `GET .../qa_history`，快取早於重教後新答的紀錄。  
@@ -27,9 +28,10 @@
 
 | 議題 | 檔案／區塊 |
 |------|------------|
-| 重教：清空、重串流、兩題 | `backend/orchestrator/learning_orchestrator.py` → `elif d == "reteach"` |
+| 重教：插入子章節並切入 `run_stage` | `backend/orchestrator/learning_orchestrator.py` → `elif d == "reteach"` |
 | 進度決策（advance / retry / reteach / remediate） | `backend/agents/progress_manager.py` → `ProgressManagerAgent.run` |
 | 插入補強子節點 | `learning_orchestrator.py` → `_insert_remediation_stage`；`_make_progress_decision` 內 `d in ("remediate", "reteach")` 且 `focus` 非空 |
+| Retry 同章再測持久化格式 | `learning_orchestrator.py` → `elif d == "retry"` 中 `store_stage_explanation(_pack_persisted_explanation(...))` |
 | 回顧答題強制拉 API | `frontend/src/components/QuestionPanel.tsx`（`fetchStageQaHistory`） |
 
 ---
@@ -53,6 +55,21 @@
 | 只有少數題目、少數概念或局部 misconception 未掌握 | `remediate` | 觸發補強流程，插入補強子章節。 |
 | 多數題目、核心概念或整體章節結構未掌握 | `reteach` | 觸發重教流程，插入重教子章節。 |
 | 出現 high severity misconception 或同一錯誤模式反覆出現 | 升級為 `reteach` | 即使錯題數不多，也代表原本理解框架可能錯位。 |
+
+### 3.2.1 Retry（同章再測）策略（2026-05-06）
+
+`retry` 只代表「主章節內低成本再測一次」，避免與重教／補強重疊：
+
+- 僅允許在主章節（`kind == "main"`）發生。
+- 需為 `mastery == "partial"`（不可 `none`）。
+- 不可有 `high_severity` 或 `repeated_patterns`。
+- 需 `attempts < max_attempts` 且 `best_score >= 0.5`。
+
+明確不屬於 retry：
+
+- `mastery == "none"`（例如全 0 分）→ `reteach`
+- `partial` 且已達 retry 上限且仍有弱點 → `remediate`
+- 動態子章節（`reteach` / `remediation`）收斂後分流，不使用 retry
 
 ### 3.3 重教流程
 

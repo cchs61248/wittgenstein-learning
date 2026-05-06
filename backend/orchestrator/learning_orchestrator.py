@@ -1250,7 +1250,12 @@ class LearningOrchestrator:
 
             # 持久化：讓重整後 resume 直接還原而不重生成
             combined_explanation_retry = wm.current_explanation + retry_separator
-            await session_memory.store_stage_explanation(session_id, stage["stage_id"], combined_explanation_retry)
+            progress_md = self._build_progress_table(stages, current_idx)
+            await session_memory.store_stage_explanation(
+                session_id,
+                stage["stage_id"],
+                _pack_persisted_explanation(progress_md, combined_explanation_retry),
+            )
             await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
             wm.current_explanation = combined_explanation_retry
 

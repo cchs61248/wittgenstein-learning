@@ -170,3 +170,71 @@ def test_dynamic_main_stage_with_source_stage_id_and_zero_scores_reteaches():
 
     assert result["decision"] == "reteach"
     assert result["best_score"] == 0.0
+
+
+def test_main_stage_all_zero_scores_without_high_severity_reteaches_instead_of_retry():
+    agent = make_agent()
+    result = run(agent.run(ctx({
+        "evaluations": [
+            {"score": 0.0, "confused_concepts": ["同步處理"], "misconception_patterns": []},
+            {"score": 0.0, "confused_concepts": ["Job ID 回傳"], "misconception_patterns": []},
+            {"score": 0.0, "confused_concepts": ["Job Queue"], "misconception_patterns": []},
+            {"score": 0.0, "confused_concepts": ["Worker Pool"], "misconception_patterns": []},
+            {"score": 0.0, "confused_concepts": ["獨立擴展能力"], "misconception_patterns": []},
+        ],
+        "pass_threshold": 0.75,
+        "current_stage_id": 1,
+        "total_stages": 9,
+        "current_attempt": 1,
+        "is_dynamic": False,
+        "stage_kind": "main",
+        "source_stage_id": 1,
+        "source_reteach_count": 0,
+        "source_remediation_count": 0,
+    })))
+
+    assert result["decision"] == "reteach"
+    assert result["best_score"] == 0.0
+
+
+def test_main_stage_partial_near_threshold_retries():
+    agent = make_agent()
+    result = run(agent.run(ctx({
+        "evaluations": [
+            {"score": 0.55, "confused_concepts": ["同步處理"], "misconception_patterns": []},
+            {"score": 0.62, "confused_concepts": ["timeout 限制"], "misconception_patterns": []},
+        ],
+        "pass_threshold": 0.75,
+        "current_stage_id": 2,
+        "total_stages": 9,
+        "current_attempt": 1,
+        "is_dynamic": False,
+        "stage_kind": "main",
+        "source_stage_id": 2,
+        "source_reteach_count": 0,
+        "source_remediation_count": 0,
+    })))
+
+    assert result["decision"] == "retry"
+
+
+def test_main_stage_partial_with_clear_gaps_remediates_after_retry_limit():
+    agent = make_agent()
+    result = run(agent.run(ctx({
+        "evaluations": [
+            {"score": 0.58, "confused_concepts": ["Job Queue"], "misconception_patterns": []},
+            {"score": 0.6, "confused_concepts": ["Worker Pool"], "misconception_patterns": []},
+        ],
+        "pass_threshold": 0.75,
+        "current_stage_id": 2,
+        "total_stages": 9,
+        "current_attempt": 3,
+        "max_attempts": 3,
+        "is_dynamic": False,
+        "stage_kind": "main",
+        "source_stage_id": 2,
+        "source_reteach_count": 0,
+        "source_remediation_count": 0,
+    })))
+
+    assert result["decision"] == "remediate"
