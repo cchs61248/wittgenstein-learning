@@ -12,25 +12,27 @@ def _ensure_dir() -> None:
     _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_upload(filename: str, mime_type: str, raw: bytes) -> str:
+def save_upload(
+    filename: str,
+    mime_type: str,
+    raw: bytes,
+    extra_meta: dict | None = None,
+) -> str:
     _ensure_dir()
     file_id = f"upl_{uuid.uuid4().hex}"
     blob_path = _UPLOAD_DIR / f"{file_id}.bin"
     meta_path = _UPLOAD_DIR / f"{file_id}{_META_SUFFIX}"
 
     blob_path.write_bytes(raw)
-    meta_path.write_text(
-        json.dumps(
-            {
-                "file_id": file_id,
-                "filename": filename,
-                "mime_type": mime_type or "application/octet-stream",
-                "size": len(raw),
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    meta = {
+        "file_id": file_id,
+        "filename": filename,
+        "mime_type": mime_type or "application/octet-stream",
+        "size": len(raw),
+    }
+    if extra_meta:
+        meta.update(extra_meta)
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     return file_id
 
 

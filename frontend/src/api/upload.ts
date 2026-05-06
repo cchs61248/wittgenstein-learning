@@ -2,14 +2,21 @@ import { getApiBase } from './apiBase';
 
 const BASE = getApiBase();
 
-export interface UploadResult {
+export interface UploadFileResult {
   file_id: string;
   filename: string;
   size: number;
   mime_type: string;
 }
 
-export async function uploadFile(file: File, token: string): Promise<UploadResult> {
+export interface UploadUrlResult {
+  file_id: string;
+  title: string;
+  url: string;
+  char_count: number;
+}
+
+export async function uploadFile(file: File, token: string): Promise<UploadFileResult> {
   const form = new FormData();
   form.append('file', file);
 
@@ -25,3 +32,23 @@ export async function uploadFile(file: File, token: string): Promise<UploadResul
   }
   return res.json();
 }
+
+export async function uploadUrl(url: string, token: string): Promise<UploadUrlResult> {
+  const res = await fetch(`${BASE}/upload/url`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'URL 擷取失敗');
+  }
+  return res.json();
+}
+
+// 向下相容舊程式碼
+export type UploadResult = UploadFileResult;

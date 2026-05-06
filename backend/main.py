@@ -58,6 +58,85 @@ app.include_router(user_ui_router)
 ws_manager = WebSocketManager()
 
 
+async def _build_source_chunks_from_payload(
+    p: dict,
+    emit,
+) -> list[dict] | None:
+    """
+    從 start_session payload 組裝 source_chunks。
+    支援新格式（sources 陣列）與舊格式（uploaded_file_id / content）。
+    回傳 None 表示已向客戶端送出錯誤，呼叫方應 continue。
+    """
+    sources_raw: list[dict] = p.get("sources") or []
+
+    if sources_raw:
+        # 新格式：多來源陣列
+        source_infos: list[dict] = []
+        for i, src in enumerate(sources_raw):
+            src_type = src.get("type", "file")
+            label = src.get("label") or f"來源 {i + 1}"
+            if src_type == "text":
+                text = src.get("content", "").strip()
+                if not text:
+                    continue
+            else:
+                file_id = src.get("file_id")
+                if not file_id:
+                    continue
+                try:
+                    uploaded = load_upload(file_id)
+                except FileNotFoundError:
+                    await emit({"type": "error", "payload": {"message": f"找不到已上傳檔案（{label}），請重新上傳"}})
+                    return None
+                label = label or uploaded.get("filename", label)
+                text = extract_text(uploaded["filename"], uploaded["raw"])
+            if text:
+                source_infos.append({"label": label, "text": text, "index": i})
+
+        if not source_infos:
+            await emit({"type": "error", "payload": {"message": "資料源內容為空，請確認上傳的檔案或文字"}})
+            return None
+    else:
+        # 舊格式：向下相容
+        uploaded_file_id: str | None = p.get("uploaded_file_id") or None
+        raw_content: str = p.get("content", "")
+        if not uploaded_file_id and not raw_content.strip():
+            await emit({"type": "error", "payload": {"message": "請先上傳檔案或提供文字內容"}})
+            return None
+
+        if uploaded_file_id:
+            try:
+                uploaded = load_upload(uploaded_file_id)
+            except FileNotFoundError:
+                await emit({"type": "error", "payload": {"message": "找不到已上傳檔案，請重新上傳"}})
+                return None
+            text = extract_text(uploaded["filename"], uploaded["raw"])
+            label = uploaded.get("filename", "上傳的檔案")
+        else:
+            text = raw_content
+            label = "貼上的文字"
+        source_infos = [{"label": label, "text": text, "index": 0}]
+
+    # 每個來源獨立 chunking，全域重新編號，附上來源 metadata
+    all_chunks: list[dict] = []
+    global_offset = 0
+    for src_info in source_infos:
+        chunks = build_source_chunks(src_info["text"])
+        for c in chunks:
+            c["chunk_id"] = f"chunk_{global_offset:04d}"
+            c["order_index"] = global_offset
+            c["source_label"] = src_info["label"]
+            c["source_index"] = src_info["index"]
+            global_offset += 1
+        all_chunks.extend(chunks)
+
+    if not all_chunks:
+        await emit({"type": "error", "payload": {"message": "無法從文件中抽取內容，請確認檔案格式"}})
+        return None
+
+    return all_chunks
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -107,27 +186,10 @@ async def websocket_endpoint(
                 try:
                     provider_name: str = p.get("provider", DEFAULT_PROVIDER)
                     model: str | None = p.get("model") or None
-                    uploaded_file_id: str | None = p.get("uploaded_file_id") or None
-                    raw_content: str = p.get("content", "")
-                    if not uploaded_file_id and not raw_content.strip():
-                        await emit({"type": "error", "payload": {"message": "請先上傳檔案或提供文字內容"}})
-                        continue
 
-                    # 本地文字抽取 + chunking（後端掌控 source truth）
-                    if uploaded_file_id:
-                        try:
-                            uploaded = load_upload(uploaded_file_id)
-                        except FileNotFoundError:
-                            await emit({"type": "error", "payload": {"message": "找不到已上傳檔案，請重新上傳"}})
-                            continue
-                        doc_text = extract_text(uploaded["filename"], uploaded["raw"])
-                    else:
-                        doc_text = raw_content
-
-                    source_chunks = build_source_chunks(doc_text)
-                    if not source_chunks:
-                        await emit({"type": "error", "payload": {"message": "無法從文件中抽取內容，請確認檔案格式"}})
-                        continue
+                    source_chunks = await _build_source_chunks_from_payload(p, emit)
+                    if source_chunks is None:
+                        continue  # emit already sent
 
                     llm = create_provider(provider_name, model=model)
                     orchestrator = LearningOrchestrator(llm)

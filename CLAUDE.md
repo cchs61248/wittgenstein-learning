@@ -21,6 +21,75 @@ uvicorn run:app --reload --port 8000
 
 **注意**：入口點是 `run.py`，而不是 `main.py`。`run.py` 將上層目錄加入 `sys.path`，讓 `backend.*` 的相對匯入正常運作。不能用 `uvicorn main:app`，否則出現 `ImportError: attempted relative import with no known parent package`。
 
+---
+
+## Claude Code 工具使用注意事項
+
+### Bash 工具路徑問題（Windows）
+
+本專案在 Windows 環境下，Bash 工具使用 Git Bash（Unix 風格路徑），而非 Windows 原生路徑。
+
+**錯誤用法（會導致 `No such file or directory`）：**
+```bash
+# ❌ Windows 路徑格式
+ls C:\Users\<username>\Documents\aaron\learn\
+cd wittgenstein-learning/frontend && npm run build   # 相對路徑從根目錄不存在
+```
+
+**正確用法：**
+```bash
+# ✅ 使用 Unix 絕對路徑
+ls /c/Users/<username>/Documents/aaron/learn/wittgenstein-learning/
+cd /c/Users/<username>/Documents/aaron/learn/wittgenstein-learning/frontend && npm run build
+```
+
+### Python 語法檢查的路徑問題
+
+若 Bash 工具的 CWD 已在 `backend/` 目錄，語法檢查時路徑不要再加 `backend/` 前綴：
+
+```bash
+# CWD 已是 backend/ 時：
+# ❌ 路徑錯誤
+python.exe -c "with open('backend/main.py') as f: ..."
+
+# ✅ 直接用檔名
+python.exe -c "with open('main.py') as f: ..."
+```
+
+### npm 建置與前端指令
+
+前端指令必須在絕對路徑下執行，或先用 `cd` 切換到正確目錄：
+
+```bash
+# ✅ 正確方式
+cd /c/Users/<username>/Documents/aaron/learn/wittgenstein-learning/frontend && npm run build
+
+# 或使用 PowerShell 工具（更穩定）
+```
+
+### Python 模組匯入測試
+
+測試後端模組匯入時，需將 `backend/` 的上層目錄加入 `sys.path`：
+
+```bash
+# 在 backend/ 目錄下，測試 backend.* 的相對匯入
+.venv/Scripts/python.exe -c "
+import sys; sys.path.insert(0, '..')
+from backend.routers.upload import router
+print('OK')
+"
+```
+
+直接匯入（不含 `backend.` 前綴）則不需要修改 sys.path：
+```bash
+.venv/Scripts/python.exe -c "
+from utils.url_fetcher import fetch_url_content
+print('OK')
+"
+```
+
+---
+
 ### Frontend
 
 ```bash
@@ -162,7 +231,13 @@ JWT_SECRET=change-me
 
 **WebSocket URL 硬編碼**：`frontend/src/api/websocket.ts` 中 `WS_BASE` 固定為 `ws://localhost:8000`，部署時需手動修改或改成環境變數。
 
-**上傳檔案磁碟持久化**：`backend/files/upload_store.py` 將上傳檔寫入 `data/uploads/{file_id}.bin`（原始 bytes）與 `{file_id}.meta.json`（filename/mime_type/size），跨重啟仍可讀取，`load_upload(file_id)` 從磁碟讀回。
+**上傳檔案磁碟持久化**：`backend/files/upload_store.py` 將上傳檔寫入 `data/uploads/{file_id}.bin`（原始 bytes）與 `{file_id}.meta.json`（filename/mime_type/size/extra_meta），跨重啟仍可讀取，`load_upload(file_id)` 從磁碟讀回。`save_upload()` 接受可選的 `extra_meta: dict`，URL 來源會額外存 `source_url` 與 `source_type`。
+
+**多來源 start_session（2026-05-06）**：`start_session` WebSocket payload 新增 `sources` 陣列格式，向下相容舊版 `uploaded_file_id`/`content`。每個 source 獨立執行 `build_source_chunks()`，chunk_id 全域重新編號，並附上 `source_label`（來源名稱）與 `source_index`（來源順序）。這兩個欄位僅存於 in-memory dict，不寫入 DB（`insert_source_chunks` 只取固定欄位）。`_build_source_chunks_from_payload()` 函式封裝此邏輯，位於 `main.py`。
+
+**ContentSplitter 跨來源聚合（2026-05-06）**：`_format_chunks_with_sources()` 函式（位於 `backend/agents/content_splitter.py`）在多來源時以 `=== 來源 N：標題 ===` 分組顯示 chunks。Prompt 新增「跨來源聚合原則」：不同來源涵蓋相同主題的 chunks 應歸入同一 stage，避免重複教學。無來源標記時維持原本平面格式，向下相容。
+
+**URL 擷取**：`POST /upload/url` 接收 URL，後端用 `readability-lxml` 抽取網頁正文、`youtube-transcript-api` 抓 YouTube 字幕，轉為純文字後以 `save_upload()` 儲存，回傳 `file_id`。擷取邏輯在 `backend/utils/url_fetcher.py`。依賴套件：`readability-lxml>=0.8.1`、`youtube-transcript-api>=0.6.2`（已加入 requirements.txt）。
 
 **sessions.title 欄位（Migration 010）**：`sessions` 表新增 `title TEXT DEFAULT NULL`，可透過 `PATCH /sessions/{session_id}/title` 更新。`GET /sessions/list` 供書櫃功能列出所有 session。
 

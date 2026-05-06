@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-06，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica Provider、上傳磁碟持久化）
+> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-06，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica Provider、上傳磁碟持久化、**多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合**）
 
 ---
 
@@ -32,7 +32,10 @@
 ```
 前端 (React + Zustand)
     │
-    ├── REST  → /auth/*, /upload, /sessions/active
+    ├── REST  → /auth/*, /upload, /upload/url, /sessions/*
+    │               │           │
+    │               │           └── url_fetcher.py → readability-lxml / youtube-transcript-api
+    │               └── upload_store.py → data/uploads/*.bin + *.meta.json
     │
     └── WebSocket → /ws/{session_id}?token=JWT
                         │
@@ -341,8 +344,17 @@ class WorkingMemory:
 
 ### `POST /upload`（需 `Authorization: Bearer <token>`）
 - 接收：multipart/form-data，欄位 `file`
+- 允許格式：`.txt .md .pdf .docx .doc .pptx .html .htm`；單檔限 10 MB
 - 將原始 bytes + filename + mime_type 寫入磁碟 `data/uploads/{file_id}.bin` + `{file_id}.meta.json`（跨重啟可讀）
-- 回傳：`{file_id: "upl_<hex>"}`
+- `meta.json` 結構：`{file_id, filename, mime_type, size, ...extra_meta}`
+- 回傳：`{file_id: "upl_<hex>", filename, size, mime_type}`
+
+### `POST /upload/url`（需 `Authorization: Bearer <token>`）
+- 接收：`{url: "https://..."}`（JSON body）
+- 支援公開網頁（readability-lxml 抽取正文）與 YouTube 影片（youtube-transcript-api 取字幕）
+- 擷取後存為純文字 `.bin`，`meta.json` 額外記錄 `source_url`、`source_type: "url"`
+- 限制：需公開無需登入；YouTube 需有字幕；不支援動態 SPA；單次最多 500,000 字
+- 回傳：`{file_id: "upl_<hex>", title, url, char_count}`
 
 ### `GET /sessions/active?token=...`
 - 查詢該用戶最新的 active / pending_confirmation session
@@ -384,7 +396,7 @@ class WorkingMemory:
 
 | 訊息 type | 必要欄位 | 說明 |
 |-----------|----------|------|
-| `start_session` | `uploaded_file_id`，`provider`，`target_depth`，`question_mode?`，`model?` | 啟動新學習會話 |
+| `start_session` | `sources`（新格式）或 `uploaded_file_id`/`content`（舊格式），`provider`，`target_depth`，`question_mode?`，`model?` | 啟動新學習會話 |
 | `confirm_map` | `provider?`，`model?` | 確認知識地圖，開始教學 |
 | `submit_answer` | `session_id`，`question_id`，`answer` | 提交答案 |
 | `resume_session` | `session_id`，`provider?`，`model?` | 重整後恢復 session |
@@ -417,27 +429,71 @@ class WorkingMemory:
 
 ## 7. 完整學習流程
 
-### 7.1 上傳檔案
+### 7.1 上傳資料源
 
+**方式 A：檔案上傳**
 ```
 前端 POST /upload（multipart）
     │
-    └── upload_store.py
-            ├── 產生 file_id（UUID）
-            └── 儲存 {filename, mime_type, raw: bytes}（process 記憶體）
+    └── upload_store.save_upload(filename, mime_type, raw)
+            ├── 產生 file_id（"upl_<hex>"）
+            ├── 寫入 data/uploads/{file_id}.bin（raw bytes）
+            └── 寫入 {file_id}.meta.json（filename/mime_type/size）
 
-前端收到 {file_id}
-    └── 送 start_session 時帶入 uploaded_file_id
+前端收到 {file_id, filename, size, mime_type}
+    └── 加入 sources 陣列：{type: "file", file_id, label: filename}
+```
+
+**方式 B：URL 擷取**
+```
+前端 POST /upload/url（JSON：{url}）
+    │
+    └── url_fetcher.fetch_url_content(url)
+            ├── YouTube URL → youtube-transcript-api 取字幕，轉純文字
+            └── 一般網頁   → httpx.get + readability-lxml 抽正文 + BeautifulSoup 轉純文字
+    │
+    └── upload_store.save_upload(title.txt, text/plain, utf8_bytes,
+                                  extra_meta={source_url, source_type: "url"})
+
+前端收到 {file_id, title, url, char_count}
+    └── 加入 sources 陣列：{type: "url", file_id, label: title}
+```
+
+**方式 C：純文字**
+```
+前端直接構成 source item：{type: "text", content: "...", label: "貼上的文字"}
+    └── 不呼叫上傳 API，直接在 start_session payload 的 sources 中傳遞
 ```
 
 ### 7.2 啟動新會話（start_session）
 
 ```
-前端 WebSocket send: {type: "start_session", payload: {uploaded_file_id, provider, target_depth, ...}}
+前端 WebSocket send: {
+  type: "start_session",
+  payload: {
+    sources: [                                          # 新格式（向下相容舊版 uploaded_file_id/content）
+      {type: "file", file_id: "upl_abc", label: "report.pdf"},
+      {type: "url",  file_id: "upl_def", label: "Example Article"},
+      {type: "text", content: "直接貼上的文字...",      label: "貼上的文字"}
+    ],
+    provider, target_depth, question_mode, model
+  }
+}
     │
     main.py
         ├── 驗證 JWT
-        ├── load_upload(file_id)                    # 從 upload_store 取原始 bytes
+        │
+        ├── _build_source_chunks_from_payload(p, emit)   # 封裝多來源邏輯
+        │   ├── 讀取 sources 陣列（若無，fallback 到舊版 uploaded_file_id / content）
+        │   ├── 每個 source：
+        │   │   ├── type="file" | "url" → load_upload(file_id) → extract_text(filename, raw)
+        │   │   └── type="text"          → 直接使用 content 字串
+        │   ├── 每個來源獨立執行 build_source_chunks(text)
+        │   ├── chunk_id 全域重新編號（chunk_0000, chunk_0001, ...，跨來源連續）
+        │   └── 每個 chunk 附加：
+        │           source_label: str   # 來源名稱（用於 ContentSplitter 分組）
+        │           source_index: int   # 來源順序（用於 ContentSplitter 分組）
+        │           ※ 這兩個欄位只在 in-memory dict 存在，不寫入 DB
         │
         ├── 【Phase 1：後端 Source Truth 建立】
         │   text_extractor.extract_text(filename, raw_bytes)
@@ -445,18 +501,22 @@ class WorkingMemory:
         │       ├── .pdf       → pdfplumber（保留段落）
         │       ├── .docx      → python-docx（保留 heading）
         │       └── 其他       → utf-8 fallback
-        │   chunker.build_source_chunks(text, session_id)
+        │   chunker.build_source_chunks(text)
         │       ├── 優先按結構切（Wittgenstein 命題編號、Markdown 標題、Word heading）
-        │       ├── 無結構則按段落 + 大小限制（目標 500–800 字，max 1000）
-        │       └── 每個 chunk：{chunk_id: "chunk_NNNN", text, order_index,
-        │                       section_title, page, char_start, char_end}
+        │       ├── 無結構則按段落 + 大小限制（目標 600 字，max 1000）
+        │       └── 每個 chunk：{chunk_id, text, order_index, section_title, char_start, char_end}
         │
         ├── create_provider(provider_name, model?)
         ├── LearningOrchestrator(llm)
-        └── orchestrator.start_session(source_chunks=chunks, ...)
+        └── orchestrator.start_session(source_chunks=all_chunks, ...)
                 │
                 ├── ContentSplitterAgent.run(ctx)
-                │       輸入：source_chunks（後端已切好的 chunk 列表）
+                │       輸入：source_chunks（帶 source_label 的 chunk 列表）
+                │       _format_chunks_with_sources()：
+                │           單來源 → 平面格式 "[chunk_0000]\n文字..."
+                │           多來源 → 分組格式：
+                │               "=== 來源 1：report.pdf ===\n[chunk_0000]...\n=== 來源 2：article.com ==="
+                │       Prompt 跨來源聚合原則：不同來源相同主題 chunks → 同一 stage
                 │       LLM 只做語義切分，不生成原文引用
                 │       回傳：{stages（含 source_chunk_ids），chunk_roles，summary}
                 │
@@ -470,11 +530,10 @@ class WorkingMemory:
                 │       檢查：過小節點 / 概念碎片化 / 孤立 chunk
                 │       僅 log warning，不阻擋流程
                 │
-                ├── session_memory.create_pending_session(...)
-                │       status = 'pending_confirmation'
+                ├── session_memory.create_generating_stub(...)    # status = 'generating'
                 │
                 ├── session_memory.insert_source_chunks(session_id, chunks)
-                │       將後端 source truth 持久化至 DB
+                │       將後端 source truth 持久化至 DB（source_label/source_index 不寫入 DB）
                 │
                 └── emit: {type: "knowledge_map", payload: {nodes, summary}}
 ```

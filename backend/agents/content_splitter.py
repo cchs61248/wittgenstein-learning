@@ -6,6 +6,35 @@ from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
 
 
+def _format_chunks_with_sources(source_chunks: list[dict]) -> str:
+    """
+    將 chunks 格式化為 ContentSplitter 的輸入文字。
+    若 chunks 帶有 source_label，依來源分組顯示（跨來源聚合提示）；
+    否則維持原本的平面格式。
+    """
+    sorted_chunks = sorted(source_chunks, key=lambda x: x.get("order_index", 0))
+
+    has_sources = any(c.get("source_label") for c in sorted_chunks)
+    if not has_sources:
+        return "\n\n".join(f"[{c['chunk_id']}]\n{c['text']}" for c in sorted_chunks)
+
+    # 依 source_index 分組（保持插入順序）
+    groups: dict[int, list[dict]] = {}
+    for c in sorted_chunks:
+        idx = c.get("source_index", 0)
+        groups.setdefault(idx, []).append(c)
+
+    parts: list[str] = []
+    for idx in sorted(groups):
+        chunks_in_group = groups[idx]
+        label = chunks_in_group[0].get("source_label", f"來源 {idx + 1}")
+        header = f"{'=' * 3} 來源 {idx + 1}：{label} {'=' * 3}"
+        body = "\n\n".join(f"[{c['chunk_id']}]\n{c['text']}" for c in chunks_in_group)
+        parts.append(f"{header}\n\n{body}")
+
+    return "\n\n".join(parts)
+
+
 class ContentSplitterAgent(BaseAgent):
     def _extract_json_candidate(self, text: str) -> str:
         return extract_json(text)
@@ -199,10 +228,7 @@ class ContentSplitterAgent(BaseAgent):
 
         db_chunks: dict[str, dict] = {c["chunk_id"]: c for c in source_chunks}
 
-        chunks_text = "\n\n".join(
-            f"[{c['chunk_id']}]\n{c['text']}"
-            for c in sorted(source_chunks, key=lambda x: x.get("order_index", 0))
-        )
+        chunks_text = _format_chunks_with_sources(source_chunks)
 
         system = SYSTEM_PROMPTS["content_splitter"].format(max_stages=max_stages)
         user_msg = (

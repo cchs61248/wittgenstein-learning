@@ -555,13 +555,20 @@ export default function App() {
     depth: DepthType,
     model: string,
     questionMode: 'short_answer' | 'multiple_choice',
-    uploadedFileId?: string,
-    content?: string
+    sources: Array<{ type: string; file_id?: string; content?: string; label: string }>
   ) => {
     if (!token) return;
 
     localStorage.setItem('wl_provider', provider);
     localStorage.setItem('wl_model', model);
+
+    const startPayload = {
+      sources,
+      provider,
+      target_depth: depth,
+      question_mode: questionMode,
+      model,
+    };
 
     // 背景模式：當前已有學習中的 session，新材料在背景生成，不中斷現有學習
     if (stagesRef.current.length > 0) {
@@ -620,10 +627,7 @@ export default function App() {
           }
         },
         onOpen: () => {
-          bgWs.send({
-            type: 'start_session',
-            payload: { content, uploaded_file_id: uploadedFileId, provider, target_depth: depth, question_mode: questionMode, model },
-          });
+          bgWs.send({ type: 'start_session', payload: startPayload });
         },
         onClose: () => {},
       });
@@ -662,10 +666,7 @@ export default function App() {
       onMessage: handleMessage,
       onOpen: () => {
         setConnected(true);
-        ws.send({
-          type: 'start_session',
-          payload: { content, uploaded_file_id: uploadedFileId, provider, target_depth: depth, question_mode: questionMode, model },
-        });
+        ws.send({ type: 'start_session', payload: startPayload });
       },
       onClose: () => setConnected(false),
     });

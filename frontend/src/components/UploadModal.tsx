@@ -1,8 +1,23 @@
-import { useEffect, useState, useRef } from 'react';
-import type { DragEvent, ChangeEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { DragEvent, ChangeEvent, KeyboardEvent } from 'react';
 import { useSessionStore } from '../store/sessionStore';
-import { uploadFile } from '../api/upload';
+import { uploadFile, uploadUrl } from '../api/upload';
 import type { ProviderType, DepthType } from '../types/messages';
+
+// ── 型別 ─────────────────────────────────────────────────────────
+
+type SourceType = 'file' | 'url' | 'text';
+
+interface Source {
+  id: string;
+  type: SourceType;
+  label: string;
+  fileId?: string;
+  content?: string;
+  charCount?: number;
+  uploading?: boolean;
+  error?: string;
+}
 
 interface Props {
   onStart: (
@@ -10,31 +25,60 @@ interface Props {
     depth: DepthType,
     model: string,
     questionMode: 'short_answer' | 'multiple_choice',
-    uploadedFileId?: string,
-    content?: string
+    sources: Array<{ type: SourceType; file_id?: string; content?: string; label: string }>
   ) => void;
   onClose?: () => void;
 }
 
-function IconDoc({ className }: { className?: string }) {
+// ── 圖示元件 ───────────────────────────────────────────────────
+
+function IconFile() {
   return (
-    <svg className={className} width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <polyline points="14 2 14 8 20 8" />
-      <line x1="16" y1="13" x2="8" y2="13" />
-      <line x1="16" y1="17" x2="8" y2="17" />
     </svg>
   );
 }
 
-function IconCheckCircle({ className }: { className?: string }) {
+function IconLink() {
   return (
-    <svg className={className} width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-      <circle cx="12" cy="12" r="10" />
-      <path d="M8 12l3 3 5-6" />
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
     </svg>
   );
 }
+
+function IconText() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <line x1="4" y1="10" x2="20" y2="10" />
+      <line x1="4" y1="14" x2="14" y2="14" />
+    </svg>
+  );
+}
+
+function IconSpinner() {
+  return (
+    <svg className="source-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+      <path d="M12 2a10 10 0 0 1 10 10" />
+    </svg>
+  );
+}
+
+function IconX() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+// ── 常數 ────────────────────────────────────────────────────────
 
 const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
   claude: [
@@ -47,47 +91,63 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
     { id: 'gpt-5.4',      label: 'GPT-5.4 — 品質優先' },
   ],
   gemini: [
-    { id: 'gemini-3-flash-preview',      label: 'Gemini 3 Flash Preview — 預設' },
-    { id: 'gemini-3.1-pro-preview',      label: 'Gemini 3.1 Pro Preview — 品質優先' },
+    { id: 'gemini-3-flash-preview',        label: 'Gemini 3 Flash Preview — 預設' },
+    { id: 'gemini-3.1-pro-preview',        label: 'Gemini 3.1 Pro Preview — 品質優先' },
     { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite Preview — 輕量快速' },
   ],
   monica: [
-    { id: 'claude-4.6-sonnet',       label: 'Claude 4.6 Sonnet — 預設' },
-    { id: 'claude-4.5-sonnet',       label: 'Claude 4.5 Sonnet' },
-    { id: 'claude-4.5-haiku',        label: 'Claude 4.5 Haiku — 快速' },
-    { id: 'claude-4-sonnet',         label: 'Claude 4 Sonnet' },
-    { id: 'claude-4-sonnet-think',   label: 'Claude 4 Sonnet Think — 深度思考' },
-    { id: 'gpt-5.4',                 label: 'GPT-5.4' },
-    { id: 'gpt-5.3-codex',           label: 'GPT-5.3 Codex' },
-    { id: 'gpt-5.3',                 label: 'GPT-5.3' },
-    { id: 'gpt-5.2',                 label: 'GPT-5.2' },
-    { id: 'gpt-5.1',                 label: 'GPT-5.1' },
-    { id: 'gpt-5',                   label: 'GPT-5' },
-    { id: 'gpt-4o',                  label: 'GPT-4o' },
-    { id: 'gpt-4o-mini',             label: 'GPT-4o mini — 輕量' },
-    { id: 'gemini-3-1-pro',          label: 'Gemini 3.1 Pro' },
-    { id: 'gemini-3-pro',            label: 'Gemini 3 Pro' },
-    { id: 'gemini-3-flash',          label: 'Gemini 3 Flash — 快速' },
-    { id: 'gemini-2.5-flash',        label: 'Gemini 2.5 Flash' },
+    { id: 'claude-4.6-sonnet',     label: 'Claude 4.6 Sonnet — 預設' },
+    { id: 'claude-4.5-sonnet',     label: 'Claude 4.5 Sonnet' },
+    { id: 'claude-4.5-haiku',      label: 'Claude 4.5 Haiku — 快速' },
+    { id: 'claude-4-sonnet',       label: 'Claude 4 Sonnet' },
+    { id: 'claude-4-sonnet-think', label: 'Claude 4 Sonnet Think — 深度思考' },
+    { id: 'gpt-5.4',               label: 'GPT-5.4' },
+    { id: 'gpt-5.3-codex',         label: 'GPT-5.3 Codex' },
+    { id: 'gpt-5.3',               label: 'GPT-5.3' },
+    { id: 'gpt-5.2',               label: 'GPT-5.2' },
+    { id: 'gpt-5.1',               label: 'GPT-5.1' },
+    { id: 'gpt-5',                 label: 'GPT-5' },
+    { id: 'gpt-4o',                label: 'GPT-4o' },
+    { id: 'gpt-4o-mini',           label: 'GPT-4o mini — 輕量' },
+    { id: 'gemini-3-1-pro',        label: 'Gemini 3.1 Pro' },
+    { id: 'gemini-3-pro',          label: 'Gemini 3 Pro' },
+    { id: 'gemini-3-flash',        label: 'Gemini 3 Flash — 快速' },
+    { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash' },
   ],
 };
 
+const MAX_SOURCES = 50;
+
+function genId() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+// ── 主元件 ────────────────────────────────────────────────────
+
 export function UploadModal({ onStart, onClose }: Props) {
   const { token } = useSessionStore();
-  const [content, setContent] = useState('');
+  const [sources, setSources] = useState<Source[]>([]);
   const [provider, setProvider] = useState<ProviderType>('claude');
   const [model, setModel] = useState(PROVIDER_MODELS.claude[0].id);
   const [depth, setDepth] = useState<DepthType>('intermediate');
   const [questionMode, setQuestionMode] = useState<'short_answer' | 'multiple_choice'>('short_answer');
-  const [uploading, setUploading] = useState(false);
-  const [uploadedFilename, setUploadedFilename] = useState<string | null>(null);
-  const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // URL 輸入
+  const [urlInput, setUrlInput] = useState('');
+  const [urlLoading, setUrlLoading] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+
+  // 文字輸入面板
+  const [showTextInput, setShowTextInput] = useState(false);
+  const [textInput, setTextInput] = useState('');
+
+  // 拖曳
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Esc 關閉
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') onClose?.();
     };
     window.addEventListener('keydown', onKeyDown);
@@ -99,104 +159,300 @@ export function UploadModal({ onStart, onClose }: Props) {
     setModel(PROVIDER_MODELS[p][0].id);
   };
 
-  const handleFile = async (file: File) => {
+  // ── 新增來源 ───────────────────────────────────────────────
+
+  const addFileSources = async (files: File[]) => {
     if (!token) return;
-    setUploading(true);
-    setUploadError(null);
-    setUploadedFilename(null);
-    setUploadedFileId(null);
-    try {
-      const result = await uploadFile(file, token);
-      setUploadedFilename(result.filename);
-      setUploadedFileId(result.file_id);
-    } catch (e: unknown) {
-      setUploadError(e instanceof Error ? e.message : '上傳失敗');
-    } finally {
-      setUploading(false);
+    if (sources.length + files.length > MAX_SOURCES) {
+      alert(`最多只能加入 ${MAX_SOURCES} 個資料源`);
+      return;
+    }
+
+    const placeholders: Source[] = files.map((f) => ({
+      id: genId(),
+      type: 'file',
+      label: f.name,
+      uploading: true,
+    }));
+    setSources((prev) => [...prev, ...placeholders]);
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const placeholder = placeholders[i];
+      try {
+        const result = await uploadFile(file, token);
+        setSources((prev) =>
+          prev.map((s) =>
+            s.id === placeholder.id
+              ? {
+                  ...s,
+                  fileId: result.file_id,
+                  charCount: result.size,
+                  uploading: false,
+                  error: undefined,
+                }
+              : s
+          )
+        );
+      } catch (e) {
+        setSources((prev) =>
+          prev.map((s) =>
+            s.id === placeholder.id
+              ? { ...s, uploading: false, error: e instanceof Error ? e.message : '上傳失敗' }
+              : s
+          )
+        );
+      }
     }
   };
 
   const handleFileInput = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
+    const files = Array.from(e.target.files || []);
+    if (files.length) addFileSources(files);
     e.target.value = '';
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) handleFile(file);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length) addFileSources(files);
   };
 
+  const handleAddUrl = async () => {
+    const url = urlInput.trim();
+    if (!url || !token) return;
+    if (sources.length >= MAX_SOURCES) {
+      alert(`最多只能加入 ${MAX_SOURCES} 個資料源`);
+      return;
+    }
+    setUrlLoading(true);
+    setUrlError(null);
+    try {
+      const result = await uploadUrl(url, token);
+      setSources((prev) => [
+        ...prev,
+        {
+          id: genId(),
+          type: 'url',
+          label: result.title || url,
+          fileId: result.file_id,
+          charCount: result.char_count,
+        },
+      ]);
+      setUrlInput('');
+    } catch (e) {
+      setUrlError(e instanceof Error ? e.message : 'URL 擷取失敗');
+    } finally {
+      setUrlLoading(false);
+    }
+  };
+
+  const handleUrlKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') handleAddUrl();
+  };
+
+  const handleAddText = () => {
+    const text = textInput.trim();
+    if (text.length < 50) return;
+    if (sources.length >= MAX_SOURCES) {
+      alert(`最多只能加入 ${MAX_SOURCES} 個資料源`);
+      return;
+    }
+    setSources((prev) => [
+      ...prev,
+      {
+        id: genId(),
+        type: 'text',
+        label: `貼上的文字（${text.length.toLocaleString()} 字元）`,
+        content: text,
+        charCount: text.length,
+      },
+    ]);
+    setTextInput('');
+    setShowTextInput(false);
+  };
+
+  const removeSource = (id: string) => {
+    setSources((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  // ── 啟動學習 ───────────────────────────────────────────────
+
+  const readySources = sources.filter((s) => !s.uploading && !s.error);
+  const canStart = readySources.length > 0;
+
   const handleStart = () => {
-    const text = content.trim();
-    if (!uploadedFileId && text.length < 50) return;
-    onStart(provider, depth, model, questionMode, uploadedFileId ?? undefined, text || undefined);
+    if (!canStart) return;
+    onStart(
+      provider,
+      depth,
+      model,
+      questionMode,
+      readySources.map((s) => ({
+        type: s.type,
+        file_id: s.fileId,
+        content: s.content,
+        label: s.label,
+      }))
+    );
   };
 
   const models = PROVIDER_MODELS[provider];
 
+  // ── 渲染 ───────────────────────────────────────────────────
+
+  const sourceTypeIcon = (type: SourceType) => {
+    if (type === 'file') return <IconFile />;
+    if (type === 'url') return <IconLink />;
+    return <IconText />;
+  };
+
   return (
     <div className="modal-overlay">
-      <div className="modal-card">
+      <div className="modal-card modal-card-wide">
         {onClose && (
-          <button
-            className="modal-close-btn"
-            onClick={onClose}
-            aria-label="關閉上傳視窗"
-            type="button"
-          >
+          <button className="modal-close-btn" onClick={onClose} aria-label="關閉" type="button">
             ×
           </button>
         )}
-        <h2>上傳學習材料</h2>
-        <p>上傳檔案或貼上文字，系統將自動切割成學習階段</p>
 
-        <div
-          className={`file-drop-zone${dragging ? ' dragging' : ''}${uploading ? ' loading' : ''}`}
-          onClick={() => !uploading && fileInputRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={handleDrop}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".txt,.md,.pdf,.docx,.doc"
-            style={{ display: 'none' }}
-            onChange={handleFileInput}
-          />
-          {uploading ? (
-            <span className="drop-hint">解析中...</span>
-          ) : uploadedFilename ? (
-            <>
-              <IconCheckCircle className="drop-icon-svg" />
-              <span className="drop-hint">{uploadedFilename}</span>
-              <span className="drop-formats">點擊可重新上傳</span>
-            </>
-          ) : (
-            <>
-              <IconDoc className="drop-icon-svg" />
-              <span className="drop-hint">點擊或拖曳檔案至此</span>
-              <span className="drop-formats">支援 .txt .md .pdf .docx（不做本地文字解析）</span>
-            </>
-          )}
+        <h2>加入學習材料</h2>
+        <p className="modal-subtitle">
+          支援多個來源混合使用，AI 會自動合併相似主題，不重複教學
+        </p>
+
+        {/* ── 加入來源操作列 ── */}
+        <div className="source-actions">
+          {/* 檔案上傳區 */}
+          <div
+            className={`source-drop-zone${dragging ? ' dragging' : ''}`}
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={handleDrop}
+            role="button"
+            tabIndex={0}
+            aria-label="點擊或拖曳上傳檔案"
+            onKeyDown={(e) => e.key === 'Enter' && fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.md,.pdf,.docx,.doc,.pptx,.html"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleFileInput}
+            />
+            <IconFile />
+            <span>上傳檔案</span>
+            <span className="source-drop-hint">PDF · DOCX · TXT · MD</span>
+          </div>
+
+          {/* URL 輸入 */}
+          <div className="source-url-group">
+            <div className="source-url-input-row">
+              <IconLink />
+              <input
+                type="url"
+                className="source-url-input"
+                placeholder="貼上網址或 YouTube 連結…"
+                value={urlInput}
+                onChange={(e) => { setUrlInput(e.target.value); setUrlError(null); }}
+                onKeyDown={handleUrlKeyDown}
+                disabled={urlLoading}
+                aria-label="網址輸入"
+              />
+              <button
+                className="btn-secondary btn-sm"
+                onClick={handleAddUrl}
+                disabled={!urlInput.trim() || urlLoading}
+                type="button"
+              >
+                {urlLoading ? <IconSpinner /> : '加入'}
+              </button>
+            </div>
+            {urlError && <p className="source-error-inline">{urlError}</p>}
+          </div>
+
+          {/* 純文字 */}
+          <button
+            className={`source-text-toggle${showTextInput ? ' active' : ''}`}
+            onClick={() => setShowTextInput((v) => !v)}
+            type="button"
+          >
+            <IconText />
+            <span>貼上文字</span>
+          </button>
         </div>
 
-        {uploadError && <p className="upload-error">{uploadError}</p>}
-
-        <textarea
-          value={content}
-          onChange={(e) => { setContent(e.target.value); setUploadedFilename(null); setUploadedFileId(null); }}
-          placeholder="可直接貼上學習材料（至少 50 字）；若已上傳檔案可留空"
-          rows={8}
-        />
-
-        {content.trim().length > 0 && (
-          <p className="char-count">{content.trim().length.toLocaleString()} 字元</p>
+        {/* 文字輸入展開面板 */}
+        {showTextInput && (
+          <div className="source-text-panel">
+            <textarea
+              className="source-textarea"
+              value={textInput}
+              onChange={(e) => setTextInput(e.target.value)}
+              placeholder="貼上或輸入學習材料（至少 50 字）"
+              rows={6}
+              autoFocus
+            />
+            <div className="source-text-panel-footer">
+              <span className="char-count">{textInput.trim().length.toLocaleString()} 字元</span>
+              <div className="source-text-panel-btns">
+                <button
+                  className="btn-ghost btn-sm"
+                  onClick={() => { setShowTextInput(false); setTextInput(''); }}
+                  type="button"
+                >
+                  取消
+                </button>
+                <button
+                  className="btn-primary btn-sm"
+                  onClick={handleAddText}
+                  disabled={textInput.trim().length < 50}
+                  type="button"
+                >
+                  加入
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
+        {/* ── 資料源清單 ── */}
+        <div className="source-list-header">
+          <span>已加入的資料源</span>
+          <span className="source-list-count">{sources.length} / {MAX_SOURCES}</span>
+        </div>
+
+        {sources.length === 0 ? (
+          <div className="source-list-empty">尚未加入任何資料源</div>
+        ) : (
+          <ul className="source-list">
+            {sources.map((src) => (
+              <li key={src.id} className={`source-item${src.error ? ' has-error' : ''}`}>
+                <span className="source-item-icon">{sourceTypeIcon(src.type)}</span>
+                <span className="source-item-label" title={src.label}>{src.label}</span>
+                {src.uploading && <IconSpinner />}
+                {src.charCount != null && !src.uploading && (
+                  <span className="source-item-meta">{src.charCount.toLocaleString()} 字元</span>
+                )}
+                {src.error && <span className="source-item-error">{src.error}</span>}
+                <button
+                  className="source-item-remove"
+                  onClick={() => removeSource(src.id)}
+                  aria-label={`移除 ${src.label}`}
+                  type="button"
+                >
+                  <IconX />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* ── AI 設定 ── */}
         <div className="modal-options">
           <div className="option-group">
             <label>AI 提供商</label>
@@ -238,9 +494,9 @@ export function UploadModal({ onStart, onClose }: Props) {
         <button
           className="btn-primary btn-large"
           onClick={handleStart}
-          disabled={(!uploadedFileId && content.trim().length < 50) || uploading}
+          disabled={!canStart || sources.some((s) => s.uploading)}
         >
-          開始學習
+          {sources.some((s) => s.uploading) ? '上傳中…' : `開始學習（${readySources.length} 個來源）`}
         </button>
       </div>
     </div>

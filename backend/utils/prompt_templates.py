@@ -11,6 +11,12 @@ SYSTEM_PROMPTS: dict[str, str] = {
 5. stage 數量偏少不偏多，每個 stage 應包含至少 2 個可用問答測試的概念
 6. 每個 stage 至少引用 2 個 chunk（除非教材本身段落非常少）
 
+【跨來源聚合原則（多來源時必須執行）】
+若教材標示了多個來源（以「=== 來源 N：標題 ===」區隔），請特別注意：
+- 不同來源中涵蓋相同主題或概念的 chunks，必須歸入同一個 stage
+- 這讓學習者從多個角度理解同一概念，而非在不同章節重複學習相似內容
+- 跨來源聚合後的 stage，source_chunk_ids 可同時包含來自不同來源的 chunk_id
+
 【chunk_roles 欄位（必填）】
 為每個 chunk_id 標記角色：
 - "core"：此 chunk 是某個 stage 的主要教學依據
