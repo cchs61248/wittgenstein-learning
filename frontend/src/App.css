@@ -2385,6 +2385,33 @@ textarea:disabled {
   flex: 1;
 }
 
+/* ── 子章節縮排與連接線 ── */
+.stage-child {
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.stage-child .stage-dot {
+  width: 5px;
+  height: 5px;
+  margin-top: 5px;
+}
+
+/* ── 子章節類型 badge ── */
+.stage-kind-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-right: 4px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
+
 .stage-map-back {
   width: 100%;
   margin-bottom: 12px;

@@ -18,6 +18,55 @@ export function StageMap({ hideHeading = false }: StageMapProps) {
   const completed = stages.filter((s) => s.status === 'completed').length;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
+  // 將 reteach/remediation 子章節依 source_stage_id 分組，其餘為根章節
+  const childrenMap = new Map<number, typeof stages>();
+  const rootStages: typeof stages = [];
+  for (const stage of stages) {
+    if ((stage.kind === 'reteach' || stage.kind === 'remediation') && stage.source_stage_id != null) {
+      const arr = childrenMap.get(stage.source_stage_id) ?? [];
+      arr.push(stage);
+      childrenMap.set(stage.source_stage_id, arr);
+    } else {
+      rootStages.push(stage);
+    }
+  }
+
+  const renderItem = (stage: (typeof stages)[0], isChild: boolean) => {
+    const canReview = stage.status === 'completed';
+    const isSelected = selectedStageId === stage.stage_id;
+    const kindBadge =
+      stage.kind === 'reteach' ? '重教' :
+      stage.kind === 'remediation' ? '補強' :
+      stage.kind === 'enrichment' ? '整合挑戰' :
+      null;
+    const cls = [
+      'stage-item',
+      `stage-${stage.status}`,
+      isSelected ? 'stage-selected' : '',
+      canReview ? 'stage-clickable' : '',
+      isChild ? 'stage-child' : '',
+    ].filter(Boolean).join(' ');
+
+    return (
+      <li
+        key={stage.stage_id}
+        className={cls}
+        onClick={canReview ? () => setSelectedStage(stage.stage_id) : undefined}
+      >
+        <span className="stage-dot" />
+        <div className="stage-info">
+          <span className="stage-title">
+            {kindBadge && <span className="stage-kind-badge">{kindBadge}</span>}
+            {stage.title}
+          </span>
+          <span className="stage-status-label">
+            {isSelected ? '回顧中' : statusLabel[stage.status]}
+          </span>
+        </div>
+      </li>
+    );
+  };
+
   return (
     <aside className="stage-map">
       {!hideHeading && <h3>學習進度</h3>}
@@ -33,35 +82,10 @@ export function StageMap({ hideHeading = false }: StageMapProps) {
       )}
 
       <ul className="stage-list">
-        {stages.map((stage) => {
-          // 已完成章節應隨時可點回顧；講解文字是否已在快取由主欄處理（避免新章節生成中因快取條件誤擋側欄）
-          const canReview = stage.status === 'completed';
-          const isSelected = selectedStageId === stage.stage_id;
-          const kindLabel =
-            stage.kind === 'reteach'
-              ? '重教子章節'
-              : stage.kind === 'remediation'
-              ? '補強子章節'
-              : stage.kind === 'enrichment'
-              ? '整合挑戰'
-              : null;
-          return (
-            <li
-              key={stage.stage_id}
-              className={`stage-item stage-${stage.status}${isSelected ? ' stage-selected' : ''}${canReview ? ' stage-clickable' : ''}`}
-              onClick={canReview ? () => setSelectedStage(stage.stage_id) : undefined}
-            >
-              <span className="stage-dot" />
-              <div className="stage-info">
-                <span className="stage-title">{stage.title}</span>
-                <span className="stage-status-label">
-                  {isSelected ? '回顧中' : statusLabel[stage.status]}
-                </span>
-                {kindLabel && <span className="stage-kind-label">{kindLabel}</span>}
-              </div>
-            </li>
-          );
-        })}
+        {rootStages.flatMap((stage) => [
+          renderItem(stage, false),
+          ...(childrenMap.get(stage.stage_id) ?? []).map((child) => renderItem(child, true)),
+        ])}
       </ul>
     </aside>
   );
