@@ -1214,6 +1214,11 @@ class LearningOrchestrator:
 
         elif d == "retry":
             wm.current_attempt += 1
+            # 立即持久化輪次：讓 _resume_from_stored 能還原 current_attempt，
+            # 防止 resume 在題目生成完成前觸發重複的 _make_progress_decision。
+            await session_memory.update_stage_attempt(
+                session_id, stage["stage_id"], wm.current_attempt
+            )
 
             # retry：不清除原講解，在末尾附加分隔線提示再試
             retry_separator = (
@@ -1590,9 +1595,18 @@ class LearningOrchestrator:
         wm.reset_for_new_stage(stages[stage_index]["stage_id"])
         stage = stages[stage_index]
 
+        # 從 DB 還原 current_attempt（reset_for_new_stage 會重置為 1）
+        stored_progress = await session_memory.get_stage_progress(session_id, stage["stage_id"])
+        if stored_progress and stored_progress["attempts"] > 1:
+            wm.current_attempt = stored_progress["attempts"]
+        _stored_best_score = stored_progress["best_score"] if stored_progress else 0.0
+
         await session_memory.update_current_stage(session_id, stage["stage_id"])
         await session_memory.upsert_stage_progress(
-            session_id, stage["stage_id"], "in_progress", 0, 0.0, {}
+            session_id, stage["stage_id"], "in_progress",
+            wm.current_attempt,  # 保留已持久化的輪次，不歸零
+            _stored_best_score,  # 保留已記錄的最佳分數
+            {},
         )
 
         progress_md = self._build_progress_table(stages, stage_index)
@@ -1779,11 +1793,89 @@ class LearningOrchestrator:
                 },
             })
         elif qa_records:
-            # 所有題目都已回答，從 DB 重建評估結果並做進度決策
-            wm.stage_evaluations = [
-                {"score": r["score"], "feedback": r["feedback"]}
-                for r in qa_records
-            ]
-            await self._make_progress_decision(
-                session_id, user_id, stages, stage, stage_index, wm, emit
+            # 所有 stored_questions 都已回答。需判斷兩種情境：
+            # (A) 正常完成：呼叫 _make_progress_decision
+            # (B) Race condition：retry 已決策（current_attempt 已 +1 並持久化），
+            #     但新一輪題目還沒存入 DB，stored_questions 仍是舊輪次的題目。
+            #     特徵：current_attempt > 1 且「當輪答題記錄 == 全部答題記錄」
+            #     （若真正跑完了第 N 輪，qa_records 必然包含前面各輪的紀錄，數量會多於 stored_questions）
+            current_question_ids = {q["question_id"] for q in questions}
+            current_qa = [r for r in qa_records if r["question_id"] in current_question_ids]
+            is_race_condition = (
+                wm.current_attempt > 1 and len(current_qa) == len(qa_records)
             )
+
+            if is_race_condition:
+                # retry 題目尚未生成完畢就被 resume 打斷 → 重新產出當輪題目
+                prev_q_ids = [t.question_id for t in wm.stage_turns]
+                prev_q_texts = [t.question_text for t in wm.stage_turns]
+                q_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={
+                        "stage": stage,
+                        "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
+                        "attempt_number": wm.current_attempt,
+                        "previous_question_ids": prev_q_ids,
+                        "previous_question_texts": prev_q_texts,
+                        "question_mode": wm.question_mode,
+                    },
+                )
+                q_result = await self.questioner.run(q_ctx)
+                new_questions: list[dict] = q_result.get("questions", [])
+                used_ids = set(prev_q_ids)
+                for q in new_questions:
+                    if not q.get("question_id") or q["question_id"] in used_ids:
+                        q["question_id"] = (
+                            f"q_{stage['stage_id']}_{wm.current_attempt}_{uuid.uuid4().hex[:8]}"
+                        )
+                    used_ids.add(q["question_id"])
+                wm.pending_questions = new_questions
+                wm.stage_evaluations = []
+                await session_memory.store_stage_questions(
+                    session_id, stage["stage_id"], new_questions
+                )
+                new_questions_md = self._build_questions_section(new_questions)
+                if new_questions_md:
+                    await emit({
+                        "type": "explanation_chunk",
+                        "payload": {"chunk": new_questions_md, "is_final": False},
+                    })
+                await emit({"type": "explanation_chunk", "payload": {"chunk": "", "is_final": True}})
+                await emit({
+                    "type": "explanation_complete",
+                    "payload": {
+                        "stage_id": stage["stage_id"],
+                        "stage_title": stage["title"],
+                        "full_explanation": display_md + new_questions_md,
+                    },
+                })
+                if new_questions:
+                    first_q = new_questions[0]
+                    wm.current_turn = TurnContext(
+                        turn_id=str(uuid.uuid4()),
+                        question_id=first_q["question_id"],
+                        question_text=first_q["text"],
+                    )
+                    await emit({
+                        "type": "question",
+                        "payload": {
+                            "question_id": first_q["question_id"],
+                            "text": first_q["text"],
+                            "type": first_q.get("type", "understand"),
+                            "answer_mode": first_q.get("answer_mode", "short_answer"),
+                            "options": first_q.get("options", []),
+                            "evidence_chunk_ids": first_q.get("evidence_chunk_ids", []),
+                            "stage_id": stage["stage_id"],
+                            "attempt_number": wm.current_attempt,
+                        },
+                    })
+            else:
+                # 正常情境：只用當輪（stored_questions 對應的）答題記錄來評估
+                wm.stage_evaluations = [
+                    {"score": r["score"], "feedback": r.get("feedback", "")}
+                    for r in current_qa
+                ]
+                await self._make_progress_decision(
+                    session_id, user_id, stages, stage, stage_index, wm, emit
+                )

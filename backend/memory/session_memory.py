@@ -234,6 +234,34 @@ async def upsert_stage_progress(
     await db.commit()
 
 
+async def get_stage_progress(session_id: str, stage_id: int) -> dict | None:
+    db = await get_db()
+    async with db.execute(
+        """SELECT status, attempts, best_score, understanding_notes
+           FROM stage_progress WHERE session_id = ? AND stage_id = ?""",
+        (session_id, stage_id),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    try:
+        d["understanding_notes"] = json.loads(d["understanding_notes"] or "{}")
+    except Exception:
+        d["understanding_notes"] = {}
+    return d
+
+
+async def update_stage_attempt(session_id: str, stage_id: int, attempt: int) -> None:
+    """retry 決策後立即更新輪次，讓 resume 能還原正確 current_attempt。"""
+    db = await get_db()
+    await db.execute(
+        "UPDATE stage_progress SET attempts = ? WHERE session_id = ? AND stage_id = ?",
+        (attempt, session_id, stage_id),
+    )
+    await db.commit()
+
+
 async def get_stage_qa_records(session_id: str, stage_id: int) -> list[dict]:
     db = await get_db()
     async with db.execute(
