@@ -852,7 +852,7 @@ body {
 .tutor-note-header {
   width: 100%;
   display: grid;
-  grid-template-columns: 24px 1fr auto auto;
+  grid-template-columns: 24px 1fr auto auto auto;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
@@ -897,6 +897,21 @@ body {
 .tutor-note-toggle-icon {
   font-size: 11px;
   color: var(--text-subtle);
+}
+
+.tutor-note-delete {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-subtle);
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 3px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.tutor-note-delete:hover {
+  color: #e53e3e;
+  background: rgba(229, 62, 62, 0.1);
 }
 
 .tutor-note-body {

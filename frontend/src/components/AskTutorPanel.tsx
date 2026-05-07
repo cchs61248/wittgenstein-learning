@@ -2,6 +2,7 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSessionStore } from '../store/sessionStore';
+import { deleteTutorRecord } from '../api/session';
 
 const normalizeText = (text: string) => text.replace(/\\n/g, '\n');
 
@@ -17,12 +18,24 @@ function HistoryNote({
   item,
   index,
   defaultOpen,
+  onDelete,
 }: {
-  item: { question: string; answer: string; in_scope?: boolean };
+  item: { id?: number; question: string; answer: string; in_scope?: boolean };
   index: number;
   defaultOpen: boolean;
+  onDelete?: () => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onDelete) return;
+    setDeleting(true);
+    await onDelete();
+    setDeleting(false);
+  };
+
   return (
     <div className="tutor-note">
       <button className="tutor-note-header" onClick={() => setOpen((v) => !v)}>
@@ -34,6 +47,18 @@ function HistoryNote({
           <span className="tutor-note-scope-badge">教材外</span>
         )}
         <span className="tutor-note-toggle-icon">{open ? '▲' : '▼'}</span>
+        {onDelete && item.id !== undefined && (
+          <span
+            className="tutor-note-delete"
+            role="button"
+            aria-label="刪除此問答"
+            title="刪除此問答"
+            onClick={handleDelete}
+            style={{ opacity: deleting ? 0.5 : 1, pointerEvents: deleting ? 'none' : 'auto' }}
+          >
+            ×
+          </span>
+        )}
       </button>
       {open && (
         <div className="tutor-note-body">
@@ -50,10 +75,19 @@ function HistoryNote({
 export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = false, currentStageId }: Props) {
   const tutorHistoryMap = useSessionStore((s) => s.tutorHistory);
   const clearTutorHistory = useSessionStore((s) => s.clearTutorHistory);
+  const deleteTutorMessage = useSessionStore((s) => s.deleteTutorMessage);
+  const token = useSessionStore((s) => s.token);
+  const sessionId = useSessionStore((s) => s.sessionId);
   const stageHistory = currentStageId !== null && currentStageId !== undefined
     ? (tutorHistoryMap[currentStageId] ?? [])
     : [];
   const [question, setQuestion] = useState('');
+
+  const handleDeleteItem = async (recordId: number) => {
+    if (!token || !sessionId || currentStageId === null) return;
+    const ok = await deleteTutorRecord(token, sessionId, recordId);
+    if (ok) deleteTutorMessage(currentStageId, recordId);
+  };
 
   const handleSend = () => {
     if (!question.trim() || isLoading) return;
@@ -108,10 +142,11 @@ export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = f
             <div className="tutor-history-list">
               {[...stageHistory].reverse().map((item, reversedIdx) => (
                 <HistoryNote
-                  key={reversedIdx}
+                  key={item.id ?? reversedIdx}
                   item={item}
                   index={stageHistory.length - 1 - reversedIdx}
                   defaultOpen={false}
+                  onDelete={item.id !== undefined ? () => handleDeleteItem(item.id!) : undefined}
                 />
               ))}
             </div>

@@ -519,21 +519,22 @@ async def insert_tutor_record(
     question: str,
     answer: str,
     in_scope: bool,
-) -> None:
+) -> int:
     db = await get_db()
-    await db.execute(
+    cur = await db.execute(
         """INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope)
            VALUES (?, ?, ?, ?, ?)""",
         (session_id, stage_id, question, answer, 1 if in_scope else 0),
     )
     await db.commit()
+    return cur.lastrowid
 
 
 async def get_all_tutor_records(session_id: str) -> dict[int, list[dict]]:
     """回傳 session 所有 tutor 問答，以 stage_id 分組，按插入順序排列。"""
     db = await get_db()
     async with db.execute(
-        """SELECT stage_id, question, answer, in_scope
+        """SELECT id, stage_id, question, answer, in_scope
            FROM tutor_records WHERE session_id = ?
            ORDER BY id ASC""",
         (session_id,),
@@ -545,8 +546,19 @@ async def get_all_tutor_records(session_id: str) -> dict[int, list[dict]]:
         if sid not in result:
             result[sid] = []
         result[sid].append({
+            "id": row["id"],
             "question": row["question"],
             "answer": row["answer"],
             "in_scope": bool(row["in_scope"]),
         })
     return result
+
+
+async def delete_tutor_record(record_id: int, session_id: str) -> bool:
+    db = await get_db()
+    cur = await db.execute(
+        "DELETE FROM tutor_records WHERE id = ? AND session_id = ?",
+        (record_id, session_id),
+    )
+    await db.commit()
+    return cur.rowcount > 0

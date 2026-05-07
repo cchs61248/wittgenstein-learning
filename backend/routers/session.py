@@ -217,3 +217,14 @@ async def delete_session_endpoint(session_id: str, token: str = Query(...)):
     if not ok:
         raise HTTPException(status_code=404, detail="Session 不存在")
     return {"ok": True}
+
+
+@router.delete("/{session_id}/tutor/{record_id}")
+async def delete_tutor_record_endpoint(session_id: str, record_id: int, token: str = Query(...)):
+    payload = await decode_token_active(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token 無效")
+    ok = await session_memory.delete_tutor_record(record_id, session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="紀錄不存在")
+    return {"ok": True}

@@ -148,6 +148,18 @@ export async function deleteSession(token: string, sessionId: string): Promise<b
   }
 }
 
+export async function deleteTutorRecord(token: string, sessionId: string, recordId: number): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${BASE}/sessions/${sessionId}/tutor/${recordId}?token=${encodeURIComponent(token)}`,
+      { method: 'DELETE' }
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** REST 尚未寫入 stages 時，仍可用此物件代表「生成中」session（避免誤用 getActiveSession） */
 export function syntheticGeneratingSession(sessionId: string): ActiveSession {
   return {

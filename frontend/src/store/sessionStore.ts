@@ -89,6 +89,7 @@ interface SessionState {
   clearPendingTutor: () => void;
   addTutorMessage: (msg: TutorReplyPayload) => void;
   setTutorHistories: (map: Record<number, TutorMessage[]>) => void;
+  deleteTutorMessage: (stageId: number, recordId: number) => void;
   setQuestion: (q: QuestionPayload) => void;
   setQuestionImmediate: (q: QuestionPayload | null) => void;
   setFeedback: (f: FeedbackPayload) => void;
@@ -414,7 +415,7 @@ export const useSessionStore = create<SessionState>((set) => ({
             ...s.tutorHistory,
             [msg.stage_id]: [
               ...prev,
-              { question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
+              { id: msg.id, question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
             ],
           };
       if (!isDuplicate && s.sessionId) {
@@ -447,6 +448,18 @@ export const useSessionStore = create<SessionState>((set) => ({
       }
       localStorage.removeItem('wl_tutor_history');
       return { tutorHistory: {}, tutorReply: null };
+    }),
+  deleteTutorMessage: (stageId, recordId) =>
+    set((s) => {
+      const prev = s.tutorHistory[stageId] ?? [];
+      const updated = {
+        ...s.tutorHistory,
+        [stageId]: prev.filter((item) => item.id !== recordId),
+      };
+      if (s.sessionId) {
+        try { localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated)); } catch {}
+      }
+      return { tutorHistory: updated };
     }),
   setQuestion: (q) =>
     set((s) => {

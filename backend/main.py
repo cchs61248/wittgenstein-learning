@@ -365,15 +365,15 @@ async def websocket_endpoint(
                                 None,
                             )
                             if cached:
-                                await emit({
-                                    "type": "tutor_reply",
-                                    "payload": {
-                                        "question": _ask_question,
-                                        "answer": cached["answer"],
-                                        "in_scope": cached["in_scope"],
-                                        "stage_id": sid_chk,
-                                    },
-                                })
+                                _cached_payload: dict = {
+                                    "question": _ask_question,
+                                    "answer": cached["answer"],
+                                    "in_scope": cached["in_scope"],
+                                    "stage_id": sid_chk,
+                                }
+                                if "id" in cached:
+                                    _cached_payload["id"] = cached["id"]
+                                await emit({"type": "tutor_reply", "payload": _cached_payload})
                                 continue  # 已有快取答案，跳過 LLM 重跑
                         except Exception as e:
                             _ws_log.warning("ask_tutor dedup DB check failed: %s", e)

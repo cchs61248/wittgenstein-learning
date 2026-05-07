@@ -111,6 +111,7 @@ export interface QaHistoryPayload {
 }
 
 export interface TutorMessage {
+  id?: number;
   question: string;
   answer: string;
   in_scope?: boolean;

@@ -1442,23 +1442,22 @@ class LearningOrchestrator:
             answer_messages, system_prompt=SYSTEM_PROMPTS["tutor_reply"]
         )
         answer = ans_resp.content.strip()
+        record_id: int | None = None
         try:
-            await session_memory.insert_tutor_record(
+            record_id = await session_memory.insert_tutor_record(
                 session_id, effective_stage_id, question, answer, in_scope
             )
         except Exception as e:
             _log.warning("insert_tutor_record failed: %s", e)
-        await emit(
-            {
-                "type": "tutor_reply",
-                "payload": {
-                    "question": question,
-                    "answer": answer,
-                    "in_scope": in_scope,
-                    "stage_id": effective_stage_id,
-                },
-            }
-        )
+        payload: dict = {
+            "question": question,
+            "answer": answer,
+            "in_scope": in_scope,
+            "stage_id": effective_stage_id,
+        }
+        if record_id is not None:
+            payload["id"] = record_id
+        await emit({"type": "tutor_reply", "payload": payload})
 
     # ── 恢復已存在的學習會話 ──────────────────────────────────
 
