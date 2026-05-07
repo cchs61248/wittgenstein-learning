@@ -47,20 +47,41 @@ def fetch_url_content(url: str) -> tuple[str, str]:
 
 def _fetch_youtube(video_id: str, original_url: str) -> tuple[str, str]:
     try:
-        from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+        from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError:
         raise RuntimeError("youtube-transcript-api 未安裝，請執行 pip install youtube-transcript-api")
 
+    # 不同版本的 youtube-transcript-api 暴露的例外類別可能不同；用可選匯入確保相容。
+    try:  # pragma: no cover
+        from youtube_transcript_api import TranscriptsDisabled  # type: ignore
+    except Exception:  # pragma: no cover
+        TranscriptsDisabled = Exception  # type: ignore
+    try:  # pragma: no cover
+        from youtube_transcript_api import NoTranscriptFound  # type: ignore
+    except Exception:  # pragma: no cover
+        NoTranscriptFound = Exception  # type: ignore
+    try:  # pragma: no cover
+        from youtube_transcript_api import CouldNotRetrieveTranscript  # type: ignore
+    except Exception:  # pragma: no cover
+        CouldNotRetrieveTranscript = Exception  # type: ignore
+
     try:
-        transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-        try:
-            t = transcripts.find_transcript(["zh-TW", "zh-Hant", "zh", "en"])
-        except NoTranscriptFound:
-            t = next(iter(transcripts))
-        entries = t.fetch()
-        text = " ".join(e.text for e in entries)
+        # youtube-transcript-api 介面在不同版本可能不同：
+        # 本專案已實測（1.2.4）為 instance 方法：YouTubeTranscriptApi().fetch(...)
+        api = YouTubeTranscriptApi()
+        entries = api.fetch(
+            video_id,
+            languages=["zh-TW", "zh-Hant", "zh", "en"],
+        )
+        text = " ".join((e.text or "") for e in entries).strip()
+        if not text:
+            raise ValueError("字幕內容為空")
     except TranscriptsDisabled:
         raise ValueError("此 YouTube 影片未提供字幕，無法擷取內容")
+    except NoTranscriptFound:
+        raise ValueError("找不到可用字幕（此影片可能只有自動字幕被關閉或無支援語言）")
+    except CouldNotRetrieveTranscript:
+        raise ValueError("無法取得字幕（可能是地區限制、需要登入或 YouTube 暫時阻擋）")
     except Exception as e:
         raise ValueError(f"YouTube 字幕擷取失敗：{e}")
 
