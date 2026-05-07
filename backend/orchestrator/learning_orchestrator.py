@@ -1529,6 +1529,12 @@ class LearningOrchestrator:
             )
             for sid, txt in all_explanations.items()
         }
+        try:
+            raw_tutor = await session_memory.get_all_tutor_records(session_id)
+        except Exception as e:
+            _log.warning("get_all_tutor_records failed: %s", e)
+            raw_tutor = {}
+
         await emit({
             "type": "session_snapshot",
             "payload": {
@@ -1548,6 +1554,10 @@ class LearningOrchestrator:
                     for stage_id, records in all_histories.items()
                 },
                 "decision_history": decision_history,
+                "tutor_histories": {
+                    str(stage_id): records
+                    for stage_id, records in raw_tutor.items()
+                },
             },
         })
 
