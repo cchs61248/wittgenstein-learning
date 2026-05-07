@@ -60,6 +60,7 @@ export default function App() {
     setPendingAnswer,
     setQaHistory,
     addTutorMessage,
+    setTutorHistories,
     setTutorLoading,
     isTutorLoading,
     hydrateSnapshot,
@@ -520,6 +521,12 @@ export default function App() {
             }))
           );
         }
+        const tutorHistoriesRaw = msg.payload.tutor_histories ?? {};
+        const tutorHistoriesMap: Record<number, { question: string; answer: string; in_scope?: boolean }[]> = {};
+        for (const [k, v] of Object.entries(tutorHistoriesRaw)) {
+          tutorHistoriesMap[Number(k)] = v;
+        }
+        setTutorHistories(tutorHistoriesMap);
         break;
       }
       case 'tutor_reply':
@@ -976,6 +983,7 @@ export default function App() {
                   <ExplanationPanel ref={explanationScrollRef} />
                 )}
                 <AskTutorPanel
+                  currentStageId={currentStageId}
                   onAskTutor={handleAskTutor}
                   isCollapsed={isAskTutorCollapsed}
                   onToggle={() => setIsAskTutorCollapsed((v) => !v)}

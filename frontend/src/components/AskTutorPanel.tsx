@@ -10,6 +10,7 @@ interface Props {
   isCollapsed: boolean;
   onToggle: () => void;
   isLoading?: boolean;
+  currentStageId: number | null;
 }
 
 function HistoryNote({
@@ -46,9 +47,12 @@ function HistoryNote({
   );
 }
 
-export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = false }: Props) {
-  const tutorHistory = useSessionStore((s) => s.tutorHistory);
+export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = false, currentStageId }: Props) {
+  const tutorHistoryMap = useSessionStore((s) => s.tutorHistory);
   const clearTutorHistory = useSessionStore((s) => s.clearTutorHistory);
+  const stageHistory = currentStageId !== null && currentStageId !== undefined
+    ? (tutorHistoryMap[currentStageId] ?? [])
+    : [];
   const [question, setQuestion] = useState('');
 
   const handleSend = () => {
@@ -62,12 +66,12 @@ export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = f
       <div className="collapsible-header">
         <span className="collapsible-title">
           想追問老師
-          {tutorHistory.length > 0 && (
-            <span className="tutor-history-count">{tutorHistory.length}</span>
+          {stageHistory.length > 0 && (
+            <span className="tutor-history-count">{stageHistory.length}</span>
           )}
         </span>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {tutorHistory.length > 0 && !isCollapsed && (
+          {stageHistory.length > 0 && !isCollapsed && (
             <button
               className="collapsible-toggle"
               style={{ fontSize: 11 }}
@@ -100,13 +104,13 @@ export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = f
               {isLoading ? '發問中…' : '發問'}
             </button>
           </div>
-          {tutorHistory.length > 0 && (
+          {stageHistory.length > 0 && (
             <div className="tutor-history-list">
-              {[...tutorHistory].reverse().map((item, reversedIdx) => (
+              {[...stageHistory].reverse().map((item, reversedIdx) => (
                 <HistoryNote
                   key={reversedIdx}
                   item={item}
-                  index={tutorHistory.length - 1 - reversedIdx}
+                  index={stageHistory.length - 1 - reversedIdx}
                   defaultOpen={false}
                 />
               ))}
