@@ -1384,7 +1384,11 @@ class LearningOrchestrator:
         if not source:
             await emit({
                 "type": "tutor_reply",
-                "payload": {"question": question, "answer": "目前沒有可用教材內容，請先開始學習流程。"},
+                "payload": {
+                    "question": question,
+                    "answer": "目前沒有可用教材內容，請先開始學習流程。",
+                    "stage_id": wm.current_stage_id,
+                },
             })
             return
 
@@ -1435,13 +1439,21 @@ class LearningOrchestrator:
         ans_resp = await self.teacher.llm.chat(
             answer_messages, system_prompt=SYSTEM_PROMPTS["tutor_reply"]
         )
+        answer = ans_resp.content.strip()
+        try:
+            await session_memory.insert_tutor_record(
+                session_id, wm.current_stage_id, question, answer, in_scope
+            )
+        except Exception as e:
+            _log.warning("insert_tutor_record failed: %s", e)
         await emit(
             {
                 "type": "tutor_reply",
                 "payload": {
                     "question": question,
-                    "answer": ans_resp.content.strip(),
+                    "answer": answer,
                     "in_scope": in_scope,
+                    "stage_id": wm.current_stage_id,
                 },
             }
         )
