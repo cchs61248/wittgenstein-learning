@@ -8,6 +8,8 @@ export type SessionLayoutPrefs = {
   learnScrollTop?: number;
   /** 學習成效分頁 .stats-page 捲動 */
   statsScrollTop?: number;
+  /** 學習成效：詳細依據區塊是否展開 */
+  statsEvidenceExpanded?: boolean;
   /** 書櫃：點入單一教材後的章節列表（map）或書櫃列表（list） */
   bookshelfPanelView?: 'list' | 'map';
   /** 書櫃章節列表區 .bookshelf-map-body 捲動 */
