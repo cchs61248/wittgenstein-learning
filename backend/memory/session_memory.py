@@ -511,3 +511,42 @@ async def delete_session(session_id: str, user_id: str) -> bool:
     )
     await db.commit()
     return True
+
+
+async def insert_tutor_record(
+    session_id: str,
+    stage_id: int,
+    question: str,
+    answer: str,
+    in_scope: bool,
+) -> None:
+    db = await get_db()
+    await db.execute(
+        """INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope)
+           VALUES (?, ?, ?, ?, ?)""",
+        (session_id, stage_id, question, answer, 1 if in_scope else 0),
+    )
+    await db.commit()
+
+
+async def get_all_tutor_records(session_id: str) -> dict[int, list[dict]]:
+    """回傳 session 所有 tutor 問答，以 stage_id 分組，按插入順序排列。"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT stage_id, question, answer, in_scope
+           FROM tutor_records WHERE session_id = ?
+           ORDER BY id ASC""",
+        (session_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    result: dict[int, list[dict]] = {}
+    for row in rows:
+        sid = row["stage_id"]
+        if sid not in result:
+            result[sid] = []
+        result[sid].append({
+            "question": row["question"],
+            "answer": row["answer"],
+            "in_scope": bool(row["in_scope"]),
+        })
+    return result
