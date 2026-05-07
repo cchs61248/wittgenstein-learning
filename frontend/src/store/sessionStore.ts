@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode, SourceChunk } from '../types/messages';
+import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode, SourceChunk, TutorMessage, TutorReplyPayload } from '../types/messages';
 
 export type StageStatus = 'pending' | 'current' | 'completed';
 
@@ -76,11 +76,12 @@ interface SessionState {
   qaHistory: QaHistoryItem[];
   stageQaHistories: Record<number, QaHistoryItem[]>;
   stageQuestions: Record<number, QuestionPayload>;
-  tutorReply: { question: string; answer: string; in_scope?: boolean } | null;
-  tutorHistory: { question: string; answer: string; in_scope?: boolean }[];
+  tutorReply: TutorMessage | null;
+  tutorHistory: Record<number, TutorMessage[]>;
   isTutorLoading: boolean;
   setTutorLoading: (v: boolean) => void;
-  addTutorMessage: (msg: { question: string; answer: string; in_scope?: boolean }) => void;
+  addTutorMessage: (msg: TutorReplyPayload) => void;
+  setTutorHistories: (map: Record<number, TutorMessage[]>) => void;
   setQuestion: (q: QuestionPayload) => void;
   setQuestionImmediate: (q: QuestionPayload | null) => void;
   setFeedback: (f: FeedbackPayload) => void;
@@ -90,7 +91,7 @@ interface SessionState {
   setAwaitingFeedback: (v: boolean) => void;
   setPendingAnswer: (answer: string) => void;
   setQaHistory: (records: QaHistoryItem[]) => void;
-  setTutorReply: (reply: { question: string; answer: string; in_scope?: boolean } | null) => void;
+  setTutorReply: (reply: TutorMessage | null) => void;
   clearTutorHistory: () => void;
   hydrateSnapshot: (snapshot: { stageExplanations: Record<number, string>; stageQaHistories: Record<number, QaHistoryItem[]> }) => void;
   /** 合併單章答題紀錄（例如 REST 回顧載入），寫入 localStorage */
@@ -170,15 +171,6 @@ function loadStageDecisions(): Record<number, StageDecisionPayload> {
   }
 }
 
-function loadTutorHistory(): { question: string; answer: string; in_scope?: boolean }[] {
-  try {
-    const raw = localStorage.getItem('wl_tutor_history');
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
 const DECISION_HISTORY_MAX = 200;
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -208,7 +200,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       sessionId: null,
       stages: [],
       pendingMap: null,
-      tutorHistory: [],
+      tutorHistory: {},
       tutorReply: null,
       pendingAdvanceStageId: null,
       pendingCourseComplete: false,
@@ -376,19 +368,47 @@ export const useSessionStore = create<SessionState>((set) => ({
   stageQaHistories: loadStageQaHistories(),
   stageQuestions: {},
   tutorReply: null,
-  tutorHistory: loadTutorHistory(),
+  tutorHistory: {},
   isTutorLoading: false,
   setTutorLoading: (v) => set({ isTutorLoading: v }),
   addTutorMessage: (msg) =>
     set((s) => {
-      const updated = [...s.tutorHistory, msg];
-      localStorage.setItem('wl_tutor_history', JSON.stringify(updated));
-      return { tutorReply: msg, tutorHistory: updated, isTutorLoading: false };
+      const prev = s.tutorHistory[msg.stage_id] ?? [];
+      const updated: Record<number, TutorMessage[]> = {
+        ...s.tutorHistory,
+        [msg.stage_id]: [
+          ...prev,
+          { question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
+        ],
+      };
+      if (s.sessionId) {
+        try {
+          localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated));
+        } catch {}
+      }
+      return {
+        tutorReply: { question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
+        tutorHistory: updated,
+        isTutorLoading: false,
+      };
     }),
-  clearTutorHistory: () => {
-    localStorage.removeItem('wl_tutor_history');
-    set({ tutorHistory: [], tutorReply: null });
-  },
+  setTutorHistories: (map) =>
+    set((s) => {
+      if (s.sessionId) {
+        try {
+          localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(map));
+        } catch {}
+      }
+      return { tutorHistory: map };
+    }),
+  clearTutorHistory: () =>
+    set((s) => {
+      if (s.sessionId) {
+        try { localStorage.removeItem(`wl_tutor_${s.sessionId}`); } catch {}
+      }
+      localStorage.removeItem('wl_tutor_history');
+      return { tutorHistory: {}, tutorReply: null };
+    }),
   setQuestion: (q) =>
     set((s) => {
       if (q.stage_id !== s.currentStageId) {
@@ -607,7 +627,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       qaHistory: [],
       pendingAnswer: null,
       tutorReply: null,
-      tutorHistory: [],
+      tutorHistory: {},
       isTutorLoading: false,
       pendingAdvanceStageId: null,
       pendingCourseComplete: false,
