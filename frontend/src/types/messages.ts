@@ -110,10 +110,14 @@ export interface QaHistoryPayload {
   records: QaHistoryRecord[];
 }
 
-export interface TutorReplyPayload {
+export interface TutorMessage {
   question: string;
   answer: string;
   in_scope?: boolean;
+}
+
+export interface TutorReplyPayload extends TutorMessage {
+  stage_id: number;
 }
 
 export interface SessionSnapshotPayload {
@@ -129,6 +133,7 @@ export interface SessionSnapshotPayload {
     strategy_snapshot: StageDecisionPayload['strategy_snapshot'];
     created_at: string;
   }>;
+  tutor_histories?: Record<string, TutorMessage[]>;
 }
 
 export interface ResumeStatePayload {
