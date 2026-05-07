@@ -249,13 +249,51 @@ async def websocket_endpoint(
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)
                 if orch:
-                    await orch.handle_answer(
-                        session_id=session_id,
-                        user_id=user_id,
-                        question_id=p["question_id"],
-                        answer=p["answer"],
-                        emit=emit,
-                    )
+                    _question_id = p["question_id"]
+                    _answer_key = f"{session_id}:answer:{_question_id}"
+                    _prev_answer = _active_generations.get(_answer_key)
+                    if _prev_answer:
+                        try:
+                            await asyncio.wait_for(_prev_answer.wait(), timeout=60)
+                        except asyncio.TimeoutError:
+                            pass
+                        try:
+                            all_qa = await session_memory.get_all_stage_qa_records(session_id)
+                            cached_qa = None
+                            for stage_records in all_qa.values():
+                                cached_qa = next(
+                                    (r for r in stage_records if r["question_id"] == _question_id),
+                                    None,
+                                )
+                                if cached_qa:
+                                    break
+                            if cached_qa:
+                                await emit({
+                                    "type": "feedback",
+                                    "payload": {
+                                        "question_id": _question_id,
+                                        "score": cached_qa["score"],
+                                        "feedback_text": cached_qa["feedback"],
+                                        "needs_clarification": False,
+                                        "clarification_question": None,
+                                    },
+                                })
+                        except Exception as e:
+                            _ws_log.warning("submit_answer dedup DB check failed: %s", e)
+                        continue
+                    _answer_evt = asyncio.Event()
+                    _active_generations[_answer_key] = _answer_evt
+                    try:
+                        await orch.handle_answer(
+                            session_id=session_id,
+                            user_id=user_id,
+                            question_id=_question_id,
+                            answer=p["answer"],
+                            emit=emit,
+                        )
+                    finally:
+                        _answer_evt.set()
+                        _active_generations.pop(_answer_key, None)
 
             elif msg_type == "resume_session":
                 session_id_to_resume: str = p.get("session_id", session_id)
@@ -305,11 +343,53 @@ async def websocket_endpoint(
             elif msg_type == "ask_tutor":
                 orch = _orchestrators.get(session_id)
                 if orch:
-                    await orch.handle_student_question(
-                        session_id=session_id,
-                        question=p.get("question", "").strip(),
-                        emit=emit,
-                    )
+                    raw_sid = p.get("stage_id")
+                    _ask_question = p.get("question", "").strip()
+                    _ask_stage_id = int(raw_sid) if raw_sid is not None else None
+
+                    # 同 session 若有進行中的 ask_tutor，等它結束後再決定是否重跑
+                    _tutor_key = f"{session_id}:tutor"
+                    _prev_tutor = _active_generations.get(_tutor_key)
+                    if _prev_tutor:
+                        try:
+                            await asyncio.wait_for(_prev_tutor.wait(), timeout=60)
+                        except asyncio.TimeoutError:
+                            pass
+                        # 等待後查 DB：若上一輪已寫入答案，直接回傳快取，不重跑 LLM
+                        try:
+                            wm_chk = get_working_memory(session_id)
+                            sid_chk = _ask_stage_id if _ask_stage_id is not None else wm_chk.current_stage_id
+                            all_tutor = await session_memory.get_all_tutor_records(session_id)
+                            cached = next(
+                                (r for r in all_tutor.get(sid_chk, []) if r["question"] == _ask_question),
+                                None,
+                            )
+                            if cached:
+                                await emit({
+                                    "type": "tutor_reply",
+                                    "payload": {
+                                        "question": _ask_question,
+                                        "answer": cached["answer"],
+                                        "in_scope": cached["in_scope"],
+                                        "stage_id": sid_chk,
+                                    },
+                                })
+                                continue  # 已有快取答案，跳過 LLM 重跑
+                        except Exception as e:
+                            _ws_log.warning("ask_tutor dedup DB check failed: %s", e)
+
+                    _tutor_evt = asyncio.Event()
+                    _active_generations[_tutor_key] = _tutor_evt
+                    try:
+                        await orch.handle_student_question(
+                            session_id=session_id,
+                            question=_ask_question,
+                            stage_id=_ask_stage_id,
+                            emit=emit,
+                        )
+                    finally:
+                        _tutor_evt.set()
+                        _active_generations.pop(_tutor_key, None)
 
     except (WebSocketDisconnect, RuntimeError):
         _ws_log.info("WS DISCONNECT  session=%s  user=%s", session_id, user_id)

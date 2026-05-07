@@ -1371,13 +1371,15 @@ class LearningOrchestrator:
         session_id: str,
         question: str,
         emit: WSEmitter,
+        stage_id: int | None = None,
     ) -> None:
         _log.info(
-            "handle_student_question  session=%s  question_len=%d",
-            session_id, len(question),
+            "handle_student_question  session=%s  stage_id=%s  question_len=%d",
+            session_id, stage_id, len(question),
         )
         wm = get_working_memory(session_id)
-        stage = next((s for s in wm.stages if s.get("stage_id") == wm.current_stage_id), None)
+        effective_stage_id = stage_id if stage_id is not None else wm.current_stage_id
+        stage = next((s for s in wm.stages if s.get("stage_id") == effective_stage_id), None)
         stage_title = stage["title"] if stage else "目前節點"
         stage_content = stage.get("content", "") if stage else ""
         source = wm.source_corpus or stage_content
@@ -1387,7 +1389,7 @@ class LearningOrchestrator:
                 "payload": {
                     "question": question,
                     "answer": "目前沒有可用教材內容，請先開始學習流程。",
-                    "stage_id": wm.current_stage_id,
+                    "stage_id": effective_stage_id,
                 },
             })
             return
@@ -1442,7 +1444,7 @@ class LearningOrchestrator:
         answer = ans_resp.content.strip()
         try:
             await session_memory.insert_tutor_record(
-                session_id, wm.current_stage_id, question, answer, in_scope
+                session_id, effective_stage_id, question, answer, in_scope
             )
         except Exception as e:
             _log.warning("insert_tutor_record failed: %s", e)
@@ -1453,7 +1455,7 @@ class LearningOrchestrator:
                     "question": question,
                     "answer": answer,
                     "in_scope": in_scope,
-                    "stage_id": wm.current_stage_id,
+                    "stage_id": effective_stage_id,
                 },
             }
         )

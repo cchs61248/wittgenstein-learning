@@ -63,6 +63,10 @@ export default function App() {
     setTutorHistories,
     setTutorLoading,
     isTutorLoading,
+    setPendingTutor,
+    clearPendingTutor,
+    setPendingSubmit,
+    clearPendingSubmit,
     hydrateSnapshot,
     hydrateDecisionHistory,
   } = useSessionStore();
@@ -527,6 +531,46 @@ export default function App() {
           tutorHistoriesMap[Number(k)] = v;
         }
         setTutorHistories(tutorHistoriesMap);
+        // 頁面重整後恢復 pending answer 狀態
+        const { pendingAnswerQuestionId, pendingAnswer: pendingAns } = useSessionStore.getState();
+        if (pendingAnswerQuestionId !== null && pendingAns !== null) {
+          const allQaRaw = Object.values(msg.payload.stage_qa_histories as Record<string, { question_id: string }[]>).flat();
+          if (allQaRaw.some((r) => r.question_id === pendingAnswerQuestionId)) {
+            clearPendingSubmit(); // 後端已在重整前處理完
+          } else {
+            // 同 ask_tutor：in-flight feedback 仍會送達此連線，等 30 秒再重送
+            setTimeout(() => {
+              const { pendingAnswerQuestionId: stillQId, pendingAnswer: stillAns } = useSessionStore.getState();
+              if (stillQId !== null && stillAns !== null) {
+                wsRef.current?.send({
+                  type: 'submit_answer',
+                  payload: { session_id: sessionIdRef.current, question_id: stillQId, answer: stillAns },
+                });
+              }
+            }, 30000);
+          }
+        }
+        // 頁面重整後恢復 pending tutor 狀態
+        const { pendingTutorQuestion, pendingTutorStageId } = useSessionStore.getState();
+        if (pendingTutorQuestion !== null) {
+          const stageHistory = pendingTutorStageId !== null ? (tutorHistoriesMap[pendingTutorStageId] ?? []) : [];
+          if (stageHistory.some((item) => item.question === pendingTutorQuestion)) {
+            clearPendingTutor(); // 後端已在重整前處理完，直接清除
+          } else {
+            // 後端 emit 走 ws_manager（指向最新連線），in-flight 回覆仍會送達此連線。
+            // 等 30 秒再重送，讓多數 LLM 回覆有足夠時間先到達並清除 pending，
+            // 萬一重送導致後端第二次 emit，addTutorMessage 的冪等判斷會防止重複顯示。
+            setTimeout(() => {
+              const { pendingTutorQuestion: stillPending, pendingTutorStageId: stillStageId } = useSessionStore.getState();
+              if (stillPending !== null) {
+                wsRef.current?.send({
+                  type: 'ask_tutor',
+                  payload: { session_id: sessionIdRef.current, question: stillPending, stage_id: stillStageId },
+                });
+              }
+            }, 30000);
+          }
+        }
         break;
       }
       case 'tutor_reply':
@@ -663,6 +707,8 @@ export default function App() {
     persistLayoutForSession(sessionIdRef.current);
     wsRef.current?.close();
     clearSession();
+    clearPendingTutor();
+    clearPendingSubmit();
     const newSid = generateSessionId();
     sessionIdRef.current = newSid;
     localStorage.setItem('wl_session_id', newSid); // 讓重整後能定位到正確 session
@@ -684,8 +730,7 @@ export default function App() {
   };
 
   const handleSubmitAnswer = (questionId: string, answer: string) => {
-    setPendingAnswer(answer);
-    setAwaitingFeedback(true);
+    setPendingSubmit(questionId, answer);
     wsRef.current?.send({
       type: 'submit_answer',
       payload: {
@@ -697,15 +742,18 @@ export default function App() {
   };
 
   const handleAskTutor = (question: string) => {
-    setTutorLoading(true);
+    const stageId = selectedStageId ?? currentStageId;
+    setPendingTutor(question, stageId);
     wsRef.current?.send({
       type: 'ask_tutor',
-      payload: { session_id: sessionIdRef.current, question },
+      payload: { session_id: sessionIdRef.current, question, stage_id: stageId },
     });
   };
 
   const handleSwitchSession = async (entry: BookEntry) => {
     if (entry.sessionId === sessionIdRef.current) return;
+    clearPendingTutor();
+    clearPendingSubmit();
     persistLayoutForSession(sessionIdRef.current);
     setIsWaitingForCurrentGeneration(false);
 
@@ -983,7 +1031,7 @@ export default function App() {
                   <ExplanationPanel ref={explanationScrollRef} />
                 )}
                 <AskTutorPanel
-                  currentStageId={currentStageId}
+                  currentStageId={selectedStageId ?? currentStageId}
                   onAskTutor={handleAskTutor}
                   isCollapsed={isAskTutorCollapsed}
                   onToggle={() => setIsAskTutorCollapsed((v) => !v)}

@@ -73,6 +73,9 @@ interface SessionState {
   isAwaitingFeedback: boolean;
   pendingNextQuestion: QuestionPayload | null;
   pendingAnswer: string | null;
+  pendingAnswerQuestionId: string | null;
+  setPendingSubmit: (questionId: string, answer: string) => void;
+  clearPendingSubmit: () => void;
   qaHistory: QaHistoryItem[];
   stageQaHistories: Record<number, QaHistoryItem[]>;
   stageQuestions: Record<number, QuestionPayload>;
@@ -80,6 +83,10 @@ interface SessionState {
   tutorHistory: Record<number, TutorMessage[]>;
   isTutorLoading: boolean;
   setTutorLoading: (v: boolean) => void;
+  pendingTutorQuestion: string | null;
+  pendingTutorStageId: number | null;
+  setPendingTutor: (question: string, stageId: number | null) => void;
+  clearPendingTutor: () => void;
   addTutorMessage: (msg: TutorReplyPayload) => void;
   setTutorHistories: (map: Record<number, TutorMessage[]>) => void;
   setQuestion: (q: QuestionPayload) => void;
@@ -193,6 +200,8 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_decision_history');
     localStorage.removeItem('wl_stage_decisions');
     localStorage.removeItem('wl_tutor_history');
+    localStorage.removeItem('wl_tutor_pending');
+    localStorage.removeItem('wl_answer_pending');
     set({
       token: null,
       userId: null,
@@ -207,6 +216,11 @@ export const useSessionStore = create<SessionState>((set) => ({
       stageDecisions: {},
       stageQuestions: {},
       isExplanationLoading: false,
+      pendingTutorQuestion: null,
+      pendingTutorStageId: null,
+      pendingAnswerQuestionId: null,
+      pendingAnswer: null,
+      isAwaitingFeedback: false,
     });
   },
 
@@ -361,35 +375,60 @@ export const useSessionStore = create<SessionState>((set) => ({
   lastDecision: null,
   decisionHistory: loadDecisionHistory(),
   stageDecisions: loadStageDecisions(),
-  isAwaitingFeedback: false,
+  isAwaitingFeedback: !!localStorage.getItem('wl_answer_pending'),
   pendingNextQuestion: null,
-  pendingAnswer: null,
+  pendingAnswer: (() => {
+    try { const r = localStorage.getItem('wl_answer_pending'); return r ? JSON.parse(r).answer : null; } catch { return null; }
+  })(),
+  pendingAnswerQuestionId: (() => {
+    try { const r = localStorage.getItem('wl_answer_pending'); return r ? JSON.parse(r).questionId : null; } catch { return null; }
+  })(),
   qaHistory: [],
   stageQaHistories: loadStageQaHistories(),
   stageQuestions: {},
   tutorReply: null,
   tutorHistory: {},
-  isTutorLoading: false,
+  isTutorLoading: !!localStorage.getItem('wl_tutor_pending'),
   setTutorLoading: (v) => set({ isTutorLoading: v }),
+  pendingTutorQuestion: (() => {
+    try { const r = localStorage.getItem('wl_tutor_pending'); return r ? JSON.parse(r).question : null; } catch { return null; }
+  })(),
+  pendingTutorStageId: (() => {
+    try { const r = localStorage.getItem('wl_tutor_pending'); return r ? JSON.parse(r).stageId : null; } catch { return null; }
+  })(),
+  setPendingTutor: (question, stageId) => {
+    try { localStorage.setItem('wl_tutor_pending', JSON.stringify({ question, stageId })); } catch {}
+    set({ pendingTutorQuestion: question, pendingTutorStageId: stageId, isTutorLoading: true });
+  },
+  clearPendingTutor: () => {
+    localStorage.removeItem('wl_tutor_pending');
+    set({ pendingTutorQuestion: null, pendingTutorStageId: null, isTutorLoading: false });
+  },
   addTutorMessage: (msg) =>
     set((s) => {
       const prev = s.tutorHistory[msg.stage_id] ?? [];
-      const updated: Record<number, TutorMessage[]> = {
-        ...s.tutorHistory,
-        [msg.stage_id]: [
-          ...prev,
-          { question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
-        ],
-      };
-      if (s.sessionId) {
+      const isDuplicate = prev.some((item) => item.question === msg.question);
+      const updated: Record<number, TutorMessage[]> = isDuplicate
+        ? s.tutorHistory
+        : {
+            ...s.tutorHistory,
+            [msg.stage_id]: [
+              ...prev,
+              { question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
+            ],
+          };
+      if (!isDuplicate && s.sessionId) {
         try {
           localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated));
         } catch {}
       }
+      localStorage.removeItem('wl_tutor_pending');
       return {
         tutorReply: { question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
         tutorHistory: updated,
         isTutorLoading: false,
+        pendingTutorQuestion: null,
+        pendingTutorStageId: null,
       };
     }),
   setTutorHistories: (map) =>
@@ -411,10 +450,11 @@ export const useSessionStore = create<SessionState>((set) => ({
     }),
   setQuestion: (q) =>
     set((s) => {
+      const isPending = s.pendingAnswerQuestionId !== null && q.question_id === s.pendingAnswerQuestionId;
       if (q.stage_id !== s.currentStageId) {
         return {
           stageQuestions: { ...s.stageQuestions, [q.stage_id]: q },
-          isAwaitingFeedback: false,
+          isAwaitingFeedback: isPending ? true : false,
         };
       }
       const isNewStageQuestion =
@@ -424,22 +464,27 @@ export const useSessionStore = create<SessionState>((set) => ({
           currentQuestion: q,
           lastFeedback: null,
           pendingNextQuestion: null,
-          isAwaitingFeedback: false,
+          isAwaitingFeedback: isPending ? true : false,
         };
       }
       if (s.lastFeedback) {
-        return { pendingNextQuestion: q, isAwaitingFeedback: false };
+        return { pendingNextQuestion: q, isAwaitingFeedback: isPending ? true : false };
       }
-      return { currentQuestion: q, lastFeedback: null, pendingNextQuestion: null, isAwaitingFeedback: false };
+      return { currentQuestion: q, lastFeedback: null, pendingNextQuestion: null, isAwaitingFeedback: isPending ? true : false };
     }),
   setQuestionImmediate: (q) =>
-    set({
+    set((s) => ({
       currentQuestion: q,
       pendingNextQuestion: null,
-      isAwaitingFeedback: false,
-    }),
+      // 若這題正是 pending answer 等待回覆的題目，保持鎖定狀態
+      isAwaitingFeedback:
+        q !== null && s.pendingAnswerQuestionId !== null && q.question_id === s.pendingAnswerQuestionId
+          ? true
+          : false,
+    })),
   setFeedback: (f) =>
     set((s) => {
+      localStorage.removeItem('wl_answer_pending');
       const item: QaHistoryItem | null =
         s.currentQuestion && s.pendingAnswer !== null
           ? {
@@ -456,14 +501,27 @@ export const useSessionStore = create<SessionState>((set) => ({
         lastFeedback: f,
         isAwaitingFeedback: false,
         pendingAnswer: null,
+        pendingAnswerQuestionId: null,
         qaHistory: item ? [...s.qaHistory, item] : s.qaHistory,
       };
     }),
   setRecoveredFeedback: (f) =>
-    set({
-      lastFeedback: f,
-      isAwaitingFeedback: false,
-      pendingAnswer: null,
+    set((s) => {
+      if (s.pendingAnswerQuestionId !== null) {
+        if (f && f.question_id === s.pendingAnswerQuestionId) {
+          // 重整前答案已處理完成：清除 pending 並顯示回覆
+          localStorage.removeItem('wl_answer_pending');
+          return {
+            lastFeedback: f,
+            isAwaitingFeedback: false,
+            pendingAnswer: null,
+            pendingAnswerQuestionId: null,
+          };
+        }
+        // 正在等待本題評分，recovered feedback 是前一題的舊資料：忽略，保持鎖定
+        return {};
+      }
+      return { lastFeedback: f, isAwaitingFeedback: false, pendingAnswer: null };
     }),
   setDecision: (d) =>
     set((s) => {
@@ -493,6 +551,14 @@ export const useSessionStore = create<SessionState>((set) => ({
     }),
   setAwaitingFeedback: (v) => set({ isAwaitingFeedback: v }),
   setPendingAnswer: (answer) => set({ pendingAnswer: answer }),
+  setPendingSubmit: (questionId, answer) => {
+    try { localStorage.setItem('wl_answer_pending', JSON.stringify({ questionId, answer })); } catch {}
+    set({ pendingAnswerQuestionId: questionId, pendingAnswer: answer, isAwaitingFeedback: true });
+  },
+  clearPendingSubmit: () => {
+    localStorage.removeItem('wl_answer_pending');
+    set({ pendingAnswerQuestionId: null, pendingAnswer: null, isAwaitingFeedback: false });
+  },
   setQaHistory: (records) => set({ qaHistory: records }),
   setTutorReply: (reply) => set({ tutorReply: reply }),
   hydrateSnapshot: ({ stageExplanations, stageQaHistories }) =>
@@ -540,6 +606,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     })),
   advanceStage: (nextStageId) =>
     set((s) => {
+      localStorage.removeItem('wl_answer_pending');
       const updatedStageQaHistories = s.currentStageId !== null && s.qaHistory.length > 0
         ? { ...s.stageQaHistories, [s.currentStageId]: s.qaHistory }
         : s.stageQaHistories;
@@ -572,6 +639,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         selectedStageId: null,
         qaHistory: [],
         pendingAnswer: null,
+        pendingAnswerQuestionId: null,
         pendingAdvanceStageId: null,
         pendingCourseComplete: false,
         stageQaHistories: updatedStageQaHistories,
@@ -617,7 +685,6 @@ export const useSessionStore = create<SessionState>((set) => ({
       lastFeedback: null,
       lastDecision: null,
       pendingNextQuestion: null,
-      isAwaitingFeedback: false,
       courseCompleted: false,
       stageExplanations: {},
       stageSourceChunks: {},
@@ -625,10 +692,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       stageQuestions: {},
       selectedStageId: null,
       qaHistory: [],
-      pendingAnswer: null,
       tutorReply: null,
       tutorHistory: {},
-      isTutorLoading: false,
       pendingAdvanceStageId: null,
       pendingCourseComplete: false,
       decisionHistory: [],
