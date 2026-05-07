@@ -503,7 +503,7 @@ async def delete_session(session_id: str, user_id: str) -> bool:
     ) as cur:
         if not await cur.fetchone():
             return False
-    for tbl in ("qa_records", "stage_progress", "source_chunks", "decision_records"):
+    for tbl in ("qa_records", "stage_progress", "source_chunks", "decision_records", "tutor_records"):
         await db.execute(f"DELETE FROM {tbl} WHERE session_id = ?", (session_id,))
     await db.execute(
         "DELETE FROM sessions WHERE session_id = ? AND user_id = ?",

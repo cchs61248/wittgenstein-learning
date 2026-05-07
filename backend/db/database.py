@@ -124,24 +124,6 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
-    # Migration 013：建立 tutor_records 表（ask_tutor 問答按章節持久化）
-    await _connection.execute(
-        """CREATE TABLE IF NOT EXISTS tutor_records (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id  TEXT NOT NULL,
-            stage_id    INTEGER NOT NULL,
-            question    TEXT NOT NULL,
-            answer      TEXT NOT NULL,
-            in_scope    INTEGER NOT NULL DEFAULT 1,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )"""
-    )
-    await _connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tutor_records_session "
-        "ON tutor_records(session_id, stage_id)"
-    )
-    await _connection.commit()
-
     # Migration 006：建立決策歷史表（跨裝置恢復教練趨勢）
     await _connection.execute(
         """CREATE TABLE IF NOT EXISTS decision_records (
@@ -159,6 +141,24 @@ async def init_db(db_path: str) -> None:
     )
     await _connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_decision_records_session_id ON decision_records(session_id)"
+    )
+    await _connection.commit()
+
+    # Migration 013：建立 tutor_records 表（ask_tutor 問答按章節持久化）
+    await _connection.execute(
+        """CREATE TABLE IF NOT EXISTS tutor_records (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT NOT NULL,
+            stage_id    INTEGER NOT NULL,
+            question    TEXT NOT NULL,
+            answer      TEXT NOT NULL,
+            in_scope    INTEGER NOT NULL DEFAULT 1,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    await _connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tutor_records_session "
+        "ON tutor_records(session_id, stage_id)"
     )
     await _connection.commit()
 
