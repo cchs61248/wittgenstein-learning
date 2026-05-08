@@ -20,7 +20,7 @@ function HistoryNote({
   defaultOpen,
   onDelete,
 }: {
-  item: { id?: number; question: string; answer: string; in_scope?: boolean };
+  item: { id?: number; question: string; answer: string; in_scope?: boolean; scope?: string };
   index: number;
   defaultOpen: boolean;
   onDelete?: () => void;
@@ -43,8 +43,11 @@ function HistoryNote({
         <span className="tutor-note-question">
           {item.question.length > 60 ? item.question.slice(0, 60) + '…' : item.question}
         </span>
-        {item.in_scope === false && (
+        {(item.scope === 'out_of_scope' || (item.scope === undefined && item.in_scope === false)) && (
           <span className="tutor-note-scope-badge">教材外</span>
+        )}
+        {item.scope === 'other_chapter' && (
+          <span className="tutor-note-scope-badge tutor-note-scope-badge--other">其他章節</span>
         )}
         <span className="tutor-note-toggle-icon">{open ? '▲' : '▼'}</span>
         {onDelete && item.id !== undefined && (

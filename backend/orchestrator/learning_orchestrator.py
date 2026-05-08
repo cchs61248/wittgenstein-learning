@@ -1420,28 +1420,56 @@ class LearningOrchestrator:
         else:
             judge_source = stage_content
 
+        # 建構全課程章節索引（供 judge 判斷 other_chapter）
+        _index_lines = []
+        for s in wm.stages:
+            _nid = s.get("node_id", str(s["stage_id"]))
+            _title = s.get("title", "")
+            _concepts = ", ".join(s.get("key_concepts", [])[:5])
+            if s.get("is_dynamic"):
+                _parent_nid = next(
+                    (ps.get("node_id", str(ps["stage_id"]))
+                     for ps in wm.stages if ps["stage_id"] == s.get("source_stage_id")),
+                    str(s.get("source_stage_id", ""))
+                )
+                _index_lines.append(
+                    f"[{_nid}] (動態節點，源自 {_parent_nid}) key_concepts: {_concepts}"
+                )
+            else:
+                _index_lines.append(f"[{_nid}: {_title}] key_concepts: {_concepts}")
+        chapter_index = "\n".join(_index_lines)
+        current_node_id = stage.get("node_id", str(effective_stage_id)) if stage else str(effective_stage_id)
+
         judge_messages = [
             LLMMessage(
                 role=MessageRole.USER,
                 content=(
-                    f"教材內容：\n{judge_source}\n\n"
-                    f"當前節點：{stage_title}\n"
-                    f"學生提問：{question}\n\n"
-                    "請判斷是否可由教材直接回答。"
+                    f"當前章節：{stage_title}（{current_node_id}）\n\n"
+                    f"【當前章節教材原文】\n{judge_source}\n\n"
+                    f"【全課程章節索引】\n{chapter_index}\n\n"
+                    f"學生提問：{question}"
                 ),
             )
         ]
         judge_resp = await self.teacher.llm.chat(
             judge_messages, system_prompt=SYSTEM_PROMPTS["scope_judge"]
         )
+        scope = "current_chapter"
+        relevant_node_ids: list[str] = []
         try:
             judge_data = json.loads(extract_json(judge_resp.content))
-            in_scope = bool(judge_data.get("in_scope", False))
+            if "scope" in judge_data:
+                scope = judge_data["scope"]
+                relevant_node_ids = judge_data.get("relevant_node_ids") or []
+            else:
+                # 向後相容舊 schema
+                scope = "current_chapter" if judge_data.get("in_scope", True) else "out_of_scope"
         except Exception:
-            in_scope = True
+            scope = "current_chapter"
+        in_scope = scope != "out_of_scope"
 
         web_context = ""
-        if not in_scope:
+        if scope == "out_of_scope":
             try:
                 results = search_web(question, max_results=3)
                 if results:
@@ -1452,15 +1480,51 @@ class LearningOrchestrator:
             except Exception:
                 web_context = ""
 
+        # 決定回答用的教材來源
+        if scope == "current_chapter":
+            answer_source = judge_source
+        elif scope == "other_chapter":
+            # 過濾動態節點，改用父章節
+            filtered_node_ids: list[str] = []
+            for nid in relevant_node_ids:
+                matched = next((s for s in wm.stages if s.get("node_id") == nid), None)
+                if matched and matched.get("is_dynamic"):
+                    parent = next(
+                        (s for s in wm.stages if s["stage_id"] == matched.get("source_stage_id")),
+                        None,
+                    )
+                    if parent:
+                        filtered_node_ids.append(parent.get("node_id", str(parent["stage_id"])))
+                elif matched:
+                    filtered_node_ids.append(nid)
+            # 取相關章節 chunks
+            relevant_lines: list[str] = []
+            for nid in dict.fromkeys(filtered_node_ids):  # 去重保序
+                rel_stage = next((s for s in wm.stages if s.get("node_id") == nid), None)
+                if rel_stage:
+                    for c in self._normalize_stage_source_chunks(rel_stage):
+                        _cid = c.get("chunk_id", "unknown")
+                        _txt = (c.get("quote") or c.get("text") or "").strip()
+                        if _txt:
+                            relevant_lines.append(f"[{_cid}] {_txt}")
+            answer_source = "\n".join(relevant_lines) if relevant_lines else source
+            if not relevant_lines:
+                _log.warning(
+                    "handle_student_question other_chapter fallback to corpus  session=%s  node_ids=%s",
+                    session_id, relevant_node_ids,
+                )
+        else:
+            answer_source = source  # out_of_scope：給全文讓 LLM 自行確認
+
         answer_messages = [
             LLMMessage(
                 role=MessageRole.USER,
                 content=(
-                    f"in_scope={str(in_scope).lower()}\n"
+                    f"scope={scope}\n"
                     f"當前節點：{stage_title}\n"
                     f"學生問題：{question}\n\n"
-                    f"教材內容：\n{source}\n\n"
-                    f"搜尋摘要（若有）：\n{web_context or '無'}"
+                    f"教材原文（回答依據）：\n{answer_source}\n\n"
+                    f"搜尋摘要（僅 out_of_scope 時有值）：\n{web_context or '無'}"
                 ),
             )
         ]
@@ -1471,7 +1535,7 @@ class LearningOrchestrator:
         record_id: int | None = None
         try:
             record_id = await session_memory.insert_tutor_record(
-                session_id, effective_stage_id, question, answer, in_scope
+                session_id, effective_stage_id, question, answer, in_scope, scope=scope
             )
         except Exception as e:
             _log.warning("insert_tutor_record failed: %s", e)
@@ -1479,6 +1543,7 @@ class LearningOrchestrator:
             "question": question,
             "answer": answer,
             "in_scope": in_scope,
+            "scope": scope,
             "stage_id": effective_stage_id,
         }
         if record_id is not None:

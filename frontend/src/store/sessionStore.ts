@@ -436,7 +436,7 @@ export const useSessionStore = create<SessionState>((set) => ({
             ...s.tutorHistory,
             [msg.stage_id]: [
               ...prev,
-              { id: msg.id, question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
+              { id: msg.id, question: msg.question, answer: msg.answer, in_scope: msg.in_scope, scope: msg.scope },
             ],
           };
       if (!isDuplicate && s.sessionId) {
@@ -446,7 +446,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       }
       localStorage.removeItem('wl_tutor_pending');
       return {
-        tutorReply: { question: msg.question, answer: msg.answer, in_scope: msg.in_scope },
+        tutorReply: { question: msg.question, answer: msg.answer, in_scope: msg.in_scope, scope: msg.scope },
         tutorHistory: updated,
         isTutorLoading: false,
         pendingTutorQuestion: null,

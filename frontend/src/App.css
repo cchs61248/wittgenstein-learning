@@ -957,6 +957,12 @@ body {
   white-space: nowrap;
 }
 
+.tutor-note-scope-badge--other {
+  color: #1d6fa5;
+  background: #e8f4fd;
+  border-color: #a8d4ef;
+}
+
 .tutor-note-toggle-icon {
   font-size: 11px;
   color: var(--text-subtle);

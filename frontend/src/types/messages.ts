@@ -110,15 +110,19 @@ export interface QaHistoryPayload {
   records: QaHistoryRecord[];
 }
 
+export type TutorScope = 'current_chapter' | 'other_chapter' | 'out_of_scope';
+
 export interface TutorMessage {
   id?: number;
   question: string;
   answer: string;
   in_scope?: boolean;
+  scope?: TutorScope;
 }
 
 export interface TutorReplyPayload extends TutorMessage {
   stage_id: number;
+  scope?: TutorScope;
 }
 
 export interface SessionSnapshotPayload {

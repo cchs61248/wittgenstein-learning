@@ -547,12 +547,13 @@ async def insert_tutor_record(
     question: str,
     answer: str,
     in_scope: bool,
+    scope: str = "current_chapter",
 ) -> int:
     db = await get_db()
     cur = await db.execute(
-        """INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope)
-           VALUES (?, ?, ?, ?, ?)""",
-        (session_id, stage_id, question, answer, 1 if in_scope else 0),
+        """INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope, scope)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (session_id, stage_id, question, answer, 1 if in_scope else 0, scope),
     )
     await db.commit()
     return cur.lastrowid
@@ -562,7 +563,7 @@ async def get_all_tutor_records(session_id: str) -> dict[int, list[dict]]:
     """回傳 session 所有 tutor 問答，以 stage_id 分組，按插入順序排列。"""
     db = await get_db()
     async with db.execute(
-        """SELECT id, stage_id, question, answer, in_scope
+        """SELECT id, stage_id, question, answer, in_scope, scope
            FROM tutor_records WHERE session_id = ?
            ORDER BY id ASC""",
         (session_id,),
@@ -573,11 +574,17 @@ async def get_all_tutor_records(session_id: str) -> dict[int, list[dict]]:
         sid = row["stage_id"]
         if sid not in result:
             result[sid] = []
+        raw_scope = row["scope"]
+        # 舊資料 scope=NULL，從 in_scope 反推
+        resolved_scope = raw_scope if raw_scope else (
+            "current_chapter" if row["in_scope"] else "out_of_scope"
+        )
         result[sid].append({
             "id": row["id"],
             "question": row["question"],
             "answer": row["answer"],
             "in_scope": bool(row["in_scope"]),
+            "scope": resolved_scope,
         })
     return result
 

@@ -162,6 +162,15 @@ async def init_db(db_path: str) -> None:
     )
     await _connection.commit()
 
+    # Migration 014：tutor_records 新增 scope TEXT 欄位（三態邊界判定）
+    try:
+        await _connection.execute(
+            "ALTER TABLE tutor_records ADD COLUMN scope TEXT DEFAULT NULL"
+        )
+        await _connection.commit()
+    except Exception:
+        pass  # 欄位已存在，冪等跳過
+
 
 async def close_db() -> None:
     global _connection
