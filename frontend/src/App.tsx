@@ -69,6 +69,7 @@ export default function App() {
   } = useSessionStore();
 
   const isExplanationLoading = useSessionStore((s) => s.isExplanationLoading);
+  const isRetryLoading = useSessionStore((s) => s.isRetryLoading);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const currentStageId = useSessionStore((s) => s.currentStageId);
   /** 僅在「視角為正在生成的那一章」時全螢幕 loading；回顧其他章（含本地尚無快取全文）一律走主欄 */
@@ -461,7 +462,7 @@ export default function App() {
         {
           const dec = msg.payload.decision;
           if (dec === 'retry') {
-            useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
+            useSessionStore.getState().beginRetryLoading(useSessionStore.getState().currentStageId);
           }
           if (
             (dec === 'advance' || dec === 'remediate' || dec === 'reteach') &&
@@ -1020,8 +1021,17 @@ export default function App() {
                   >
                     <div className="explanation-panel-loading-inner">
                       <div className="generating-wait-spinner" />
-                      <p className="generating-wait-title">AI 正在生成本章講解</p>
-                      <p className="generating-wait-hint">完成後將自動顯示全文與題目，請稍候…</p>
+                      {isRetryLoading ? (
+                        <>
+                          <p className="generating-wait-title">AI 正在生成新一輪練習題</p>
+                          <p className="generating-wait-hint">根據本次作答，正針對需要補強的概念重新出題，請稍候…</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="generating-wait-title">AI 正在生成本章講解</p>
+                          <p className="generating-wait-hint">完成後將自動顯示全文與題目，請稍候…</p>
+                        </>
+                      )}
                     </div>
                   </div>
                 ) : (

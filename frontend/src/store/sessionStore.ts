@@ -36,7 +36,10 @@ interface SessionState {
   isStreaming: boolean;
   /** 講解由後端串流產生中：前端不顯示逐字串流，僅顯示 loading 至 explanation_complete */
   isExplanationLoading: boolean;
+  /** 目前 loading 是因 retry 決策觸發（用於顯示「重新出題中」文字） */
+  isRetryLoading: boolean;
   beginExplanationLoading: (stageId: number | null) => void;
+  beginRetryLoading: (stageId: number | null) => void;
   endExplanationLoading: () => void;
   appendExplanationChunk: (chunk: string) => void;
   setExplanationComplete: () => void;
@@ -332,6 +335,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   explanationText: '',
   isStreaming: false,
   isExplanationLoading: false,
+  isRetryLoading: false,
   beginExplanationLoading: (stageId) =>
     set((s) => {
       const nextExp = { ...s.stageExplanations };
@@ -341,12 +345,28 @@ export const useSessionStore = create<SessionState>((set) => ({
       localStorage.setItem('wl_stage_explanations', JSON.stringify(nextExp));
       return {
         isExplanationLoading: true,
+        isRetryLoading: false,
         explanationText: '',
         isStreaming: false,
         stageExplanations: nextExp,
       };
     }),
-  endExplanationLoading: () => set({ isExplanationLoading: false }),
+  beginRetryLoading: (stageId) =>
+    set((s) => {
+      const nextExp = { ...s.stageExplanations };
+      if (stageId !== null) {
+        delete nextExp[stageId];
+      }
+      localStorage.setItem('wl_stage_explanations', JSON.stringify(nextExp));
+      return {
+        isExplanationLoading: true,
+        isRetryLoading: true,
+        explanationText: '',
+        isStreaming: false,
+        stageExplanations: nextExp,
+      };
+    }),
+  endExplanationLoading: () => set({ isExplanationLoading: false, isRetryLoading: false }),
   appendExplanationChunk: () => {},
   setExplanationComplete: () => set({ isStreaming: false }),
   stageExplanations: loadStageExplanations(),
@@ -365,6 +385,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         explanationText: '',
         isStreaming: false,
         isExplanationLoading: false,
+        isRetryLoading: false,
         stageExplanations: updated,
       };
     }),
