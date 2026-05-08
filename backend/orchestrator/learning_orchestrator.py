@@ -124,6 +124,7 @@ class LearningOrchestrator:
         stage: dict,
         content_type: str,
         candidate_text: str,
+        full_explanation: str = "",
     ) -> dict:
         verify_ctx = AgentContext(
             session_id=session_id,
@@ -132,6 +133,7 @@ class LearningOrchestrator:
                 "content_type": content_type,
                 "source_chunks": self._normalize_stage_source_chunks(stage),
                 "candidate_text": candidate_text,
+                "full_explanation": full_explanation,
             },
         )
         return await self.drift_verifier.run(verify_ctx)
@@ -706,6 +708,7 @@ class LearningOrchestrator:
                 "stage": stage,
                 "teaching_intent": teaching_intent,
                 "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
+                "full_explanation": full_explanation,
                 "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                 if question_mode == "multiple_choice"
                 else stage.get("estimated_questions", 2),
@@ -722,6 +725,7 @@ class LearningOrchestrator:
             stage=stage,
             content_type="questions",
             candidate_text=json.dumps(questions, ensure_ascii=False),
+            full_explanation=full_explanation,
         )
         if not questions_verify.get("aligned", False):
             retry_q_ctx = AgentContext(
@@ -733,6 +737,7 @@ class LearningOrchestrator:
                         "content": stage.get("content", "")
                         + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
                     },
+                    "full_explanation": full_explanation,
                     "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                     if question_mode == "multiple_choice"
                     else stage.get("estimated_questions", 2),
@@ -1235,6 +1240,7 @@ class LearningOrchestrator:
                 user_id=user_id,
                 task_payload={
                     "stage": stage,
+                    "full_explanation": wm.current_explanation,
                     "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                     "attempt_number": wm.current_attempt,
                     "previous_question_ids": prev_q_ids,
@@ -1250,6 +1256,7 @@ class LearningOrchestrator:
                 stage=stage,
                 content_type="questions",
                 candidate_text=json.dumps(questions, ensure_ascii=False),
+                full_explanation=wm.current_explanation,
             )
             if not questions_verify.get("aligned", False):
                 retry_q_ctx = AgentContext(
@@ -1261,6 +1268,7 @@ class LearningOrchestrator:
                             "content": stage.get("content", "")
                             + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
                         },
+                        "full_explanation": wm.current_explanation,
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                         "attempt_number": wm.current_attempt,
                         "previous_question_ids": prev_q_ids,
@@ -1653,6 +1661,7 @@ class LearningOrchestrator:
                     "stage": stage,
                     "teaching_intent": teaching_intent,
                     "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
+                    "full_explanation": teacher_only,
                     "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                     if wm.question_mode == "multiple_choice"
                     else stage.get("estimated_questions", 2),
@@ -1669,6 +1678,7 @@ class LearningOrchestrator:
                 stage=stage,
                 content_type="questions",
                 candidate_text=json.dumps(questions, ensure_ascii=False),
+                full_explanation=teacher_only,
             )
             if not questions_verify.get("aligned", False):
                 retry_q_ctx = AgentContext(
@@ -1680,6 +1690,7 @@ class LearningOrchestrator:
                             "content": stage.get("content", "")
                             + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
                         },
+                        "full_explanation": teacher_only,
                         "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                         if wm.question_mode == "multiple_choice"
                         else stage.get("estimated_questions", 2),
@@ -1815,6 +1826,7 @@ class LearningOrchestrator:
                     user_id=user_id,
                     task_payload={
                         "stage": stage,
+                        "full_explanation": wm.current_explanation,
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                         "attempt_number": wm.current_attempt,
                         "previous_question_ids": prev_q_ids,

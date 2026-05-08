@@ -40,15 +40,23 @@ class DriftVerifierAgent(BaseAgent):
 
         source_chunks: list[dict] = payload.get("source_chunks", [])
         candidate_text: str = payload.get("candidate_text", "")
+        full_explanation: str = payload.get("full_explanation") or ""
 
         cited_chunks = self._extract_cited_chunks(candidate_text, source_chunks)
+
+        explanation_section = (
+            f"\n\nfull_explanation（本次課程已驗證講解，出題驗證寬鬆模式依據）：\n{full_explanation}"
+            if content_type == "questions" and full_explanation.strip()
+            else ""
+        )
 
         self._add_message(
             MessageRole.USER,
             f"content_type={content_type}\n\n"
             f"source_chunks={json.dumps(source_chunks, ensure_ascii=False)}\n\n"
             f"cited_chunks_lookup={json.dumps(cited_chunks, ensure_ascii=False)}\n\n"
-            f"candidate_output={candidate_text}",
+            f"candidate_output={candidate_text}"
+            f"{explanation_section}",
         )
         response = await self.llm.chat(self._messages, system_prompt=SYSTEM_PROMPTS["drift_verifier"])
         self._reset()

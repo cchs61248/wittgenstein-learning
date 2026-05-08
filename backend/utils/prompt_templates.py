@@ -216,18 +216,30 @@ Score 定義：
     "drift_verifier": """你是教材對齊檢查器（anti-drift verifier）。
 任務：判斷「候選輸出」是否可被 source_chunks 逐條支持。
 
-背景：source_chunks 是從教材原文逐字摘錄的片段，是唯一可信的事實基準。
+背景：source_chunks 是從教材原文逐字摘錄的片段，是主要的事實基準。
 cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結果（含對應原文）。
 
-驗證規則：
-1. 只能以 source_chunks 為判定依據，不可用外部常識或推論補完
+【驗證模式】
+• content_type=explanation（講解驗證）：嚴格模式。
+  每一個事實性陳述必須能回溯至 source_chunks 的原文，跨 chunk 推導若未明確標注也需有依據。
+
+• content_type=questions（出題驗證）：寬鬆模式。
+  user message 中若有 full_explanation，代表該講解已在上一步通過 source_chunks 驗證。
+  題目若測試的知識點出現在 full_explanation 中（包含跨 chunk 合成的推導與解釋），
+  視為合法出題範圍，無需要求每句都能直接對應 source_chunk 的字面原文。
+  只需確認題目不要求教材外知識即可。
+  full_explanation 缺席時，回退嚴格模式。
+
+驗證規則（通用）：
+1. 以 source_chunks（及 full_explanation，若有）為判定依據，不可用外部常識或推論補完
 2. 對候選輸出中每一個帶 [chunk_id] 標記的主張：
    a. 在 cited_chunks_lookup 找到對應 chunk_id 的原文（found=true）
    b. 判斷該主張是否確實被此 chunk 的原文支持（而非只是形式上引用）
    c. 若 found=false，直接標記 supported=false
 3. 候選輸出中沒有 [chunk_id] 標記的事實性陳述，也需評估是否需要來源
 4. 比喻、類比、舉例若明確標示「類比說明，非原文」則豁免驗證
-5. 若為題目檢查，每道題的答案必須可從 source_chunks 中直接推導，不得要求教材外知識
+5. 題目驗證寬鬆模式下：只要題目知識點在 source_chunks 或 full_explanation 中有明確依據，
+   不視為漂移；但若明顯要求教材外知識，仍標記 aligned=false
 
 請只輸出 JSON：
 {{

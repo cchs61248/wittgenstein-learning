@@ -32,6 +32,17 @@ class QuestionGeneratorAgent(BaseAgent):
                 lines.append(f"[{chunk_id}] {quote}")
         return "\n".join(lines) if lines else "（source_chunks 格式不完整）"
 
+    def _format_full_explanation(self, full_explanation: str) -> str:
+        if not full_explanation or not full_explanation.strip():
+            return ""
+        return (
+            "\n\n【本次講解全文（出題範圍限制）】\n"
+            "以下是本次課程的完整講解內容。"
+            "問題只能測試此講解中明確出現的概念與知識點；"
+            "若 source_chunks 中有內容但未在以下講解中提及，請勿針對該內容出題。\n\n"
+            + full_explanation
+        )
+
     def _format_teaching_intent(self, teaching_intent: dict) -> str:
         if not teaching_intent:
             return ""
@@ -74,6 +85,7 @@ class QuestionGeneratorAgent(BaseAgent):
         question_mode: str = payload.get("question_mode", "short_answer")
         teaching_intent: dict = payload.get("teaching_intent") or {}
         allowed_evidence: list[dict] = payload.get("allowed_evidence") or []
+        full_explanation: str = payload.get("full_explanation") or ""
 
         system = SYSTEM_PROMPTS["question_generator"].format(
             num_questions=num_questions,
@@ -89,6 +101,7 @@ class QuestionGeneratorAgent(BaseAgent):
 
         evidence_text = self._format_evidence(stage, allowed_evidence)
         teaching_intent_text = self._format_teaching_intent(teaching_intent)
+        full_explanation_text = self._format_full_explanation(full_explanation)
 
         self._add_message(
             MessageRole.USER,
@@ -97,6 +110,7 @@ class QuestionGeneratorAgent(BaseAgent):
             f"內容摘要：{stage.get('content', '')[:800]}\n\n"
             f"source_chunks（每題要附 evidence_chunk_ids）：\n{evidence_text}"
             f"{teaching_intent_text}"
+            f"{full_explanation_text}"
             f"{avoid_note}",
         )
 
