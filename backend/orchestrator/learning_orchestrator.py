@@ -533,6 +533,7 @@ class LearningOrchestrator:
                 "user_id": user_id,
                 "content_hash": session_row["content_hash"],
                 "summary": session_row.get("raw_content_summary") or "",
+                "question_mode": session_row.get("question_mode") or "short_answer",
             }
 
         await session_memory.activate_pending_session(session_id)
