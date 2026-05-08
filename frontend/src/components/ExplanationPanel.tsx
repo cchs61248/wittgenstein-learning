@@ -4,6 +4,58 @@ import remarkGfm from 'remark-gfm';
 import { useSessionStore } from '../store/sessionStore';
 import { fetchStageExplanation } from '../api/session';
 
+type RefChunk = { id: string; chunk?: { chunk_id: string; quote: string } };
+
+function SourceReferenceSection({ referencedChunks }: { referencedChunks: RefChunk[] }) {
+  const [pinnedSourceId, setPinnedSourceId] = useState<string | null>(null);
+  const [hoverSourceId, setHoverSourceId] = useState<string | null>(null);
+
+  const displayId = pinnedSourceId ?? hoverSourceId;
+  const activeChunk = displayId ? referencedChunks.find((x) => x.id === displayId) : undefined;
+
+  return (
+    <div
+      className="source-reference-panel"
+      onMouseLeave={() => setHoverSourceId(null)}
+    >
+      <div className="source-reference-title">來源追溯（移上標籤或點選，下方顯示全文摘錄）</div>
+      <div className="source-reference-list">
+        {referencedChunks.map(({ id }) => {
+          const isShowing = displayId === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              className={`source-chip${isShowing ? ' source-chip--active' : ''}`}
+              aria-expanded={isShowing}
+              aria-label={`來源 ${id}，於下方顯示原文摘錄`}
+              onMouseEnter={() => setHoverSourceId(id)}
+              onClick={() =>
+                setPinnedSourceId((cur) => {
+                  const next = cur === id ? null : id;
+                  if (next !== null) setHoverSourceId(null);
+                  return next;
+                })
+              }
+            >
+              <span className="source-chip-label">[{id}]</span>
+            </button>
+          );
+        })}
+      </div>
+      {activeChunk?.chunk?.quote && (
+        <div
+          className="source-quote-inline"
+          role="region"
+          aria-label={`${activeChunk.id} 原文摘錄`}
+        >
+          {activeChunk.chunk.quote}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationPanel(_props, ref) {
   const explanationText = useSessionStore((s) => s.explanationText);
   const isStreaming = useSessionStore((s) => s.isStreaming);
@@ -151,17 +203,7 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
         {isStreaming && !hasReviewBody && <span className="cursor-blink">▋</span>}
       </div>
       {referencedChunks.length > 0 && (
-        <div className="source-reference-panel">
-          <div className="source-reference-title">來源追溯（滑鼠移上查看原文）</div>
-          <div className="source-reference-list">
-            {referencedChunks.map(({ id, chunk }) => (
-              <span key={id} className="source-chip">
-                [{id}]
-                <span className="source-tooltip">{chunk?.quote}</span>
-              </span>
-            ))}
-          </div>
-        </div>
+        <SourceReferenceSection key={String(stageIdForDisplay)} referencedChunks={referencedChunks} />
       )}
     </div>
   );
