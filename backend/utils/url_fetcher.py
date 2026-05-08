@@ -4,12 +4,36 @@ URL 內容擷取工具。
 """
 import re
 import httpx
+from urllib.parse import urljoin
 from readability import Document
 from bs4 import BeautifulSoup
 
 
 _MAX_CHARS = 500_000
+_MIN_READABILITY_TEXT_CHARS = 300
 _YOUTUBE_RE = re.compile(r"(?:youtube\.com/watch\?.*v=|youtu\.be/)([A-Za-z0-9_-]{11})")
+_NOISE_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"^\s*(enroll now|browse academy|explore all courses)\b",
+        r"^\s*(copyright|all rights reserved)\b",
+        r"^\s*(discord|github|light|english)\s*$",
+        r"^\s*use code\s+\w+\s+for\s+\d+% off\b",
+        r"^\s*use code\s*$",
+        r"^\s*for\s+\d+% off!?\s*$",
+        r"^\s*(opens in a new tab)\s*$",
+        r"^\s*\(opens in a new tab\)\s*$",
+        r"^\s*(course|related learning)\s*$",
+        r"^\s*(beginner|intermediate|advanced)\s*$",
+        r"^\s*\d+\s*(hours?|mins?|minutes?)\s*$",
+    ]
+]
+_MAIN_CONTENT_STOP_HEADINGS = [
+    "related learning",
+    "explore all courses",
+    "more from",
+    "recommended",
+]
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -114,10 +138,107 @@ def _fetch_webpage(url: str) -> tuple[str, str]:
     doc = Document(resp.text)
     title = doc.title() or url
 
-    soup = BeautifulSoup(doc.summary(), "lxml")
-    text = soup.get_text(separator="\n", strip=True)
+    summary_html = doc.summary()
+    text = _extract_markdownish_text(summary_html, base_url=url)
+
+    # 某些站點（特別是高度動態頁）readability 可能只抓到 banner；
+    # 當內容過短時改用全文清洗抽取，提升命中率。
+    if len(text.strip()) < _MIN_READABILITY_TEXT_CHARS:
+        text = _fallback_extract_text(resp.text, base_url=url)
+
+    text = _clean_extracted_text(text)
 
     if not text.strip():
         raise ValueError("網頁內容為空或無法解析（可能需要登入或為動態頁面）")
 
     return title, text[:_MAX_CHARS]
+
+
+def _fallback_extract_text(html: str, base_url: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+
+    for tag in soup(["script", "style", "noscript", "svg", "canvas", "iframe"]):
+        tag.decompose()
+
+    candidate = (
+        soup.select_one("main")
+        or soup.select_one("article")
+        or soup.select_one("[role='main']")
+        or soup.body
+        or soup
+    )
+
+    for tag in candidate.select("nav, header, footer, aside, form, button"):
+        tag.decompose()
+
+    text = _extract_markdownish_text(str(candidate), base_url=base_url)
+    return _clean_extracted_text(text)
+
+
+def _extract_markdownish_text(html: str, base_url: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+
+    for tag in soup(["script", "style", "noscript", "svg", "canvas", "iframe"]):
+        tag.decompose()
+
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        label = " ".join(a.get_text(" ", strip=True).split())
+        if not href:
+            continue
+        abs_href = urljoin(base_url, href)
+        if label:
+            a.replace_with(f"[{label}]({abs_href})")
+        else:
+            a.replace_with(abs_href)
+
+    lines: list[str] = []
+    for el in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li"]):
+        raw = el.get_text(" ", strip=True)
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not line:
+            continue
+        if el.name and el.name.startswith("h"):
+            level = min(int(el.name[1]), 3)
+            lines.append(f"{'#' * level} {line}")
+        elif el.name == "li":
+            lines.append(f"- {line}")
+        else:
+            lines.append(line)
+
+    if lines:
+        return "\n".join(lines)
+    return soup.get_text(separator="\n", strip=True)
+
+
+def _clean_extracted_text(text: str) -> str:
+    lines = [ln.strip() for ln in text.splitlines() if ln and len(ln.strip()) >= 2]
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for ln in lines:
+        normalized = re.sub(r"\s+", " ", ln).strip()
+        if not normalized:
+            continue
+        if normalized.lower() in seen:
+            continue
+        if any(p.search(normalized) for p in _NOISE_PATTERNS):
+            continue
+        cleaned.append(normalized)
+        seen.add(normalized.lower())
+
+    return _apply_strict_main(cleaned)
+
+
+def _apply_strict_main(lines: list[str]) -> str:
+    """
+    strict_main：盡量只保留主文章，遇到常見延伸閱讀區塊標題就截斷。
+    """
+    kept: list[str] = []
+    for line in lines:
+        lower = line.lower().strip()
+        heading = lower.lstrip("#").strip()
+        if any(stop in heading for stop in _MAIN_CONTENT_STOP_HEADINGS):
+            break
+        kept.append(line)
+    return "\n".join(kept)
