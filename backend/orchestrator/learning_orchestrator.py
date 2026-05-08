@@ -1408,11 +1408,23 @@ class LearningOrchestrator:
             })
             return
 
+        # 邊界判定只用當前 stage 的 source chunks，避免全文截斷導致 judge 只看到第一章
+        if stage:
+            _judge_lines = []
+            for c in self._normalize_stage_source_chunks(stage):
+                _cid = c.get("chunk_id", "unknown")
+                _txt = (c.get("quote") or c.get("text") or "").strip()
+                if _txt:
+                    _judge_lines.append(f"[{_cid}] {_txt}")
+            judge_source = "\n".join(_judge_lines) or stage_content
+        else:
+            judge_source = stage_content
+
         judge_messages = [
             LLMMessage(
                 role=MessageRole.USER,
                 content=(
-                    f"教材內容：\n{source[:4000]}\n\n"
+                    f"教材內容：\n{judge_source}\n\n"
                     f"當前節點：{stage_title}\n"
                     f"學生提問：{question}\n\n"
                     "請判斷是否可由教材直接回答。"
@@ -1447,7 +1459,7 @@ class LearningOrchestrator:
                     f"in_scope={str(in_scope).lower()}\n"
                     f"當前節點：{stage_title}\n"
                     f"學生問題：{question}\n\n"
-                    f"教材內容：\n{source[:5000]}\n\n"
+                    f"教材內容：\n{source}\n\n"
                     f"搜尋摘要（若有）：\n{web_context or '無'}"
                 ),
             )
