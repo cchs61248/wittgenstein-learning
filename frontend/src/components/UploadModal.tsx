@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent, ChangeEvent, KeyboardEvent } from 'react';
 import { useSessionStore } from '../store/sessionStore';
-import { uploadFile, uploadUrl } from '../api/upload';
+import { uploadFile, uploadUrl, streamYoutubeAsr, type UploadUrlResult, type YoutubeAsrRequired, type YoutubeAsrEvent } from '../api/upload';
 import { fetchDefaultProvider } from '../api/config';
 import type { ProviderType, DepthType } from '../types/messages';
 
@@ -150,6 +150,16 @@ export function UploadModal({ onStart, onClose }: Props) {
   const [urlLoading, setUrlLoading] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
 
+  // YouTube：當字幕不可用時，改成使用者同意後再做 ASR（含進度條）
+  const [asrRequired, setAsrRequired] = useState<YoutubeAsrRequired | null>(null);
+  const [asrRunning, setAsrRunning] = useState(false);
+  const [asrDownloadProgress, setAsrDownloadProgress] = useState(0);
+  const [asrTranscribeProgress, setAsrTranscribeProgress] = useState(0);
+  const [asrProgressError, setAsrProgressError] = useState<string | null>(null);
+  const [asrSourceId, setAsrSourceId] = useState<string | null>(null);
+
+  const asrAbortRef = useRef<AbortController | null>(null);
+
   // 文字輸入面板
   const [showTextInput, setShowTextInput] = useState(false);
   const [textInput, setTextInput] = useState('');
@@ -243,14 +253,20 @@ export function UploadModal({ onStart, onClose }: Props) {
     setUrlError(null);
     try {
       const result = await uploadUrl(url, token);
+      if ('asr_required' in result && result.asr_required) {
+        setAsrRequired(result);
+        return;
+      }
+
+      const okResult = result as UploadUrlResult;
       setSources((prev) => [
         ...prev,
         {
           id: genId(),
           type: 'url',
-          label: result.title || url,
-          fileId: result.file_id,
-          charCount: result.char_count,
+          label: okResult.title || url,
+          fileId: okResult.file_id,
+          charCount: okResult.char_count,
         },
       ]);
       setUrlInput('');
@@ -259,6 +275,83 @@ export function UploadModal({ onStart, onClose }: Props) {
     } finally {
       setUrlLoading(false);
     }
+  };
+
+  const handleConfirmAsr = async () => {
+    if (!asrRequired || !token) return;
+
+    // 若使用者多次點擊，避免重入
+    if (asrRunning) return;
+
+    setAsrRunning(true);
+    setAsrProgressError(null);
+    setAsrDownloadProgress(0);
+    setAsrTranscribeProgress(0);
+
+    const placeholderId = genId();
+    setAsrSourceId(placeholderId);
+    setSources((prev) => [
+      ...prev,
+      {
+        id: placeholderId,
+        type: 'url',
+        label: 'YouTube 影片（轉寫中…）',
+        uploading: true,
+      },
+    ]);
+
+    const abort = new AbortController();
+    asrAbortRef.current = abort;
+
+    try {
+      const final = await streamYoutubeAsr(
+        asrRequired.url,
+        token,
+        (evt: YoutubeAsrEvent) => {
+          if (evt.type !== 'progress') return;
+          if (evt.stage === 'download') setAsrDownloadProgress(evt.progress);
+          if (evt.stage === 'transcribe') setAsrTranscribeProgress(evt.progress);
+        },
+        abort.signal,
+      );
+
+      setSources((prev) =>
+        prev.map((s) =>
+          s.id === placeholderId
+            ? {
+                ...s,
+                uploading: false,
+                error: undefined,
+                fileId: final.file_id,
+                charCount: final.char_count,
+                label: final.title || asrRequired.title || s.label,
+              }
+            : s
+        ),
+      );
+      setAsrRequired(null);
+      setAsrSourceId(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'YouTube 音訊轉寫失敗';
+      setAsrProgressError(msg);
+      setSources((prev) => prev.map((s) => (s.id === placeholderId ? { ...s, uploading: false, error: msg } : s)));
+      asrAbortRef.current = null;
+    } finally {
+      setAsrRunning(false);
+    }
+  };
+
+  const handleCancelAsr = () => {
+    setAsrProgressError(null);
+    setAsrRequired(null);
+    if (asrAbortRef.current) {
+      asrAbortRef.current.abort();
+      asrAbortRef.current = null;
+    }
+    if (asrSourceId) {
+      setSources((prev) => prev.filter((s) => s.id !== asrSourceId));
+    }
+    setAsrSourceId(null);
   };
 
   const handleUrlKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -398,6 +491,65 @@ export function UploadModal({ onStart, onClose }: Props) {
             <span>貼上文字</span>
           </button>
         </div>
+
+        {/* ── YouTube ASR 同意視窗（字幕不可用時） ── */}
+        {asrRequired && (
+          <div className="asr-consent-panel" role="dialog" aria-modal="true" aria-label="字幕不可用，需要使用音訊轉寫">
+            <div className="asr-consent-title">字幕不可用，是否改用音訊轉寫？</div>
+            <p className="asr-consent-sub">
+              {asrRequired.reason || '目前無法擷取字幕。若你同意，系統會下載音訊並轉成逐字稿。'}
+            </p>
+
+            {!asrRunning ? (
+              <div className="asr-consent-actions">
+                <button className="btn-primary btn-large" onClick={handleConfirmAsr} type="button">
+                  同意並開始轉寫
+                </button>
+                <button className="btn-ghost" style={{ width: '100%', marginTop: 10 }} onClick={handleCancelAsr} type="button">
+                  稍後再說
+                </button>
+              </div>
+            ) : (
+              <div className="asr-progress-area" aria-live="polite">
+                <div className="asr-progress-row">
+                  <div className="asr-progress-label">音訊下載</div>
+                  <div className="asr-progress-pct">{Math.round(asrDownloadProgress * 100)}%</div>
+                </div>
+                <div
+                  className="progress-bar"
+                  role="progressbar"
+                  aria-label="音訊下載進度"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(asrDownloadProgress * 100)}
+                >
+                  <div className="progress-fill" style={{ width: `${Math.round(asrDownloadProgress * 100)}%` }} />
+                </div>
+
+                <div className="asr-progress-row">
+                  <div className="asr-progress-label">逐字稿轉寫</div>
+                  <div className="asr-progress-pct">{Math.round(asrTranscribeProgress * 100)}%</div>
+                </div>
+                <div
+                  className="progress-bar"
+                  role="progressbar"
+                  aria-label="逐字稿轉寫進度"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(asrTranscribeProgress * 100)}
+                >
+                  <div className="progress-fill" style={{ width: `${Math.round(asrTranscribeProgress * 100)}%` }} />
+                </div>
+
+                {asrProgressError && <p className="source-error-inline">{asrProgressError}</p>}
+
+                <button className="btn-ghost" style={{ width: '100%', marginTop: 10 }} onClick={handleCancelAsr} type="button" disabled={!asrRunning}>
+                  取消轉寫
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 文字輸入展開面板 */}
         {showTextInput && (

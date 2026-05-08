@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urljoin
 from readability import Document
 from bs4 import BeautifulSoup
+from typing import Callable, Literal
 
 
 _MAX_CHARS = 500_000
@@ -60,18 +61,45 @@ def _extract_video_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def fetch_url_content(url: str) -> tuple[str, str]:
+class YoutubeTranscriptUnavailable(Exception):
+    def __init__(self, *, video_id: str, original_url: str, transcript_error: str) -> None:
+        super().__init__(transcript_error)
+        self.video_id = video_id
+        self.original_url = original_url
+        self.transcript_error = transcript_error
+
+
+ProgressCallback = Callable[[Literal["download", "transcribe"], float], None]
+
+
+def fetch_url_content(
+    url: str,
+    *,
+    youtube_asr_mode: Literal["auto", "defer"] = "auto",
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[str, str]:
     """
     回傳 (title, text)。
     text 最多 _MAX_CHARS 字元。
     """
     video_id = _extract_video_id(url)
     if video_id:
-        return _fetch_youtube(video_id, url)
+        return _fetch_youtube(
+            video_id,
+            url,
+            youtube_asr_mode=youtube_asr_mode,
+            progress_callback=progress_callback,
+        )
     return _fetch_webpage(url)
 
 
-def _fetch_youtube(video_id: str, original_url: str) -> tuple[str, str]:
+def _fetch_youtube(
+    video_id: str,
+    original_url: str,
+    *,
+    youtube_asr_mode: Literal["auto", "defer"],
+    progress_callback: ProgressCallback | None,
+) -> tuple[str, str]:
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError:
@@ -113,8 +141,15 @@ def _fetch_youtube(video_id: str, original_url: str) -> tuple[str, str]:
         transcript_error = f"YouTube 字幕擷取失敗：{e}"
 
     if transcript_error:
+        if youtube_asr_mode == "defer":
+            raise YoutubeTranscriptUnavailable(
+                video_id=video_id,
+                original_url=original_url,
+                transcript_error=transcript_error,
+            )
+
         try:
-            title, text = _transcribe_youtube_audio(video_id, original_url)
+            title, text = _transcribe_youtube_audio(video_id, original_url, progress_callback=progress_callback)
             return title, text[:_MAX_CHARS]
         except Exception as asr_err:
             meta_title, meta_text = _fetch_youtube_metadata(video_id)
@@ -150,7 +185,12 @@ def _fetch_youtube_metadata(video_id: str) -> tuple[str, str]:
     return title, "\n".join(text_lines).strip()
 
 
-def _transcribe_youtube_audio(video_id: str, original_url: str) -> tuple[str, str]:
+def _transcribe_youtube_audio(
+    video_id: str,
+    original_url: str,
+    *,
+    progress_callback: ProgressCallback | None,
+) -> tuple[str, str]:
     try:
         from yt_dlp import YoutubeDL
     except ImportError:
@@ -161,15 +201,37 @@ def _transcribe_youtube_audio(video_id: str, original_url: str) -> tuple[str, st
     except ImportError:
         raise RuntimeError("缺少 faster-whisper，請安裝：pip install faster-whisper")
 
+    if progress_callback:
+        # download 0% → 100% → transcribe 0% → 100%
+        progress_callback("download", 0.0)
+        progress_callback("transcribe", 0.0)
+
     with tempfile.TemporaryDirectory(prefix="yt_asr_") as tmp_dir:
         tmp_path = Path(tmp_dir)
         outtmpl = str(tmp_path / f"{video_id}.%(ext)s")
+
+        def _hook(d: dict) -> None:
+            if not progress_callback:
+                return
+            if d.get("status") != "downloading":
+                return
+            downloaded = d.get("downloaded_bytes")
+            total = d.get("total_bytes_estimate") or d.get("total_bytes")
+            if not downloaded or not total:
+                return
+            try:
+                pct = max(0.0, min(1.0, float(downloaded) / float(total)))
+            except Exception:
+                return
+            progress_callback("download", pct)
+
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             "format": "bestaudio/best",
             "outtmpl": outtmpl,
             "noplaylist": True,
+            "progress_hooks": [_hook],
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
@@ -181,18 +243,55 @@ def _transcribe_youtube_audio(video_id: str, original_url: str) -> tuple[str, st
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(original_url, download=True)
 
+        if progress_callback:
+            progress_callback("download", 1.0)
+
         audio_path = tmp_path / f"{video_id}.mp3"
         if not audio_path.exists():
             raise RuntimeError("音訊下載失敗（找不到轉換後 mp3）")
 
         model = WhisperModel("small", device="cpu", compute_type="int8")
-        segments, _ = model.transcribe(
+        segments, info2 = model.transcribe(
             str(audio_path),
             language=None,
             vad_filter=True,
             beam_size=3,
         )
-        transcript = " ".join((seg.text or "").strip() for seg in segments).strip()
+
+        duration = None
+        try:
+            duration = (info or {}).get("duration") or (info2 or {}).duration
+        except Exception:
+            duration = (info or {}).get("duration")
+        if duration is not None:
+            try:
+                duration = float(duration)
+            except Exception:
+                duration = None
+
+        transcript_parts: list[str] = []
+        last_pct = -1.0
+        for seg in segments:
+            if not seg:
+                continue
+            text_part = (seg.text or "").strip()
+            if text_part:
+                transcript_parts.append(text_part)
+
+            if progress_callback:
+                pct = None
+                if duration and duration > 0 and getattr(seg, "end", None) is not None:
+                    pct = max(0.0, min(1.0, float(seg.end) / duration))
+                elif duration:
+                    pct = 0.0
+                if pct is not None and abs(pct - last_pct) >= 0.01:
+                    progress_callback("transcribe", pct)
+                    last_pct = pct
+
+        if progress_callback:
+            progress_callback("transcribe", 1.0)
+
+        transcript = " ".join(transcript_parts).strip()
         if not transcript:
             raise RuntimeError("ASR 轉寫結果為空")
 
