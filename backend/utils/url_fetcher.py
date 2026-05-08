@@ -4,6 +4,8 @@ URL 內容擷取工具。
 """
 import re
 import httpx
+import tempfile
+from pathlib import Path
 from urllib.parse import urljoin
 from readability import Document
 from bs4 import BeautifulSoup
@@ -89,6 +91,7 @@ def _fetch_youtube(video_id: str, original_url: str) -> tuple[str, str]:
     except Exception:  # pragma: no cover
         CouldNotRetrieveTranscript = Exception  # type: ignore
 
+    transcript_error = ""
     try:
         # youtube-transcript-api 介面在不同版本可能不同：
         # 本專案已實測（1.2.4）為 instance 方法：YouTubeTranscriptApi().fetch(...)
@@ -101,16 +104,100 @@ def _fetch_youtube(video_id: str, original_url: str) -> tuple[str, str]:
         if not text:
             raise ValueError("字幕內容為空")
     except TranscriptsDisabled:
-        raise ValueError("此 YouTube 影片未提供字幕，無法擷取內容")
+        transcript_error = "此 YouTube 影片未提供字幕"
     except NoTranscriptFound:
-        raise ValueError("找不到可用字幕（此影片可能只有自動字幕被關閉或無支援語言）")
+        transcript_error = "找不到可用字幕（此影片可能只有自動字幕被關閉或無支援語言）"
     except CouldNotRetrieveTranscript:
-        raise ValueError("無法取得字幕（可能是地區限制、需要登入或 YouTube 暫時阻擋）")
+        transcript_error = "無法取得字幕（可能是地區限制、需要登入或 YouTube 暫時阻擋）"
     except Exception as e:
-        raise ValueError(f"YouTube 字幕擷取失敗：{e}")
+        transcript_error = f"YouTube 字幕擷取失敗：{e}"
+
+    if transcript_error:
+        try:
+            title, text = _transcribe_youtube_audio(video_id, original_url)
+            return title, text[:_MAX_CHARS]
+        except Exception as asr_err:
+            meta_title, meta_text = _fetch_youtube_metadata(video_id)
+            if meta_text:
+                note = f"[提示] 字幕/ASR 不可用：{transcript_error}；ASR 錯誤：{asr_err}"
+                merged = f"{note}\n\n{meta_text}".strip()
+                return meta_title, merged[:_MAX_CHARS]
+            raise ValueError(f"{transcript_error}；ASR 轉寫失敗：{asr_err}")
 
     title = f"YouTube 影片（{video_id}）"
     return title, text[:_MAX_CHARS]
+
+
+def _fetch_youtube_metadata(video_id: str) -> tuple[str, str]:
+    # oEmbed 提供公開影片標題與作者，作為無字幕/無法 ASR 時的最小 fallback。
+    title = f"YouTube 影片（{video_id}）"
+    text_lines: list[str] = []
+    try:
+        oembed = httpx.get(
+            "https://www.youtube.com/oembed",
+            params={"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"},
+            timeout=10,
+        )
+        if oembed.status_code == 200:
+            payload = oembed.json()
+            title = payload.get("title") or title
+            author = payload.get("author_name")
+            if author:
+                text_lines.append(f"作者：{author}")
+            text_lines.append(f"影片網址：https://www.youtube.com/watch?v={video_id}")
+    except Exception:
+        pass
+    return title, "\n".join(text_lines).strip()
+
+
+def _transcribe_youtube_audio(video_id: str, original_url: str) -> tuple[str, str]:
+    try:
+        from yt_dlp import YoutubeDL
+    except ImportError:
+        raise RuntimeError("缺少 yt-dlp，請安裝：pip install yt-dlp")
+
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise RuntimeError("缺少 faster-whisper，請安裝：pip install faster-whisper")
+
+    with tempfile.TemporaryDirectory(prefix="yt_asr_") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        outtmpl = str(tmp_path / f"{video_id}.%(ext)s")
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "format": "bestaudio/best",
+            "outtmpl": outtmpl,
+            "noplaylist": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ],
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(original_url, download=True)
+
+        audio_path = tmp_path / f"{video_id}.mp3"
+        if not audio_path.exists():
+            raise RuntimeError("音訊下載失敗（找不到轉換後 mp3）")
+
+        model = WhisperModel("small", device="cpu", compute_type="int8")
+        segments, _ = model.transcribe(
+            str(audio_path),
+            language=None,
+            vad_filter=True,
+            beam_size=3,
+        )
+        transcript = " ".join((seg.text or "").strip() for seg in segments).strip()
+        if not transcript:
+            raise RuntimeError("ASR 轉寫結果為空")
+
+        title = (info or {}).get("title") or f"YouTube 影片（{video_id}，ASR）"
+        return title, transcript
 
 
 def _fetch_webpage(url: str) -> tuple[str, str]:

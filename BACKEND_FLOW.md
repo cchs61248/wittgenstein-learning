@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-06，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica Provider、上傳磁碟持久化、**多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合**）
+> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-08，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica Provider、上傳磁碟持久化、**多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合、URL 擷取品質強化（WebFetch 風格結構化輸出 + strict_main 主文截斷 + YouTube ASR fallback）**）
 
 ---
 
@@ -34,7 +34,7 @@
     │
     ├── REST  → /auth/*, /upload, /upload/url, /sessions/*
     │               │           │
-    │               │           └── url_fetcher.py → readability-lxml / youtube-transcript-api
+    │               │           └── url_fetcher.py → readability-lxml + strict_main + youtube-transcript-api + ASR fallback
     │               └── upload_store.py → data/uploads/*.bin + *.meta.json
     │
     └── WebSocket → /ws/{session_id}?token=JWT
@@ -351,9 +351,13 @@ class WorkingMemory:
 
 ### `POST /upload/url`（需 `Authorization: Bearer <token>`）
 - 接收：`{url: "https://..."}`（JSON body）
-- 支援公開網頁（readability-lxml 抽取正文）與 YouTube 影片（youtube-transcript-api 取字幕）
+- 支援公開網頁與 YouTube 影片：
+  - 一般網頁：`readability-lxml` 抽正文，並以 `BeautifulSoup` 轉為 Markdown-like 結構文字（保留標題層級、清單、超連結 URL）
+  - 網頁抽取低命中時：自動 fallback 全頁清洗抽文（移除 script/style/nav/footer 等）
+  - `strict_main`：遇到 `Related Learning / Explore All Courses / Recommended` 等區塊標題後自動截斷，只保留主文章
+  - YouTube：先用 `youtube-transcript-api`；失敗時 fallback 到 `yt-dlp + faster-whisper` 音訊轉寫；再失敗則回傳影片最小 metadata（oEmbed）
 - 擷取後存為純文字 `.bin`，`meta.json` 額外記錄 `source_url`、`source_type: "url"`
-- 限制：需公開無需登入；YouTube 需有字幕；不支援動態 SPA；單次最多 500,000 字
+- 限制：需公開無需登入；不支援需登入/嚴格防爬頁面；單次最多 500,000 字
 - 回傳：`{file_id: "upl_<hex>", title, url, char_count}`
 
 ### `GET /sessions/active?token=...`
@@ -449,8 +453,15 @@ class WorkingMemory:
 前端 POST /upload/url（JSON：{url}）
     │
     └── url_fetcher.fetch_url_content(url)
-            ├── YouTube URL → youtube-transcript-api 取字幕，轉純文字
-            └── 一般網頁   → httpx.get + readability-lxml 抽正文 + BeautifulSoup 轉純文字
+            ├── YouTube URL
+            │    ├── 優先：youtube-transcript-api 取字幕
+            │    ├── fallback：yt-dlp 下載音訊 + faster-whisper（small/cpu/int8）ASR 轉寫
+            │    └── 再 fallback：oEmbed metadata（title/author/url）
+            └── 一般網頁
+                 ├── httpx.get + readability-lxml 抽正文
+                 ├── 轉 Markdown-like 結構文字（標題/清單/連結）
+                 ├── readability 過短時 fallback 全頁清洗抽文
+                 └── 噪音過濾 + strict_main 主文截斷
     │
     └── upload_store.save_upload(title.txt, text/plain, utf8_bytes,
                                   extra_meta={source_url, source_type: "url"})
@@ -458,6 +469,11 @@ class WorkingMemory:
 前端收到 {file_id, title, url, char_count}
     └── 加入 sources 陣列：{type: "url", file_id, label: title}
 ```
+
+**YouTube ASR 暫存行為（2026-05-08）**：
+- ASR fallback 下載的音訊位於系統暫存目錄（`tempfile.TemporaryDirectory(prefix="yt_asr_")`）
+- 轉寫完成離開 `with` 區塊後，自動刪除暫存音訊（不留在專案目錄）
+- Whisper 模型權重快取於 Hugging Face cache（跨重啟可重用，不會自動刪除）
 
 **方式 C：純文字**
 ```
@@ -1227,3 +1243,11 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica", model=None)
 | `extract_text()` | `backend/utils/text_extractor.py` | 本地文件解析（PDF/DOCX/PPTX/MD/TXT），輸出純文字 |
 | `build_source_chunks()` | `backend/utils/chunker.py` | 機械切分 + 結構優先（Wittgenstein 命題編號、Markdown 標題），輸出 chunk 列表 |
 | `search_web()` | `backend/tools/web_search.py` | DuckDuckGo Instant Answer API（免 key），供 ask_tutor 使用 |
+| `fetch_url_content()` | `backend/utils/url_fetcher.py` | URL/YouTube 擷取：readability + fallback 清洗 + strict_main；YouTube 走字幕優先，失敗時 ASR 轉寫 |
+
+### URL/YouTube 擷取依賴（2026-05-08）
+
+- `readability-lxml>=0.8.1`
+- `youtube-transcript-api>=0.6.2`
+- `yt-dlp>=2025.1.26`（YouTube 音訊下載）
+- `faster-whisper>=1.0.3`（ASR 轉寫）
