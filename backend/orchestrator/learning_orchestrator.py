@@ -340,48 +340,6 @@ class LearningOrchestrator:
         )
         return updated, insert_idx
 
-    async def _insert_enrichment_stage(
-        self,
-        session_id: str,
-        stages: list[dict],
-    ) -> tuple[list[dict], int]:
-        max_stage_id = max((s.get("stage_id", 0) for s in stages), default=0)
-        new_stage_id = max_stage_id + 1
-        node_id = f"E.{new_stage_id}"
-        recent_titles = "、".join(s.get("title", "") for s in stages[-3:])
-        new_stage = {
-            "stage_id": new_stage_id,
-            "node_id": node_id,
-            "title": "整合挑戰：跨章節應用",
-            "content": (
-                "本節為整合挑戰節點。請整合前面已掌握內容，處理跨情境應用與觀點比較。\n\n"
-                f"可優先整合這些節點：{recent_titles}"
-            ),
-            "key_concepts": list(dict.fromkeys([c for s in stages[-3:] for c in s.get("key_concepts", [])]))[:5],
-            "prerequisites": [s.get("title", "") for s in stages[-2:]],
-            "estimated_questions": 4,
-            "source_chunks": [
-                {
-                    "chunk_id": f"s{new_stage_id}_c1",
-                    "quote": "；".join(s.get("content", "")[:240] for s in stages[-3:] if s.get("content")),
-                    "note": "來自最近三個節點的整合摘錄",
-                }
-            ],
-            "is_dynamic": True,
-            "kind": "enrichment",
-        }
-        updated = stages + [new_stage]
-        await session_memory.store_stages(session_id, updated)
-        await session_memory.upsert_stage_progress(
-            session_id=session_id,
-            stage_id=new_stage_id,
-            status="pending",
-            attempts=0,
-            best_score=0.0,
-            understanding_notes={"dynamic": True, "kind": "enrichment"},
-        )
-        return updated, len(updated) - 1
-
     # ── 品質檢查 ──────────────────────────────────────────────
 
     def _check_stage_quality(
@@ -548,7 +506,6 @@ class LearningOrchestrator:
         wm = get_working_memory(session_id)
         wm.reset_for_new_stage(0)
         wm.stages = stages
-        wm.enrichment_stage_added = any(s.get("kind") == "enrichment" for s in stages)
 
         await emit({
             "type": "session_started",
@@ -1565,7 +1522,6 @@ class LearningOrchestrator:
         wm = get_working_memory(session_id)
         wm.stages = stages
         wm.question_mode = session.get("question_mode") or "short_answer"
-        wm.enrichment_stage_added = any(s.get("kind") == "enrichment" for s in stages)
         wm.source_corpus = "\n\n".join(
             f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}\n"
             + "\n".join(

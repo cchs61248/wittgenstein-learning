@@ -27,7 +27,6 @@ class WorkingMemory:
     current_attempt: int = 1
     source_corpus: str = ""
     question_mode: str = "short_answer"
-    enrichment_stage_added: bool = False
     current_teaching_intent: Optional[dict] = None
     remediate_count: int = 0
 
