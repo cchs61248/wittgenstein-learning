@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { useSessionStore } from '../store/sessionStore';
 import type { QaHistoryItem } from '../store/sessionStore';
 import { fetchStageQaHistory, type StageQaRecordDto } from '../api/session';
@@ -51,7 +53,7 @@ function HistoryDetail({ item }: { item: QaHistoryItem }) {
           </span>
         </div>
         <div className="feedback-text markdown-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeText(item.feedbackText)}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizeText(item.feedbackText)}</ReactMarkdown>
         </div>
         {item.clarificationQuestion && (
           <p className="clarification">💬 {item.clarificationQuestion}</p>
@@ -314,7 +316,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
               </span>
             </div>
             <div className="feedback-text markdown-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeText(lastFeedback.feedback_text)}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizeText(lastFeedback.feedback_text)}</ReactMarkdown>
             </div>
             {lastFeedback.clarification_question && (
               <p className="clarification">💬 {lastFeedback.clarification_question}</p>

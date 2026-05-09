@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { useSessionStore } from '../store/sessionStore';
 import { deleteTutorRecord } from '../api/session';
 
@@ -67,7 +69,7 @@ function HistoryNote({
         <div className="tutor-note-body">
           <p className="tutor-note-q-full">{item.question}</p>
           <div className="feedback-text markdown-content">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeText(item.answer)}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizeText(item.answer)}</ReactMarkdown>
           </div>
         </div>
       )}

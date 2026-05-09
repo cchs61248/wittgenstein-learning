@@ -1,6 +1,8 @@
 import { forwardRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { useSessionStore } from '../store/sessionStore';
 import { fetchStageExplanation } from '../api/session';
 
@@ -199,7 +201,7 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
         </div>
       )}
       <div className="markdown-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayText}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{displayText}</ReactMarkdown>
         {isStreaming && !hasReviewBody && <span className="cursor-blink">▋</span>}
       </div>
       {referencedChunks.length > 0 && (
