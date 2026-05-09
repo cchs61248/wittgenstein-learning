@@ -1024,17 +1024,7 @@ class LearningOrchestrator:
                 mastery_map=mastery_map,
                 stable_high=stable_high,
             )
-            if next_stage_idx is None and stable_high and not wm.enrichment_stage_added:
-                stages_for_run, next_stage_idx = await self._insert_enrichment_stage(
-                    session_id=session_id,
-                    stages=stages,
-                )
-                wm.stages = stages_for_run
-                stages = stages_for_run
-                wm.enrichment_stage_added = True
-                dynamic_stage_inserted = True
-                decision_reasons.append("原始節點已完成，新增『整合挑戰』節點以延伸應用能力。")
-            elif next_stage_idx is not None:
+            if next_stage_idx is not None:
                 decision_reasons.append(
                     f"下一節選擇：{stages[next_stage_idx]['title']}（依弱點/掌握度/新知權重計算）。"
                 )

@@ -690,7 +690,13 @@ export const useSessionStore = create<SessionState>((set) => ({
   isConnected: false,
   setConnected: (v) => set({ isConnected: v }),
   courseCompleted: false,
-  setCourseCompleted: () => set({ courseCompleted: true }),
+  setCourseCompleted: () => set((s) => ({
+    courseCompleted: true,
+    stages: s.stages.map((st) => ({
+      ...st,
+      status: st.stage_id === s.currentStageId ? 'completed' : st.status,
+    })),
+  })),
   resetExplanation: () => set({
     explanationText: '',
     isStreaming: false,

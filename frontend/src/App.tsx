@@ -586,6 +586,7 @@ export default function App() {
       case 'course_completed':
         endExplanationLoading();
         setPendingCourseComplete(true);
+        listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
       case 'error':
         console.error('Server error:', msg.payload.message);
