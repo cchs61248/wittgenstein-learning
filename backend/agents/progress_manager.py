@@ -1,6 +1,5 @@
 from typing import Any
 from .base_agent import BaseAgent, AgentContext
-from ..llm.base_provider import MessageRole
 
 _MC_N_OPTIONS = 4  # 標準選擇題選項數
 
@@ -59,11 +58,9 @@ class ProgressManagerAgent(BaseAgent):
         current_stage_id: int = payload.get("current_stage_id", 0)
         question_mode: str = payload.get("question_mode", "short_answer")
         is_dynamic: bool = payload.get("is_dynamic", False)
-        remediate_count: int = payload.get("remediate_count", 0)
         stage_kind: str = payload.get("stage_kind") or ("dynamic" if is_dynamic else "main")
-        source_stage_id = payload.get("source_stage_id")
         source_reteach_count: int = int(payload.get("source_reteach_count", 0) or 0)
-        source_remediation_count: int = int(payload.get("source_remediation_count", remediate_count) or 0)
+        source_remediation_count: int = int(payload.get("source_remediation_count", 0) or 0)
         max_reteach: int = int(payload.get("max_reteach", 2) or 2)
         max_remediation: int = int(payload.get("max_remediation", 2) or 2)
 

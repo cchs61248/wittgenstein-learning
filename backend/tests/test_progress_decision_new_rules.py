@@ -4,7 +4,6 @@
 場景：
 - 高分有弱點 → 補強（不得直接 advance）
 - 重教子章節 partial 掌握 → 補強
-- enrichment 不走 is_child_stage 分支
 """
 import asyncio
 from unittest.mock import MagicMock
@@ -111,51 +110,3 @@ def test_reteach_child_complete_mastery_advances():
         "current_attempt": 1,
     })))
     assert result["decision"] == "advance"
-
-
-# ── enrichment 不走 is_child_stage 分支 ───────────────────────────────────────
-
-def test_enrichment_not_treated_as_child_stage():
-    """stage_kind='enrichment' 不被視為子章節（is_child_stage=False）。
-
-    若誤走子章節路徑，source_remediation_count=2 + partial mastery 會強制 advance。
-    正確行為：走主章節邏輯，score=0.5, attempts=1 → retry。
-    """
-    agent = make_agent()
-    result = run(agent.run(ctx({
-        "evaluations": [
-            {"score": 0.50, "confused_concepts": ["整合概念"], "misconception_patterns": []},
-        ],
-        "stage_kind": "enrichment",
-        "is_dynamic": True,
-        "source_remediation_count": 2,  # 若誤走子章節路徑會觸發強制 advance
-        "current_attempt": 1,
-    })))
-    assert result["decision"] == "retry", (
-        "enrichment 應走主章節邏輯，source_remediation_count=2 不應強制 advance"
-    )
-
-
-def test_enrichment_high_severity_follows_main_logic():
-    """enrichment 出現 high_severity → 走主章節 high_severity 分支（reteach）。
-    Orchestrator 層才負責將 enrichment 的 reteach 重導為 advance；
-    ProgressManager 本身不特殊處理 enrichment。
-    """
-    agent = make_agent()
-    result = run(agent.run(ctx({
-        "evaluations": [
-            {
-                "score": 0.30,
-                "confused_concepts": ["整合挑戰核心"],
-                "misconception_patterns": [
-                    {"concept": "整合挑戰核心", "pattern": "根本誤解",
-                     "severity": "high", "repair_strategy": "換框架"},
-                ],
-            },
-        ],
-        "stage_kind": "enrichment",
-        "is_dynamic": True,
-        "current_attempt": 1,
-    })))
-    # 主章節路徑：high_severity → reteach（orchestrator 再負責轉 advance）
-    assert result["decision"] == "reteach"

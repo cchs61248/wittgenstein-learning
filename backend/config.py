@@ -15,8 +15,6 @@ elif _raw_db:
 else:
     DB_PATH = str(Path(__file__).parent.parent / "data" / "learning.db")
 DEFAULT_PROVIDER: str = os.getenv("DEFAULT_PROVIDER", "claude")
-PASS_THRESHOLD: float = float(os.getenv("PASS_THRESHOLD", "0.75"))
-MAX_STAGE_ATTEMPTS: int = int(os.getenv("MAX_STAGE_ATTEMPTS", "3"))
 _cors_env = os.getenv("CORS_ORIGINS", "")
 if _cors_env:
     CORS_ORIGINS: list[str] = [o.strip() for o in _cors_env.split(",") if o.strip()]

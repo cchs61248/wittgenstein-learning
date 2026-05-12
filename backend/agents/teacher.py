@@ -96,37 +96,6 @@ class TeacherAgent(BaseAgent):
             "selection_reason_text": selection_reason_text,
         }
 
-    async def run(self, ctx: AgentContext) -> dict[str, Any]:
-        self._reset()
-        stage = ctx.task_payload["stage"]
-        t0 = self._log_start(
-            ctx,
-            stage_id=stage.get("stage_id", "?"),
-            stage_title=stage.get("title", "")[:40],
-        )
-
-        payload = ctx.task_payload
-        prompt_params = self._build_prompt_params(payload)
-        system = SYSTEM_PROMPTS["teacher"].format(**prompt_params)
-
-        allowed_evidence = (payload.get("adaptive_context") or {}).get("allowed_evidence", [])
-        evidence_text = self._format_allowed_evidence(allowed_evidence) or self._format_source_chunks(stage)
-
-        self._add_message(
-            MessageRole.USER,
-            f"請講解以下學習階段：\n\n"
-            f"## {stage['title']}\n\n"
-            f"{stage.get('content', '')}\n\n"
-            f"關鍵概念：{', '.join(stage.get('key_concepts', []))}\n\n"
-            f"source_chunks（請在敘述後標記 chunk_id）：\n{evidence_text}",
-        )
-
-        response = await self.llm.chat(self._messages, system_prompt=system)
-        self._reset()
-        result = {"explanation": response.content}
-        self._log_end(ctx, t0, {"explanation_len": len(response.content)})
-        return result
-
     async def stream_explanation(
         self, ctx: AgentContext
     ) -> AsyncGenerator[str, None]:

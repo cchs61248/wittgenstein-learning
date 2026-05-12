@@ -160,10 +160,8 @@ def test_remediation_transition_marks_child_stage_in_progress_before_emit(monkey
     wm = SimpleNamespace(
         stage_evaluations=[{"score": 0.4}],
         current_attempt=1,
-        remediate_count=0,
         question_mode="multiple_choice",
         stage_turns=[],
-        enrichment_stage_added=False,
         stages=stages,
     )
 

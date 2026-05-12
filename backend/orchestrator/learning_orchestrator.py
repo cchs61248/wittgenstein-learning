@@ -67,7 +67,6 @@ class LearningOrchestrator:
         self.progress = ProgressManagerAgent(llm, tc)
         self.drift_verifier = DriftVerifierAgent(llm, tc)
         self._pending_stages: list[dict] | None = None
-        self._pending_source_chunks: list[dict] | None = None
         self._pending_start_args: dict | None = None
 
     # ── 工具方法 ──────────────────────────────────────────────
@@ -440,7 +439,6 @@ class LearningOrchestrator:
         ]
 
         self._pending_stages = stages
-        self._pending_source_chunks = source_chunks
         self._pending_start_args = {
             "session_id": session_id,
             "user_id": user_id,
@@ -916,7 +914,6 @@ class LearningOrchestrator:
                 "question_mode": wm.question_mode,
                 "current_attempt": wm.current_attempt,
                 "is_dynamic": stage.get("is_dynamic", False),
-                "remediate_count": wm.remediate_count,
                 "stage_kind": stage.get("kind", "main"),
                 "source_stage_id": source_stage_id,
                 "source_reteach_count": self._count_child_stages(stages, source_stage_id, "reteach"),
@@ -996,93 +993,53 @@ class LearningOrchestrator:
                     "stable_high": stable_high,
                 }
         elif d == "reteach":
-            if stage.get("kind") == "enrichment":
-                d = "advance"
-                decision_reasons.append("整合挑戰節點不觸發重教子章節，直接視為完成。")
-                await session_memory.upsert_stage_progress(
+            focus = decision.get("remediation_focus") or stage.get("key_concepts", [])[:2]
+            weak_raw = await longterm_memory.get_weak_concepts(user_id)
+            weak_concepts = [] if weak_raw == "無" else [c.strip() for c in weak_raw.split("、") if c.strip()]
+            all_concepts = list(
+                dict.fromkeys([c for s in stages for c in s.get("key_concepts", [])])
+            )
+            mastery_map = await longterm_memory.get_concept_mastery_map(user_id, all_concepts)
+            if focus:
+                stages_for_run, next_stage_idx = await self._insert_reteach_stage(
                     session_id=session_id,
-                    stage_id=stage["stage_id"],
-                    status="completed",
-                    attempts=len(wm.stage_turns),
-                    best_score=decision["best_score"],
-                    understanding_notes={"confused": decision.get("remediation_focus") or []},
-                )
-            else:
-                focus = decision.get("remediation_focus") or stage.get("key_concepts", [])[:2]
-                weak_raw = await longterm_memory.get_weak_concepts(user_id)
-                weak_concepts = [] if weak_raw == "無" else [c.strip() for c in weak_raw.split("、") if c.strip()]
-                all_concepts = list(
-                    dict.fromkeys([c for s in stages for c in s.get("key_concepts", [])])
-                )
-                mastery_map = await longterm_memory.get_concept_mastery_map(user_id, all_concepts)
-                candidate_idx, ranked_candidates = self._pick_next_stage_index(
                     stages=stages,
                     current_idx=current_idx,
-                    completed_stage_ids=completed_stage_ids,
-                    weak_concepts=weak_concepts,
-                    mastery_map=mastery_map,
-                    stable_high=False,
+                    reteach_focus=focus,
                 )
-                if focus:
-                    stages_for_run, next_stage_idx = await self._insert_reteach_stage(
-                        session_id=session_id,
-                        stages=stages,
-                        current_idx=current_idx,
-                        reteach_focus=focus,
-                    )
-                    wm.stages = stages_for_run
-                    stages = stages_for_run
-                    dynamic_stage_inserted = True
-                    decision_reasons.append(
-                        "已動態插入重教子章節（" + "、".join(focus[:3]) + "）。"
-                    )
-                if focus:
-                    decision_reasons.append("重教焦點：" + "、".join(focus[:3]))
-                decision_reasons.append("重教以獨立子章節呈現，原章節講解與答題紀錄保持不變。")
+                wm.stages = stages_for_run
+                stages = stages_for_run
+                dynamic_stage_inserted = True
+                decision_reasons.append(
+                    "已動態插入重教子章節（" + "、".join(focus[:3]) + "）。"
+                )
+            if focus:
+                decision_reasons.append("重教焦點：" + "、".join(focus[:3]))
+            decision_reasons.append("重教以獨立子章節呈現，原章節講解與答題紀錄保持不變。")
         elif d == "remediate":
-            if stage.get("kind") == "enrichment":
-                d = "advance"
-                decision_reasons.append("整合挑戰節點不觸發補強子章節，直接視為完成。")
-                await session_memory.upsert_stage_progress(
+            focus = decision.get("remediation_focus") or stage.get("key_concepts", [])[:2]
+            weak_raw = await longterm_memory.get_weak_concepts(user_id)
+            weak_concepts = [] if weak_raw == "無" else [c.strip() for c in weak_raw.split("、") if c.strip()]
+            all_concepts = list(
+                dict.fromkeys([c for s in stages for c in s.get("key_concepts", [])])
+            )
+            mastery_map = await longterm_memory.get_concept_mastery_map(user_id, all_concepts)
+            if focus:
+                stages_for_run, next_stage_idx = await self._insert_remediation_stage(
                     session_id=session_id,
-                    stage_id=stage["stage_id"],
-                    status="completed",
-                    attempts=len(wm.stage_turns),
-                    best_score=decision["best_score"],
-                    understanding_notes={"confused": decision.get("remediation_focus") or []},
-                )
-            else:
-                focus = decision.get("remediation_focus") or stage.get("key_concepts", [])[:2]
-                weak_raw = await longterm_memory.get_weak_concepts(user_id)
-                weak_concepts = [] if weak_raw == "無" else [c.strip() for c in weak_raw.split("、") if c.strip()]
-                all_concepts = list(
-                    dict.fromkeys([c for s in stages for c in s.get("key_concepts", [])])
-                )
-                mastery_map = await longterm_memory.get_concept_mastery_map(user_id, all_concepts)
-                candidate_idx, ranked_candidates = self._pick_next_stage_index(
                     stages=stages,
                     current_idx=current_idx,
-                    completed_stage_ids=completed_stage_ids,
-                    weak_concepts=weak_concepts,
-                    mastery_map=mastery_map,
-                    stable_high=False,
+                    remediation_focus=focus,
                 )
-                if focus:
-                    stages_for_run, next_stage_idx = await self._insert_remediation_stage(
-                        session_id=session_id,
-                        stages=stages,
-                        current_idx=current_idx,
-                        remediation_focus=focus,
-                    )
-                    wm.stages = stages_for_run
-                    stages = stages_for_run
-                    dynamic_stage_inserted = True
-                    decision_reasons.append(
-                        "已動態插入補強子章節（" + "、".join(focus[:3]) + "）。"
-                    )
-                if focus:
-                    decision_reasons.append("補強焦點：" + "、".join(focus[:3]))
-                decision_reasons.append("補強以獨立子章節呈現，原章節講解與答題紀錄保持不變。")
+                wm.stages = stages_for_run
+                stages = stages_for_run
+                dynamic_stage_inserted = True
+                decision_reasons.append(
+                    "已動態插入補強子章節（" + "、".join(focus[:3]) + "）。"
+                )
+            if focus:
+                decision_reasons.append("補強焦點：" + "、".join(focus[:3]))
+            decision_reasons.append("補強以獨立子章節呈現，原章節講解與答題紀錄保持不變。")
         elif d == "retry":
             decision_reasons.append("尚未達門檻，先在同節點調整題目難度再嘗試。")
 

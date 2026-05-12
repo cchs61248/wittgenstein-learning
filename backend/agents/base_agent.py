@@ -1,8 +1,8 @@
 import json
 import logging
 import time
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from abc import ABC
+from dataclasses import dataclass
 from typing import Any
 from ..llm.base_provider import BaseLLMProvider, LLMMessage, MessageRole
 from ..utils.token_counter import TokenCounter
@@ -28,12 +28,6 @@ class BaseAgent(ABC):
 
     def _add_message(self, role: MessageRole, content: str) -> None:
         self._messages.append(LLMMessage(role=role, content=content))
-
-    def _token_usage(self) -> int:
-        return sum(self.token_counter.count(m.content) for m in self._messages)
-
-    def _within_budget(self, budget: int) -> bool:
-        return self._token_usage() < budget
 
     def _reset(self) -> None:
         self._messages = []
@@ -65,5 +59,8 @@ class BaseAgent(ABC):
             json.dumps(result, ensure_ascii=False, default=str),
         )
 
-    @abstractmethod
-    async def run(self, ctx: AgentContext) -> dict[str, Any]: ...
+    async def run(self, ctx: AgentContext) -> dict[str, Any]:
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement run(); "
+            "call its dedicated method instead."
+        )

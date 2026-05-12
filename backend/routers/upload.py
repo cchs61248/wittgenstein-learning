@@ -4,7 +4,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..auth.utils import decode_token_active

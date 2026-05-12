@@ -6,23 +6,6 @@ from ..db.database import get_db
 DECISION_HISTORY_MAX_PER_SESSION = 200
 
 
-async def create_session(
-    session_id: str,
-    user_id: str,
-    content_hash: str,
-    total_stages: int,
-    raw_content_summary: str = "",
-) -> None:
-    db = await get_db()
-    await db.execute(
-        """INSERT INTO sessions
-           (session_id, user_id, content_hash, total_stages, raw_content_summary)
-           VALUES (?, ?, ?, ?, ?)""",
-        (session_id, user_id, content_hash, total_stages, raw_content_summary),
-    )
-    await db.commit()
-
-
 async def store_stages(session_id: str, stages: list[dict]) -> None:
     db = await get_db()
     await db.execute(
