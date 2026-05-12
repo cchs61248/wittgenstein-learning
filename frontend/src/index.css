@@ -17,6 +17,7 @@ body {
   font-family: 'Crimson Text', 'Noto Serif TC', 'Iowan Old Style', 'Palatino Linotype', serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  transition: background-color 240ms ease, color 240ms ease;
 }
 
 #root {

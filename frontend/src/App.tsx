@@ -22,6 +22,7 @@ import type { BookEntry } from './api/session';
 import type { ServerMessage, ProviderType, DepthType } from './types/messages';
 import { LearningStatsPage } from './components/LearningStatsPage';
 import { BookshelfPanel } from './components/BookshelfPanel';
+import { ThemeToggle } from './components/ThemeToggle';
 import './App.css';
 import {
   getSessionLayoutPrefs,
@@ -934,6 +935,7 @@ export default function App() {
         </div>
         <div className="header-right">
           <span className="header-email">{email}</span>
+          <ThemeToggle />
           <button
             onClick={() => {
               setBookshelf([]);

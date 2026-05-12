@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import 'katex/dist/katex.min.css'
 import App from './App.tsx'
+import { applyTheme, getStoredTheme } from './utils/theme'
+
+applyTheme(getStoredTheme());
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

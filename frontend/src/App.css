@@ -52,24 +52,157 @@
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --press-duration: 180ms;
+
+  /* 主題切換補充 token */
+  --ambient-glow-1: rgba(253, 224, 71, 0.35);
+  --ambient-glow-2: rgba(251, 146, 60, 0.2);
+  --ambient-glow-3: rgba(254, 215, 170, 0.5);
+  --surface-elevated-start: #ffffff;
+  --surface-elevated-mid: #fffbeb;
+  --surface-toggle-start: #fffdf4;
+  --surface-toggle-end: #ffedd5;
+  --surface-band-end: #fffbeb;
+  --scrollbar-track: #fff7ed;
+  --scrollbar-thumb-start: #f59e0b;
+  --scrollbar-thumb-end: #ea580c;
+  --scrollbar-thumb-hover-start: #ea580c;
+  --scrollbar-thumb-hover-end: #c2410c;
+  --header-grad-start: #fffbeb;
+  --header-grad-end: #fef3c7;
+  --modal-scrim: rgba(66, 32, 6, 0.4);
+  --kicked-scrim: rgba(15, 10, 5, 0.65);
+  --sidebar-backdrop: rgba(66, 32, 6, 0.2);
+  --btn-primary-text: #fff7ed;
+  --btn-primary-border: #fb923c;
+  --btn-primary-active-shadow: rgba(0, 0, 0, 0.12);
+  --quote-rule: rgba(217, 119, 6, 0.35);
+  --info-fg: #1d6fa5;
+  --info-bg: #e8f4fd;
+  --info-border: #a8d4ef;
+  --danger-fg: #e53e3e;
+  --danger-bg: rgba(229, 62, 62, 0.1);
+  --auth-bg:
+    radial-gradient(ellipse 110% 80% at 50% -20%, rgba(253, 224, 71, 0.45), transparent 55%),
+    radial-gradient(ellipse 90% 70% at 100% 30%, rgba(251, 146, 60, 0.22), transparent 50%),
+    radial-gradient(ellipse 80% 60% at 0% 80%, rgba(254, 215, 170, 0.55), transparent 50%),
+    linear-gradient(165deg, #fffbeb 0%, #fef3c7 35%, #fde68a 100%);
+  --auth-dot: rgba(180, 83, 9, 0.07);
+  --auth-blob-1: #fbbf24;
+  --auth-blob-2: #fb923c;
+  --auth-blob-3: #fde047;
+  --auth-svg-shadow: rgba(66, 32, 6, 0.08);
+}
+
+/* ── 深色模式：保留暖色品牌調性，採深棕底 + 暖琥珀文字 ── */
+:root[data-theme="dark"] {
+  --bg: #1a130a;
+  --bg-card: #251a10;
+  --bg-hover: #332416;
+  --bg-selected: #4a3520;
+
+  --border: #5a4528;
+  --border-strong: #7a5f36;
+
+  --text: #fef3c7;
+  --text-muted: #fcd34d;
+  --text-subtle: #fdba74;
+
+  --accent: #fbbf24;
+  --accent-hover: #fde047;
+  --accent-light: #fcd34d;
+  --accent-bg: rgba(251, 191, 36, 0.14);
+  --accent-border: #b45309;
+
+  --secondary: #fb923c;
+  --secondary-bg: #2a1810;
+
+  --cta: #fb923c;
+  --cta-hover: #fdba74;
+  --cta-shadow: rgba(251, 146, 60, 0.4);
+
+  --green: #4ade80;
+  --green-bg: rgba(74, 222, 128, 0.12);
+  --green-border: #15803d;
+  --yellow: #fbbf24;
+  --yellow-bg: rgba(251, 191, 36, 0.12);
+  --yellow-border: #92400e;
+  --red: #f87171;
+  --red-bg: rgba(248, 113, 113, 0.15);
+  --red-border: #991b1b;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.7);
+
+  /* 補充 token：暗色版 */
+  --ambient-glow-1: rgba(251, 146, 60, 0.06);
+  --ambient-glow-2: rgba(245, 158, 11, 0.05);
+  --ambient-glow-3: rgba(120, 53, 15, 0.18);
+  --surface-elevated-start: #2d2014;
+  --surface-elevated-mid: #251a10;
+  --surface-toggle-start: #2d2014;
+  --surface-toggle-end: #3a2a18;
+  --surface-band-end: #251a10;
+  --scrollbar-track: #1f160d;
+  --scrollbar-thumb-start: #b45309;
+  --scrollbar-thumb-end: #7c2d12;
+  --scrollbar-thumb-hover-start: #d97706;
+  --scrollbar-thumb-hover-end: #9a3412;
+  --header-grad-start: #1f160d;
+  --header-grad-end: #2a1f14;
+  --modal-scrim: rgba(0, 0, 0, 0.7);
+  --kicked-scrim: rgba(0, 0, 0, 0.78);
+  --sidebar-backdrop: rgba(0, 0, 0, 0.55);
+  --btn-primary-text: #1a130a;
+  --btn-primary-border: #fdba74;
+  --btn-primary-active-shadow: rgba(0, 0, 0, 0.35);
+  --quote-rule: rgba(251, 191, 36, 0.45);
+  --info-fg: #93c5fd;
+  --info-bg: rgba(59, 130, 246, 0.12);
+  --info-border: rgba(147, 197, 253, 0.4);
+  --danger-fg: #fca5a5;
+  --danger-bg: rgba(248, 113, 113, 0.15);
+  --auth-bg:
+    radial-gradient(ellipse 110% 80% at 50% -20%, rgba(251, 146, 60, 0.18), transparent 55%),
+    radial-gradient(ellipse 90% 70% at 100% 30%, rgba(245, 158, 11, 0.12), transparent 50%),
+    radial-gradient(ellipse 80% 60% at 0% 80%, rgba(120, 53, 15, 0.28), transparent 55%),
+    linear-gradient(165deg, #1a130a 0%, #251a10 50%, #2a1f14 100%);
+  --auth-dot: rgba(251, 191, 36, 0.05);
+  --auth-blob-1: #b45309;
+  --auth-blob-2: #c2410c;
+  --auth-blob-3: #92400e;
+  --auth-svg-shadow: rgba(0, 0, 0, 0.5);
+}
+
+/* 暗色模式：AuthForm 暖色插畫降亮度/飽和讓它更和諧 */
+:root[data-theme="dark"] .auth-hero-svg {
+  filter: brightness(0.78) saturate(0.85) drop-shadow(0 12px 24px var(--auth-svg-shadow));
+}
+
+/* 暗色模式：被踢卡用的紅色背景在 dark 上仍要保留語意警示 */
+:root[data-theme="dark"] .kicked-card {
+  background: rgba(248, 113, 113, 0.12);
 }
 
 body {
   background:
-    radial-gradient(1200px 600px at 0% 0%, rgba(253, 224, 71, 0.35), transparent 50%),
-    radial-gradient(900px 500px at 100% 10%, rgba(251, 146, 60, 0.2), transparent 45%),
-    radial-gradient(800px 400px at 50% 100%, rgba(254, 215, 170, 0.5), transparent 55%),
+    radial-gradient(1200px 600px at 0% 0%, var(--ambient-glow-1), transparent 50%),
+    radial-gradient(900px 500px at 100% 10%, var(--ambient-glow-2), transparent 45%),
+    radial-gradient(800px 400px at 50% 100%, var(--ambient-glow-3), transparent 55%),
     var(--bg);
   color: var(--text);
   font-family: var(--font-body);
   font-size: 17px;
   line-height: 1.65;
+  transition: background-color 240ms ease, color 240ms ease;
 }
 
 /* ── 全站滾動條：暖色一致化 ── */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #f59e0b #fff7ed;
+  scrollbar-color: var(--scrollbar-thumb-start) var(--scrollbar-track);
 }
 
 *::-webkit-scrollbar {
@@ -78,22 +211,22 @@ body {
 }
 
 *::-webkit-scrollbar-track {
-  background: #fff7ed;
+  background: var(--scrollbar-track);
   border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #f59e0b 0%, #ea580c 100%);
-  border: 2px solid #fff7ed;
+  background: linear-gradient(180deg, var(--scrollbar-thumb-start) 0%, var(--scrollbar-thumb-end) 100%);
+  border: 2px solid var(--scrollbar-track);
   border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, #ea580c 0%, #c2410c 100%);
+  background: linear-gradient(180deg, var(--scrollbar-thumb-hover-start) 0%, var(--scrollbar-thumb-hover-end) 100%);
 }
 
 *::-webkit-scrollbar-corner {
-  background: #fff7ed;
+  background: var(--scrollbar-track);
 }
 
 /* ── 版面結構 ── */
@@ -119,7 +252,7 @@ body {
   align-items: center;
   padding: 12px 22px 12px 20px;
   min-height: 68px;
-  background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%);
+  background: linear-gradient(180deg, var(--header-grad-start) 0%, var(--header-grad-end) 100%);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-xs);
   flex-shrink: 0;
@@ -196,6 +329,65 @@ body {
   box-shadow: none;
 }
 
+/* ── 主題切換按鈕（淺/深色） ── */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition:
+    background var(--press-duration) var(--ease-out),
+    transform var(--press-duration) var(--ease-out),
+    border-color var(--press-duration);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-border);
+}
+
+.theme-toggle:active {
+  transform: scale(0.94);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.theme-toggle svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+@media (max-width: 768px) {
+  .theme-toggle {
+    width: 36px;
+    height: 36px;
+  }
+  .theme-toggle svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle {
+    transition: none;
+  }
+}
+
 .app-body {
   display: flex;
   flex: 1;
@@ -211,7 +403,7 @@ body {
   margin: 12px 0 12px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: linear-gradient(165deg, #ffffff 0%, var(--bg-card) 55%, #fffbeb 100%);
+  background: linear-gradient(165deg, var(--surface-elevated-start) 0%, var(--bg-card) 55%, var(--surface-elevated-mid) 100%);
   box-shadow: var(--shadow-md);
   overflow: hidden;
   transition: width var(--press-duration) var(--ease-out);
@@ -223,7 +415,7 @@ body {
   min-height: 44px;
   border: none;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #fffdf4 0%, #ffedd5 100%);
+  background: linear-gradient(180deg, var(--surface-toggle-start) 0%, var(--surface-toggle-end) 100%);
   color: var(--text);
   padding: 10px 12px;
   display: flex;
@@ -465,7 +657,7 @@ body {
   margin: 12px 12px 12px 10px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  background: linear-gradient(180deg, #ffffff 0%, var(--bg-card) 45%, #fffbeb 100%);
+  background: linear-gradient(180deg, var(--surface-elevated-start) 0%, var(--bg-card) 45%, var(--surface-elevated-mid) 100%);
   box-shadow: var(--shadow-md);
   animation: main-enter 0.55s var(--ease-out) 0.05s both;
 }
@@ -493,7 +685,7 @@ body {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #fffdf4 0%, #fffbeb 100%);
+  background: linear-gradient(180deg, var(--surface-toggle-start) 0%, var(--surface-band-end) 100%);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -638,7 +830,7 @@ body {
   max-width: none;
   min-width: 0;
   padding-left: 20px;
-  border-left: 3px solid rgba(217, 119, 6, 0.35);
+  border-left: 3px solid var(--quote-rule);
   margin-left: 4px;
   box-sizing: border-box;
 }
@@ -848,7 +1040,7 @@ body {
   flex-shrink: 0;
   padding: 0 40px 12px;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #fffdf4 0%, #fffbeb 100%);
+  background: linear-gradient(180deg, var(--surface-toggle-start) 0%, var(--surface-band-end) 100%);
 }
 
 .ask-tutor-panel.is-collapsed {
@@ -958,9 +1150,9 @@ body {
 }
 
 .tutor-note-scope-badge--other {
-  color: #1d6fa5;
-  background: #e8f4fd;
-  border-color: #a8d4ef;
+  color: var(--info-fg);
+  background: var(--info-bg);
+  border-color: var(--info-border);
 }
 
 .tutor-note-toggle-icon {
@@ -979,8 +1171,8 @@ body {
 }
 
 .tutor-note-delete:hover {
-  color: #e53e3e;
-  background: rgba(229, 62, 62, 0.1);
+  color: var(--danger-fg);
+  background: var(--danger-bg);
 }
 
 .tutor-note-body {
@@ -1010,7 +1202,7 @@ body {
   flex-direction: column;
   overflow: hidden;
   padding: 0 40px 0;
-  background: linear-gradient(180deg, #ffffff 0%, var(--bg-card) 50%);
+  background: linear-gradient(180deg, var(--surface-elevated-start) 0%, var(--bg-card) 50%);
   border-top: 1px solid var(--border);
 }
 
@@ -1394,8 +1586,8 @@ textarea:disabled {
 /* ── 主按鈕：暖色 CTA ── */
 .btn-primary {
   background: linear-gradient(180deg, var(--cta) 0%, var(--cta-hover) 100%);
-  color: #fff7ed;
-  border: 2px solid #fb923c;
+  color: var(--btn-primary-text);
+  border: 2px solid var(--btn-primary-border);
   padding: 10px 24px;
   border-radius: var(--radius-sm);
   font-family: var(--font-ui);
@@ -1418,7 +1610,7 @@ textarea:disabled {
 
 .btn-primary:active:not(:disabled) {
   transform: scale(0.98);
-  box-shadow: inset 2px 2px 8px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 2px 2px 8px var(--btn-primary-active-shadow);
 }
 
 .btn-primary:focus-visible {
@@ -1486,18 +1678,14 @@ textarea:disabled {
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  background:
-    radial-gradient(ellipse 110% 80% at 50% -20%, rgba(253, 224, 71, 0.45), transparent 55%),
-    radial-gradient(ellipse 90% 70% at 100% 30%, rgba(251, 146, 60, 0.22), transparent 50%),
-    radial-gradient(ellipse 80% 60% at 0% 80%, rgba(254, 215, 170, 0.55), transparent 50%),
-    linear-gradient(165deg, #fffbeb 0%, #fef3c7 35%, #fde68a 100%);
+  background: var(--auth-bg);
 }
 
 .auth-container::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(rgba(180, 83, 9, 0.07) 1px, transparent 1px);
+  background-image: radial-gradient(var(--auth-dot) 1px, transparent 1px);
   background-size: 24px 24px;
   pointer-events: none;
   mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 20%, transparent 70%);
@@ -1514,7 +1702,7 @@ textarea:disabled {
 .auth-blob--1 {
   width: 280px;
   height: 280px;
-  background: #fbbf24;
+  background: var(--auth-blob-1);
   top: -80px;
   right: -60px;
   animation: auth-float 14s ease-in-out infinite;
@@ -1523,7 +1711,7 @@ textarea:disabled {
 .auth-blob--2 {
   width: 220px;
   height: 220px;
-  background: #fb923c;
+  background: var(--auth-blob-2);
   bottom: 10%;
   left: -40px;
   animation: auth-float 12s ease-in-out infinite reverse;
@@ -1532,7 +1720,7 @@ textarea:disabled {
 .auth-blob--3 {
   width: 160px;
   height: 160px;
-  background: #fde047;
+  background: var(--auth-blob-3);
   bottom: -40px;
   right: 25%;
   animation: auth-float 16s ease-in-out infinite;
@@ -1591,7 +1779,7 @@ textarea:disabled {
   width: 100%;
   height: auto;
   display: block;
-  filter: drop-shadow(0 12px 24px rgba(66, 32, 6, 0.08));
+  filter: drop-shadow(0 12px 24px var(--auth-svg-shadow));
 }
 
 .auth-hero-tagline {
@@ -1776,7 +1964,7 @@ textarea:disabled {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(66, 32, 6, 0.4);
+  background: var(--modal-scrim);
   backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
@@ -1786,7 +1974,7 @@ textarea:disabled {
 }
 
 .modal-card {
-  background: linear-gradient(180deg, #ffffff 0%, var(--bg-card) 100%);
+  background: linear-gradient(180deg, var(--surface-elevated-start) 0%, var(--bg-card) 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   padding: 34px 32px 32px;
@@ -1818,7 +2006,7 @@ textarea:disabled {
 
 .modal-close-btn:hover {
   filter: brightness(1.03);
-  background: #fff7ed;
+  background: var(--bg-hover);
 }
 
 .modal-card::before {
@@ -2419,7 +2607,7 @@ textarea:disabled {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: linear-gradient(90deg, var(--yellow-bg), rgba(253, 246, 233, 0.6));
+  background: linear-gradient(90deg, var(--yellow-bg), var(--bg-card));
   border: 1px solid var(--yellow-border);
   border-radius: var(--radius);
   padding: 11px 18px;
@@ -2624,7 +2812,7 @@ textarea:disabled {
 /* ── 被踢掉連線遮罩 ── */
 .kicked-overlay {
   z-index: 200;
-  background: rgba(15, 10, 5, 0.65);
+  background: var(--kicked-scrim);
   backdrop-filter: blur(6px);
 }
 
@@ -2790,7 +2978,7 @@ textarea:disabled {
     border-radius: 0 12px 12px 0;
     padding: 0;
     justify-content: center;
-    background: linear-gradient(180deg, #fffdf4 0%, #ffedd5 100%);
+    background: linear-gradient(180deg, var(--surface-toggle-start) 0%, var(--surface-toggle-end) 100%);
     box-shadow: var(--shadow-md);
   }
 
@@ -2815,7 +3003,7 @@ textarea:disabled {
     position: absolute;
     inset: 0;
     border: none;
-    background: rgba(66, 32, 6, 0.2);
+    background: var(--sidebar-backdrop);
     backdrop-filter: blur(1px);
     z-index: 20;
   }

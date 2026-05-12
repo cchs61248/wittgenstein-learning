@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, forwardRef, useCallback, useRef, type MutableRefObject } from 'react';
+import { useState, useEffect, useMemo, useReducer, forwardRef, useCallback, useRef, type MutableRefObject } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell,
@@ -6,34 +6,78 @@ import {
 import { useSessionStore } from '../store/sessionStore';
 import { fetchLearnerStats, type LearnerStats } from '../api/learner';
 import { getSessionLayoutPrefs, patchSessionLayoutPrefs } from '../utils/sessionLayoutPrefs';
+import { THEME_CHANGED_EVENT } from '../utils/theme';
 
-// ── Design tokens（對應 App.css CSS 變數）──────────────────────────────────
-const C = {
-  green:       '#15803d',
-  greenBg:     '#dcfce7',
-  greenBorder: '#86efac',
-  accent:      '#d97706',
-  accentBg:    '#ffedd5',
-  yellow:      '#b45309',
-  yellowBg:    '#fffbeb',
-  red:         '#b91c1c',
-  redBg:       '#fee2e2',
-  redBorder:   '#fecaca',
-  border:      '#fcd34d',
-  gridLine:    '#fde68a',
-  bg:          '#fffbeb',
-  bgCard:      '#ffffff',
-  text:        '#422006',
-  textMuted:   '#92400e',
-  textSubtle:  '#b45309',
+// ── Design tokens：runtime 從 CSS 變數讀，主題切換時同步更新 ────────────────
+const COLOR_VARS = {
+  green:       '--green',
+  greenBg:     '--green-bg',
+  greenBorder: '--green-border',
+  accent:      '--accent',
+  accentBg:    '--accent-bg',
+  yellow:      '--yellow',
+  yellowBg:    '--yellow-bg',
+  red:         '--red',
+  redBg:       '--red-bg',
+  redBorder:   '--red-border',
+  border:      '--border',
+  gridLine:    '--yellow-border',
+  bg:          '--bg',
+  bgCard:      '--bg-card',
+  text:        '--text',
+  textMuted:   '--text-muted',
+  textSubtle:  '--text-subtle',
+} as const;
+
+type ColorKey = keyof typeof COLOR_VARS;
+type ColorMap = Record<ColorKey, string>;
+
+const LIGHT_FALLBACK: ColorMap = {
+  green:'#15803d', greenBg:'#dcfce7', greenBorder:'#86efac',
+  accent:'#d97706', accentBg:'#ffedd5',
+  yellow:'#b45309', yellowBg:'#fffbeb',
+  red:'#b91c1c', redBg:'#fee2e2', redBorder:'#fecaca',
+  border:'#fcd34d', gridLine:'#fde68a',
+  bg:'#fffbeb', bgCard:'#ffffff',
+  text:'#422006', textMuted:'#92400e', textSubtle:'#b45309',
 };
 
+function readColors(): ColorMap {
+  if (typeof window === 'undefined') return { ...LIGHT_FALLBACK };
+  const cs = getComputedStyle(document.documentElement);
+  const out = {} as ColorMap;
+  for (const k of Object.keys(COLOR_VARS) as ColorKey[]) {
+    out[k] = cs.getPropertyValue(COLOR_VARS[k]).trim() || LIGHT_FALLBACK[k];
+  }
+  return out;
+}
+
+const C: ColorMap = readColors();
 const DECISION_COLORS: Record<string, string> = {
   advance:   C.green,
   retry:     C.yellow,
   remediate: C.accent,
   reteach:   C.red,
 };
+
+function syncColors() {
+  Object.assign(C, readColors());
+  DECISION_COLORS.advance = C.green;
+  DECISION_COLORS.retry = C.yellow;
+  DECISION_COLORS.remediate = C.accent;
+  DECISION_COLORS.reteach = C.red;
+}
+
+function useThemeColorSync() {
+  const [, force] = useReducer((x: number) => x + 1, 0);
+  useEffect(() => {
+    syncColors();
+    force();
+    const onChange = () => { syncColors(); force(); };
+    window.addEventListener(THEME_CHANGED_EVENT, onChange);
+    return () => window.removeEventListener(THEME_CHANGED_EVENT, onChange);
+  }, []);
+}
 
 const DECISION_LABELS: Record<string, string> = {
   advance: '通過', retry: '重試', remediate: '補強', reteach: '重教',
@@ -91,6 +135,7 @@ function ColorDot({ color }: { color: string }) {
 // ── 主元件 ─────────────────────────────────────────────────────────────────
 export const LearningStatsPage = forwardRef<HTMLDivElement, { token: string; sessionId: string | null }>(
   function LearningStatsPage({ token, sessionId }, ref) {
+  useThemeColorSync();
   const { stages, stageQaHistories, decisionHistory } = useSessionStore();
   const [stats, setStats] = useState<LearnerStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
