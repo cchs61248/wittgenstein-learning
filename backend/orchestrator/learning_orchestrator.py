@@ -57,6 +57,28 @@ def _teacher_only_from_persisted(stored: str) -> str:
     return teacher if prog is not None else stored
 
 
+def build_progress_table(stages: list[dict], current_idx: int) -> str:
+    if not stages or current_idx < 0 or current_idx >= len(stages):
+        return ""
+    current = stages[current_idx]
+    lines = [
+        "### 📊 學習進度\n\n",
+        f"> 當前節點：**{current['node_id']} — {current['title']}**\n\n",
+        "| 節點編號 | 知識點名稱 | 狀態 |\n",
+        "|----------|------------|------|\n",
+    ]
+    for i, s in enumerate(stages):
+        if i < current_idx:
+            status = "✅ 已完成"
+        elif i == current_idx:
+            status = "🔄 進行中"
+        else:
+            status = "⏳ 待學習"
+        lines.append(f"| {s['node_id']} | {s['title']} | {status} |\n")
+    lines.append("\n---\n\n")
+    return "".join(lines)
+
+
 class LearningOrchestrator:
     def __init__(self, llm: BaseLLMProvider):
         tc = TokenCounter()
@@ -70,25 +92,6 @@ class LearningOrchestrator:
         self._pending_start_args: dict | None = None
 
     # ── 工具方法 ──────────────────────────────────────────────
-
-    def _build_progress_table(self, stages: list[dict], current_idx: int) -> str:
-        current = stages[current_idx]
-        lines = [
-            "### 📊 學習進度\n\n",
-            f"> 當前節點：**{current['node_id']} — {current['title']}**\n\n",
-            "| 節點編號 | 知識點名稱 | 狀態 |\n",
-            "|----------|------------|------|\n",
-        ]
-        for i, s in enumerate(stages):
-            if i < current_idx:
-                status = "✅ 已完成"
-            elif i == current_idx:
-                status = "🔄 進行中"
-            else:
-                status = "⏳ 待學習"
-            lines.append(f"| {s['node_id']} | {s['title']} | {status} |\n")
-        lines.append("\n---\n\n")
-        return "".join(lines)
 
     def _build_questions_section(self, questions: list[dict]) -> str:
         if not questions:
@@ -115,6 +118,42 @@ class LearningOrchestrator:
             "quote": content[:500],
             "note": "fallback",
         }]
+
+    def _build_source_corpus(self, stages: list[dict]) -> str:
+        return "\n\n".join(
+            f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}\n"
+            + "\n".join(
+                f"- [{c.get('chunk_id', 'unknown')}] {c.get('quote', '')}"
+                for c in self._normalize_stage_source_chunks(s)
+            )
+            for s in stages
+        )
+
+    async def _emit_session_started(
+        self,
+        session_id: str,
+        stages: list[dict],
+        emit: WSEmitter,
+        stage_statuses: dict | None = None,
+    ) -> None:
+        payload: dict = {
+            "session_id": session_id,
+            "total_stages": len(stages),
+            "stages": [
+                {
+                    "stage_id": s["stage_id"],
+                    "node_id": s.get("node_id", ""),
+                    "title": s["title"],
+                    "kind": s.get("kind"),
+                    "source_stage_id": s.get("source_stage_id"),
+                    "source_chunks": self._normalize_stage_source_chunks(s),
+                }
+                for s in stages
+            ],
+        }
+        if stage_statuses is not None:
+            payload["stage_statuses"] = {str(k): v for k, v in stage_statuses.items()}
+        await emit({"type": "session_started", "payload": payload})
 
     async def _verify_grounding(
         self,
@@ -505,24 +544,7 @@ class LearningOrchestrator:
         wm.reset_for_new_stage(0)
         wm.stages = stages
 
-        await emit({
-            "type": "session_started",
-            "payload": {
-                "session_id": session_id,
-                "total_stages": len(stages),
-                "stages": [
-                    {
-                        "stage_id": s["stage_id"],
-                        "node_id": s.get("node_id", ""),
-                        "title": s["title"],
-                        "kind": s.get("kind"),
-                        "source_stage_id": s.get("source_stage_id"),
-                        "source_chunks": self._normalize_stage_source_chunks(s),
-                    }
-                    for s in stages
-                ],
-            },
-        })
+        await self._emit_session_started(session_id, stages, emit)
 
         await self.run_stage(
             session_id,
@@ -549,14 +571,7 @@ class LearningOrchestrator:
         wm = get_working_memory(session_id)
         wm.reset_for_new_stage(stages[stage_index]["stage_id"])
         wm.question_mode = question_mode
-        wm.source_corpus = "\n\n".join(
-            f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}\n"
-            + "\n".join(
-                f"- [{c.get('chunk_id', 'unknown')}] {c.get('quote', '')}"
-                for c in self._normalize_stage_source_chunks(s)
-            )
-            for s in stages
-        )
+        wm.source_corpus = self._build_source_corpus(stages)
         stage = stages[stage_index]
         _log.info(
             "run_stage  session=%s  stage_id=%s  title=%s  attempt=%d  mode=%s",
@@ -582,7 +597,7 @@ class LearningOrchestrator:
         )
 
         # 1. 進度表（可跳過 emit：例如 resume 已先播出進度表，僅接續教師串流）
-        progress_md = self._build_progress_table(stages, stage_index)
+        progress_md = build_progress_table(stages, stage_index)
         if not skip_progress_emit:
             await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
         # 立即持久化：即使尚未收到第一段教師串流，重整後也能還原進度表、並走 _resume 而非重跑整段
@@ -1096,25 +1111,7 @@ class LearningOrchestrator:
                     },
                 )
                 refreshed_statuses = await session_memory.get_stage_statuses(session_id)
-                await emit({
-                    "type": "session_started",
-                    "payload": {
-                        "session_id": session_id,
-                        "total_stages": len(stages),
-                        "stages": [
-                            {
-                                "stage_id": s["stage_id"],
-                                "node_id": s.get("node_id", ""),
-                                "title": s["title"],
-                                "kind": s.get("kind"),
-                                "source_stage_id": s.get("source_stage_id"),
-                                "source_chunks": self._normalize_stage_source_chunks(s),
-                            }
-                            for s in stages
-                        ],
-                        "stage_statuses": {str(k): v for k, v in refreshed_statuses.items()},
-                    },
-                })
+                await self._emit_session_started(session_id, stages, emit, refreshed_statuses)
                 await self.run_stage(
                     session_id, user_id, stages, next_stage_idx, wm.question_mode, emit
                 )
@@ -1192,7 +1189,7 @@ class LearningOrchestrator:
 
             # 持久化：讓重整後 resume 直接還原而不重生成
             combined_explanation_retry = wm.current_explanation + retry_separator
-            progress_md = self._build_progress_table(stages, current_idx)
+            progress_md = build_progress_table(stages, current_idx)
             await session_memory.store_stage_explanation(
                 session_id,
                 stage["stage_id"],
@@ -1261,25 +1258,7 @@ class LearningOrchestrator:
                 },
             )
             refreshed_statuses = await session_memory.get_stage_statuses(session_id)
-            await emit({
-                "type": "session_started",
-                "payload": {
-                    "session_id": session_id,
-                    "total_stages": len(stages),
-                    "stages": [
-                        {
-                            "stage_id": s["stage_id"],
-                            "node_id": s.get("node_id", ""),
-                            "title": s["title"],
-                            "kind": s.get("kind"),
-                            "source_stage_id": s.get("source_stage_id"),
-                            "source_chunks": self._normalize_stage_source_chunks(s),
-                        }
-                        for s in stages
-                    ],
-                    "stage_statuses": {str(k): v for k, v in refreshed_statuses.items()},
-                },
-            })
+            await self._emit_session_started(session_id, stages, emit, refreshed_statuses)
             await self.run_stage(
                 session_id, user_id, stages, next_stage_idx, wm.question_mode, emit
             )
@@ -1479,39 +1458,14 @@ class LearningOrchestrator:
         wm = get_working_memory(session_id)
         wm.stages = stages
         wm.question_mode = session.get("question_mode") or "short_answer"
-        wm.source_corpus = "\n\n".join(
-            f"[{s.get('node_id', s['stage_id'])}] {s['title']}\n{s.get('content', '')}\n"
-            + "\n".join(
-                f"- [{c.get('chunk_id', 'unknown')}] {c.get('quote', '')}"
-                for c in self._normalize_stage_source_chunks(s)
-            )
-            for s in stages
-        )
+        wm.source_corpus = self._build_source_corpus(stages)
 
         current_stage_id = session["current_stage_id"]
         current_idx = next(
             (i for i, s in enumerate(stages) if s["stage_id"] == current_stage_id), 0
         )
 
-        await emit({
-            "type": "session_started",
-            "payload": {
-                "session_id": session_id,
-                "total_stages": len(stages),
-                "stages": [
-                    {
-                        "stage_id": s["stage_id"],
-                        "node_id": s.get("node_id", ""),
-                        "title": s["title"],
-                        "kind": s.get("kind"),
-                        "source_stage_id": s.get("source_stage_id"),
-                        "source_chunks": self._normalize_stage_source_chunks(s),
-                    }
-                    for s in stages
-                ],
-                "stage_statuses": {str(k): v for k, v in statuses.items()},
-            },
-        })
+        await self._emit_session_started(session_id, stages, emit, statuses)
 
         all_explanations = await session_memory.get_all_stage_explanations(session_id)
         all_histories = await session_memory.get_all_stage_qa_records(session_id)
@@ -1520,7 +1474,7 @@ class LearningOrchestrator:
         client_explanations = {
             str(sid): _markdown_for_client_from_persisted(
                 txt,
-                self._build_progress_table(stages, idx_by_stage_id.get(int(sid), 0)),
+                build_progress_table(stages, idx_by_stage_id.get(int(sid), 0)),
             )
             for sid, txt in all_explanations.items()
         }
@@ -1598,7 +1552,7 @@ class LearningOrchestrator:
             {},
         )
 
-        progress_md = self._build_progress_table(stages, stage_index)
+        progress_md = build_progress_table(stages, stage_index)
         teacher_only = _teacher_only_from_persisted(stored_explanation)
         display_md = _markdown_for_client_from_persisted(stored_explanation, progress_md)
 

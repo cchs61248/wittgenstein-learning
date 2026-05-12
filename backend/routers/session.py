@@ -5,32 +5,9 @@ from pydantic import BaseModel
 
 from ..auth.utils import decode_token_active
 from ..memory import session_memory
-from ..orchestrator.learning_orchestrator import _markdown_for_client_from_persisted
+from ..orchestrator.learning_orchestrator import _markdown_for_client_from_persisted, build_progress_table
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
-
-
-def _build_progress_table_markdown(stages: list[dict], current_idx: int) -> str:
-    """與 LearningOrchestrator._build_progress_table 一致，供 REST 還原與 WS snapshot 相同的顯示用 Markdown。"""
-    if not stages or current_idx < 0 or current_idx >= len(stages):
-        return ""
-    current = stages[current_idx]
-    lines = [
-        "### 📊 學習進度\n\n",
-        f"> 當前節點：**{current['node_id']} — {current['title']}**\n\n",
-        "| 節點編號 | 知識點名稱 | 狀態 |\n",
-        "|----------|------------|------|\n",
-    ]
-    for i, s in enumerate(stages):
-        if i < current_idx:
-            status = "✅ 已完成"
-        elif i == current_idx:
-            status = "🔄 進行中"
-        else:
-            status = "⏳ 待學習"
-        lines.append(f"| {s['node_id']} | {s['title']} | {status} |\n")
-    lines.append("\n---\n\n")
-    return "".join(lines)
 
 
 @router.get("/active")
@@ -109,7 +86,7 @@ async def get_persisted_stage_explanation(session_id: str, stage_id: int, token:
     raw = await session_memory.get_stage_explanation(session_id, stage_id)
     if not (raw or "").strip():
         return {"stage_id": stage_id, "explanation": ""}
-    progress_md = _build_progress_table_markdown(stages, idx)
+    progress_md = build_progress_table(stages, idx)
     display = _markdown_for_client_from_persisted(raw, progress_md)
     return {"stage_id": stage_id, "explanation": display}
 
