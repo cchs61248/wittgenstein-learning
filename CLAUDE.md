@@ -48,16 +48,16 @@ JWT_SECRET=change-me
 
 ## Claude Code 工具使用注意事項（Windows）
 
-### 工具選擇
+### 工具選擇對照表
 
 | 操作 | 工具 | 原因 |
 |------|------|------|
 | pytest / pip / python | **PowerShell** | Bash 工具不接受 Windows 路徑 |
-| git | Bash 或 PowerShell 均可 | — |
-| npm 前端指令 | Bash 或 PowerShell 均可 | — |
-| 讀寫搜尋檔案 | 專用工具（Read/Write/Grep/Glob） | — |
+| git | Bash 或 PowerShell | — |
+| npm 前端指令 | Bash 或 PowerShell | — |
+| 讀寫搜尋檔案 | 專用工具（Read/Write/Grep/Glob） | 比 shell 更穩、無路徑陷阱 |
 
-### Bash 工具的 Windows 路徑陷阱
+### Bash 工具陷阱：只接受 Unix 風格路徑
 
 Bash 工具底層為 Git Bash，**只接受 Unix 格式路徑**（`/c/Users/...`）。傳 Windows 路徑（`c:\...` 或 `..\..\.venv\...`）會得到 **exit code 49** 或 `command not found`。
 
@@ -69,28 +69,109 @@ ls C:\Users\<username>\Documents\aaron\learn\
 ls /c/Users/<username>/Documents/aaron/learn/wittgenstein-learning/
 ```
 
+### PowerShell 5.1 陷阱（Windows 內建 powershell.exe）
+
+#### 1. `2>&1` 對 native exe 會把 stderr 包成 ErrorRecord
+
+跑 `node.exe` / `vite` / `pytest.exe` / `python.exe` 等 native 工具時加 `2>&1`，PowerShell 5.1 會把每一行 stderr 包成 `NativeCommandError`，輸出像：
+
+```
+node.exe : [vite] ...
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" ...
+    + CategoryInfo : NotSpecified: (... :String) [], RemoteException
+```
+
+**這不代表命令真的失敗**。判斷成敗：
+
+- 看 `$LASTEXITCODE`（**不是 `$?`**，後者對 native exe 不可靠，有 stderr 時常被誤判為失敗）
+- 觀察輸出最後一行（如 `✓ built in 474ms` 即 build 成功）
+
+```powershell
+# ❌ stderr 被 wrap 成 NativeCommandError，誤判失敗
+npm run build 2>&1 | Select-Object -Last 25
+
+# ✅ 不加 2>&1，stderr 自動顯示但不被 wrap
+npm run build | Select-Object -Last 25
+
+# ✅ 確認真實退出碼
+npm run build; "EXIT=$LASTEXITCODE"
+```
+
+#### 2. 沒有 `&&` / `||` / `?:` / `??` / `?.`
+
+PowerShell 5.1 **沒有**這些運算子，使用會拋 parser error。
+
+```powershell
+# ❌ 不可用
+npm run lint && npm run build
+
+# ✅ cmdlet 條件串接
+npm run lint; if ($?) { npm run build }
+
+# ✅ native exe 條件串接（$? 不可靠，用 $LASTEXITCODE）
+& ".\.venv\Scripts\pytest.exe" tests/; if ($LASTEXITCODE -eq 0) { Write-Output "ok" }
+
+# ✅ 無條件串接
+Set-Location frontend; npm install
+```
+
+#### 3. `Get-ChildItem -Recurse` 不會遞迴非目錄項目
+
+若路徑下的「子項」其實是檔案 stub（或符號連結），`-Recurse -Depth N | Select-Object FullName` 可能完全無輸出。先用不加 `-Recurse` 的 `Get-ChildItem` 看 Mode 欄位（`d----` 目錄、`-a---` 檔案）。
+
+```powershell
+# ❌ 無輸出時無法分辨「沒匹配」vs「不是目錄」
+Get-ChildItem C:\foo\bar -Recurse -Depth 2 | Select-Object FullName
+
+# ✅ 先確認結構
+Get-ChildItem C:\foo\bar
+```
+
+#### 4. `Test-Path` / `Get-ChildItem` 空結果不丟錯
+
+回傳 `$false` 或無輸出皆是「無事發生」，**不會 exit 1**。腳本要自行判斷：
+
+```powershell
+if (Test-Path $path) { ... } else { "not found" }
+```
+
+#### 5. 執行不存在的腳本可能得到 misleading exit code
+
+`python missing_script.py` 等情境在 Windows + PowerShell 可能以 **exit 49**（或其他非預期碼）結束。看到陌生 exit code 時：
+
+1. 先 `Test-Path` 確認檔案存在
+2. 確認直譯器存在（`Get-Command python` / `py`）
+3. 別把 exit code 直接套到「Python 環境壞了」的判斷
+
 ### 執行 pytest / Python（必須用 PowerShell）
 
 ```powershell
-cd "c:\Users\<username>\Documents\aaron\learn\wittgenstein-learning\backend"
+Set-Location "c:\Users\<username>\Documents\aaron\learn\wittgenstein-learning\backend"
 & ".\.venv\Scripts\pytest.exe" tests/ -v
 
-# 只取最後幾行輸出
-& ".\.venv\Scripts\pytest.exe" tests/ -v 2>&1 | Select-Object -Last 20
+# 只取最後幾行輸出（不加 2>&1，避免 stderr 被 wrap）
+& ".\.venv\Scripts\pytest.exe" tests/ -v | Select-Object -Last 20
 
 # 首次安裝依賴（若 pytest 缺失）
 & ".\.venv\Scripts\pip.exe" install -r requirements.txt -q
 ```
 
-**常見錯誤對照：**
-
-| 錯誤 | 原因 |
-|------|------|
-| `No module named pytest` | pytest 未安裝（執行上方 pip 指令）|
-| `No module named 'tiktoken'` | requirements.txt 依賴未完整安裝 |
-| Bash exit code 49 / `command not found` | 誤用 Bash 工具，改用 PowerShell |
-
 > 測試目錄：`backend/tests/`，以 repo 根為 `sys.path` 基準，匯入用 `from backend.xxx import ...`。
+
+### 常見錯誤對照表
+
+| 錯誤訊息 / 現象 | 真正原因 | 對策 |
+|----------------|---------|------|
+| Bash 工具 exit code 49 / `command not found` | 傳了 Windows 路徑 | 改用 PowerShell，或用 Unix 風格路徑（`/c/Users/...`）|
+| PS 輸出 `node.exe : ... RemoteException` | `2>&1` 把 native stderr wrap 成 ErrorRecord | 移除 `2>&1`，用 `$LASTEXITCODE` 與輸出最後一行判斷成敗 |
+| `npm run X` 看似失敗但實際成功 | 同上 | `npm run X; "EXIT=$LASTEXITCODE"` 確認 |
+| `Get-ChildItem ... \| Select FullName` 無輸出 | 目標是檔案 stub 不是目錄，或無匹配 | 先用無 `-Recurse` 的 `Get-ChildItem` 看 Mode |
+| `python script.py` 拋 exit 49 | 腳本不存在 / 路徑錯 | 先 `Test-Path` 確認 |
+| `No module named pytest` | venv 未安裝 pytest | `& .\.venv\Scripts\pip.exe install -r requirements.txt` |
+| `No module named 'tiktoken'` | requirements.txt 未完整安裝 | 同上 |
+| `ImportError: attempted relative import...` | 用 `uvicorn main:app` 啟動 | 改用 `uvicorn run:app`（`run.py` 已處理 sys.path）|
+| PS 拋 parser error 在 `&&` / `?:` | PowerShell 5.1 不支援這些運算子 | 改用 `; if ($?) { ... }` 或 `if/else` |
 
 ---
 
