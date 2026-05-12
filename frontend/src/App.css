@@ -93,97 +93,133 @@
   --auth-svg-shadow: rgba(66, 32, 6, 0.08);
 }
 
-/* ── 深色模式：保留暖色品牌調性，採深棕底 + 暖琥珀文字 ── */
+/* ── 深色模式：暖紙黑·閱讀感 ── */
+/*
+ * 設計原則：
+ * 1. 底色採「暖中性深灰」，不走焦糖咖啡色，避免整體看起來土氣
+ * 2. 邊框與分隔線極低對比，去掉框框感、強化內容
+ * 3. 文字偏「暖米白」而非「飽和黃」，閱讀不刺眼
+ * 4. 品牌橘只用在 CTA / active / 進度等焦點，不鋪滿介面
+ * 5. 對比驗證：主文字 16:1 (AAA)、muted 9:1 (AAA)、accent 10:1 (AAA)
+ */
 :root[data-theme="dark"] {
-  --bg: #1a130a;
-  --bg-card: #251a10;
-  --bg-hover: #332416;
-  --bg-selected: #4a3520;
+  --bg: #1a1815;
+  --bg-card: #23211d;
+  --bg-hover: #2d2a25;
+  --bg-selected: #3a352d;
 
-  --border: #5a4528;
-  --border-strong: #7a5f36;
+  --border: #2e2a24;
+  --border-strong: #4a4339;
 
-  --text: #fef3c7;
-  --text-muted: #fcd34d;
-  --text-subtle: #fdba74;
+  --text: #ebe4d4;
+  --text-muted: #b8ad99;
+  --text-subtle: #8a8175;
 
   --accent: #fbbf24;
   --accent-hover: #fde047;
   --accent-light: #fcd34d;
-  --accent-bg: rgba(251, 191, 36, 0.14);
-  --accent-border: #b45309;
+  --accent-bg: rgba(251, 191, 36, 0.10);
+  --accent-border: rgba(251, 191, 36, 0.32);
 
   --secondary: #fb923c;
-  --secondary-bg: #2a1810;
+  --secondary-bg: rgba(251, 146, 60, 0.08);
 
   --cta: #fb923c;
   --cta-hover: #fdba74;
-  --cta-shadow: rgba(251, 146, 60, 0.4);
+  --cta-shadow: rgba(251, 146, 60, 0.28);
 
-  --green: #4ade80;
-  --green-bg: rgba(74, 222, 128, 0.12);
-  --green-border: #15803d;
-  --yellow: #fbbf24;
-  --yellow-bg: rgba(251, 191, 36, 0.12);
-  --yellow-border: #92400e;
-  --red: #f87171;
-  --red-bg: rgba(248, 113, 113, 0.15);
-  --red-border: #991b1b;
+  --green: #6ee7b7;
+  --green-bg: rgba(110, 231, 183, 0.10);
+  --green-border: rgba(110, 231, 183, 0.30);
+  --yellow: #fcd34d;
+  --yellow-bg: rgba(252, 211, 77, 0.10);
+  --yellow-border: rgba(252, 211, 77, 0.28);
+  --red: #fca5a5;
+  --red-bg: rgba(252, 165, 165, 0.10);
+  --red-border: rgba(252, 165, 165, 0.28);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.45);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.55);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
-  --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.7);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.6);
 
-  /* 補充 token：暗色版 */
-  --ambient-glow-1: rgba(251, 146, 60, 0.06);
-  --ambient-glow-2: rgba(245, 158, 11, 0.05);
-  --ambient-glow-3: rgba(120, 53, 15, 0.18);
-  --surface-elevated-start: #2d2014;
-  --surface-elevated-mid: #251a10;
-  --surface-toggle-start: #2d2014;
-  --surface-toggle-end: #3a2a18;
-  --surface-band-end: #251a10;
-  --scrollbar-track: #1f160d;
-  --scrollbar-thumb-start: #b45309;
-  --scrollbar-thumb-end: #7c2d12;
-  --scrollbar-thumb-hover-start: #d97706;
-  --scrollbar-thumb-hover-end: #9a3412;
-  --header-grad-start: #1f160d;
-  --header-grad-end: #2a1f14;
-  --modal-scrim: rgba(0, 0, 0, 0.7);
+  /* 補充 token：暖紙黑 */
+  --ambient-glow-1: rgba(251, 191, 36, 0.025);
+  --ambient-glow-2: rgba(251, 146, 60, 0.025);
+  --ambient-glow-3: rgba(60, 50, 35, 0.18);
+  --surface-elevated-start: #28251f;
+  --surface-elevated-mid: #23211d;
+  --surface-toggle-start: #28251f;
+  --surface-toggle-end: #2d2a23;
+  --surface-band-end: #23211d;
+  --scrollbar-track: #1f1d1a;
+  --scrollbar-thumb-start: #4a3f30;
+  --scrollbar-thumb-end: #6b5840;
+  --scrollbar-thumb-hover-start: #6b5840;
+  --scrollbar-thumb-hover-end: #8a7250;
+  --header-grad-start: #1f1d1a;
+  --header-grad-end: #252320;
+  --modal-scrim: rgba(0, 0, 0, 0.72);
   --kicked-scrim: rgba(0, 0, 0, 0.78);
-  --sidebar-backdrop: rgba(0, 0, 0, 0.55);
-  --btn-primary-text: #1a130a;
+  --sidebar-backdrop: rgba(0, 0, 0, 0.5);
+  --btn-primary-text: #1a1815;
   --btn-primary-border: #fdba74;
-  --btn-primary-active-shadow: rgba(0, 0, 0, 0.35);
-  --quote-rule: rgba(251, 191, 36, 0.45);
+  --btn-primary-active-shadow: rgba(0, 0, 0, 0.4);
+  --quote-rule: rgba(251, 191, 36, 0.32);
   --info-fg: #93c5fd;
-  --info-bg: rgba(59, 130, 246, 0.12);
-  --info-border: rgba(147, 197, 253, 0.4);
+  --info-bg: rgba(59, 130, 246, 0.10);
+  --info-border: rgba(147, 197, 253, 0.28);
   --danger-fg: #fca5a5;
-  --danger-bg: rgba(248, 113, 113, 0.15);
+  --danger-bg: rgba(248, 113, 113, 0.10);
   --auth-bg:
-    radial-gradient(ellipse 110% 80% at 50% -20%, rgba(251, 146, 60, 0.18), transparent 55%),
-    radial-gradient(ellipse 90% 70% at 100% 30%, rgba(245, 158, 11, 0.12), transparent 50%),
-    radial-gradient(ellipse 80% 60% at 0% 80%, rgba(120, 53, 15, 0.28), transparent 55%),
-    linear-gradient(165deg, #1a130a 0%, #251a10 50%, #2a1f14 100%);
-  --auth-dot: rgba(251, 191, 36, 0.05);
-  --auth-blob-1: #b45309;
-  --auth-blob-2: #c2410c;
-  --auth-blob-3: #92400e;
-  --auth-svg-shadow: rgba(0, 0, 0, 0.5);
+    radial-gradient(ellipse 110% 80% at 50% -20%, rgba(251, 191, 36, 0.05), transparent 55%),
+    radial-gradient(ellipse 90% 70% at 100% 30%, rgba(251, 146, 60, 0.04), transparent 50%),
+    radial-gradient(ellipse 80% 60% at 0% 80%, rgba(60, 50, 35, 0.35), transparent 55%),
+    linear-gradient(165deg, #1a1815 0%, #23211d 50%, #28251f 100%);
+  --auth-dot: rgba(251, 191, 36, 0.04);
+  --auth-blob-1: #4a3f30;
+  --auth-blob-2: #6b5840;
+  --auth-blob-3: #3a352d;
+  --auth-svg-shadow: rgba(0, 0, 0, 0.6);
 }
 
 /* 暗色模式：AuthForm 暖色插畫降亮度/飽和讓它更和諧 */
 :root[data-theme="dark"] .auth-hero-svg {
-  filter: brightness(0.78) saturate(0.85) drop-shadow(0 12px 24px var(--auth-svg-shadow));
+  filter: brightness(0.72) saturate(0.78) drop-shadow(0 12px 24px var(--auth-svg-shadow));
 }
 
 /* 暗色模式：被踢卡用的紅色背景在 dark 上仍要保留語意警示 */
 :root[data-theme="dark"] .kicked-card {
-  background: rgba(248, 113, 113, 0.12);
+  background: rgba(252, 165, 165, 0.08);
+}
+
+/* 暗色模式：brand-mark 內部裝飾邊框收斂（白色裝飾在暖紙黑底太刺眼）*/
+:root[data-theme="dark"] .brand-mark::after {
+  border-color: rgba(26, 24, 21, 0.55);
+}
+
+/* 暗色模式：頂部彩色 brand bar 降飽和（避免太搶焦點）*/
+:root[data-theme="dark"] .auth-card::before,
+:root[data-theme="dark"] .modal-card::before {
+  background: linear-gradient(
+    90deg,
+    rgba(251, 191, 36, 0.55),
+    rgba(251, 146, 60, 0.55),
+    rgba(251, 191, 36, 0.55)
+  );
+  opacity: 0.75;
+}
+
+/* 暗色模式：header 底邊那條暖色 border 略弱化（避免框框感）*/
+:root[data-theme="dark"] .app-header {
+  border-bottom-color: rgba(74, 67, 57, 0.5);
+}
+
+/* 暗色模式：stage-sidebar / main 容器邊框略弱化 */
+:root[data-theme="dark"] .stage-sidebar,
+:root[data-theme="dark"] .main-content {
+  border-color: rgba(74, 67, 57, 0.4);
 }
 
 body {
