@@ -1,12 +1,47 @@
 import json
 from typing import Any
 from .base_agent import BaseAgent, AgentContext
-from ..llm.base_provider import MessageRole
+from ..llm.base_provider import LLMMessage, MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
 
 
 class QuestionGeneratorAgent(BaseAgent):
+    async def _parse_or_repair_json(self, raw_text: str) -> dict[str, Any]:
+        """解析 LLM 回傳的 JSON；失敗時最多重試兩次請 LLM 修復格式。"""
+        candidate = extract_json(raw_text)
+        for attempt in range(3):
+            try:
+                parsed = json.loads(candidate)
+                if not isinstance(parsed, dict) or not isinstance(parsed.get("questions"), list):
+                    raise ValueError("回傳 JSON 缺少 questions 陣列")
+                return parsed
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                self._log.warning(
+                    "QuestionGeneratorAgent JSON repair attempt=%d  error=%s",
+                    attempt + 1, e,
+                )
+                repair_system = (
+                    "你是 JSON 修復器。只輸出合法 JSON，不要任何額外文字。"
+                    "請確保字串內換行使用 \\n 且所有欄位間有逗號。"
+                )
+                repair_user = (
+                    "請將下列內容修正為合法 JSON，保持原本語意與欄位。\n"
+                    "必要欄位：questions(array)；每題：question_id, text, type, "
+                    "answer_mode, options, correct_option_id, difficulty, "
+                    "evidence_chunk_ids, key_concepts_tested, expected_answer_hints。\n"
+                    f"目前錯誤：{e}\n\n"
+                    f"{candidate}"
+                )
+                repaired = await self.llm.chat(
+                    [LLMMessage(role=MessageRole.USER, content=repair_user)],
+                    system_prompt=repair_system,
+                )
+                candidate = extract_json(repaired.content)
+        raise RuntimeError("QuestionGeneratorAgent JSON repair exhausted")
+
     def _format_evidence(self, stage: dict[str, Any], allowed_evidence: list[dict]) -> str:
         """優先用 allowed_evidence（DB source chunks），否則退回 stage.source_chunks。"""
         if allowed_evidence:
@@ -117,7 +152,7 @@ class QuestionGeneratorAgent(BaseAgent):
         response = await self.llm.chat(self._messages, system_prompt=system)
         self._reset()
 
-        data = json.loads(extract_json(response.content))
+        data = await self._parse_or_repair_json(response.content)
         for q in data.get("questions", []):
             q["answer_mode"] = question_mode or q.get("answer_mode") or "short_answer"
             if not isinstance(q.get("evidence_chunk_ids"), list):

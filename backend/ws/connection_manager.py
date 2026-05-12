@@ -5,7 +5,7 @@ from typing import Any
 
 class WebSocketManager:
     def __init__(self) -> None:
-        self._sid_to_ws: dict[str, WebSocket] = {}
+        self._sid_to_ws: dict[str, Any] = {}
         self._sid_to_user: dict[str, str] = {}
         self._sid_to_client: dict[str, str] = {}
         self._uid_client_to_sids: dict[str, dict[str, set[str]]] = defaultdict(

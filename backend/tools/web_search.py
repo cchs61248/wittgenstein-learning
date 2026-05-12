@@ -1,18 +1,19 @@
-import json
 from urllib.parse import quote_plus
-from urllib.request import urlopen
+
+import httpx
 
 
-def search_web(query: str, max_results: int = 3) -> list[dict]:
+async def search_web(query: str, max_results: int = 3) -> list[dict]:
     """
     Lightweight web search fallback for out-of-source student questions.
     Uses DuckDuckGo Instant Answer API (no key required).
     """
     q = quote_plus(query.strip())
     url = f"https://api.duckduckgo.com/?q={q}&format=json&no_html=1&skip_disambig=1"
-    with urlopen(url, timeout=8) as resp:
-        raw = resp.read().decode("utf-8")
-    data = json.loads(raw)
+    async with httpx.AsyncClient(timeout=8) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
 
     results: list[dict] = []
     abstract = (data.get("AbstractText") or "").strip()

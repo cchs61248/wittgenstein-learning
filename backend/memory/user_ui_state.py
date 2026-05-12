@@ -1,7 +1,7 @@
 """使用者跨裝置 UI 狀態（版面 prefs、書櫃順序）。"""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from ..db.database import get_db
@@ -40,7 +40,7 @@ async def put_ui_state(user_id: str, layout_by_session: dict[str, Any], bookshel
     state = {"v": 1, "layoutBySession": layout_by_session, "bookshelfOrder": order_clean}
     payload = json.dumps(state, ensure_ascii=False)
     db = await get_db()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     await db.execute(
         """INSERT INTO user_learning_profile (user_id, ui_state_json, updated_at)
            VALUES (?, ?, ?)

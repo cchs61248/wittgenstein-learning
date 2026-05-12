@@ -16,7 +16,7 @@ def extract_text(filename: str, raw_bytes: bytes) -> str:
             return _extract_text_plain(raw_bytes)
         elif suffix == ".pdf":
             return _extract_pdf(raw_bytes)
-        elif suffix in (".docx", ".doc"):
+        elif suffix == ".docx":
             return _extract_docx(raw_bytes)
         elif suffix == ".pptx":
             return _extract_pptx(raw_bytes)

@@ -171,6 +171,15 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass  # 欄位已存在，冪等跳過
 
+    # Migration 015：sessions 記錄該 session 使用的 upload file_ids，供刪除時 GC
+    try:
+        await _connection.execute(
+            "ALTER TABLE sessions ADD COLUMN source_file_ids_json TEXT DEFAULT '[]'"
+        )
+        await _connection.commit()
+    except Exception:
+        pass
+
 
 async def close_db() -> None:
     global _connection

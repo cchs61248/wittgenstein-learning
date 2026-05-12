@@ -1,7 +1,11 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from ..db.database import get_db
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 async def get_user_profile_summary(user_id: str) -> str:
@@ -135,7 +139,7 @@ async def update_concept_mastery(
                 ema_score, exposures,
                 json.dumps(existing_confusion, ensure_ascii=False),
                 json.dumps(existing_analogies, ensure_ascii=False),
-                datetime.utcnow(), user_id, concept_name,
+                _utcnow(), user_id, concept_name,
             ),
         )
     else:
@@ -147,7 +151,7 @@ async def update_concept_mastery(
                 user_id, concept_name, new_score,
                 json.dumps(existing_confusion, ensure_ascii=False),
                 json.dumps(existing_analogies, ensure_ascii=False),
-                datetime.utcnow(),
+                _utcnow(),
             ),
         )
     await db.commit()
@@ -165,7 +169,7 @@ async def update_user_profile(user_id: str, attempts_this_session: float) -> Non
         new_avg = 0.8 * row[0] + 0.2 * attempts_this_session
         await db.execute(
             "UPDATE user_learning_profile SET avg_attempts_per_stage = ?, updated_at = ? WHERE user_id = ?",
-            (new_avg, datetime.utcnow(), user_id),
+            (new_avg, _utcnow(), user_id),
         )
     else:
         await db.execute(

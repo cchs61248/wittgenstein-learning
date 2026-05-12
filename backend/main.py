@@ -61,13 +61,15 @@ ws_manager = WebSocketManager()
 async def _build_source_chunks_from_payload(
     p: dict,
     emit,
-) -> list[dict] | None:
+) -> tuple[list[dict], list[str]] | None:
     """
     從 start_session payload 組裝 source_chunks。
     支援新格式（sources 陣列）與舊格式（uploaded_file_id / content）。
+    回傳 (all_chunks, file_ids)；file_ids 供 session 刪除時 GC upload blob。
     回傳 None 表示已向客戶端送出錯誤，呼叫方應 continue。
     """
     sources_raw: list[dict] = p.get("sources") or []
+    file_ids: list[str] = []
 
     if sources_raw:
         # 新格式：多來源陣列
@@ -88,6 +90,7 @@ async def _build_source_chunks_from_payload(
                 except FileNotFoundError:
                     await emit({"type": "error", "payload": {"message": f"找不到已上傳檔案（{label}），請重新上傳"}})
                     return None
+                file_ids.append(file_id)
                 label = label or uploaded.get("filename", label)
                 text = extract_text(uploaded["filename"], uploaded["raw"])
             if text:
@@ -110,6 +113,7 @@ async def _build_source_chunks_from_payload(
             except FileNotFoundError:
                 await emit({"type": "error", "payload": {"message": "找不到已上傳檔案，請重新上傳"}})
                 return None
+            file_ids.append(uploaded_file_id)
             text = extract_text(uploaded["filename"], uploaded["raw"])
             label = uploaded.get("filename", "上傳的檔案")
         else:
@@ -134,7 +138,7 @@ async def _build_source_chunks_from_payload(
         await emit({"type": "error", "payload": {"message": "無法從文件中抽取內容，請確認檔案格式"}})
         return None
 
-    return all_chunks
+    return all_chunks, file_ids
 
 
 @app.websocket("/ws/{session_id}")
@@ -187,9 +191,10 @@ async def websocket_endpoint(
                     provider_name: str = p.get("provider", DEFAULT_PROVIDER)
                     model: str | None = p.get("model") or None
 
-                    source_chunks = await _build_source_chunks_from_payload(p, emit)
-                    if source_chunks is None:
+                    built = await _build_source_chunks_from_payload(p, emit)
+                    if built is None:
                         continue  # emit already sent
+                    source_chunks, source_file_ids = built
 
                     llm = create_provider(provider_name, model=model)
                     orchestrator = LearningOrchestrator(llm)
@@ -198,6 +203,7 @@ async def websocket_endpoint(
                         session_id=session_id,
                         user_id=user_id,
                         source_chunks=source_chunks,
+                        source_file_ids=source_file_ids,
                         target_depth=p.get("target_depth", "intermediate"),
                         question_mode=p.get("question_mode", "short_answer"),
                         provider_name=provider_name,

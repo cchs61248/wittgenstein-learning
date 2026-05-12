@@ -46,3 +46,17 @@ def load_upload(file_id: str) -> dict:
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["raw"] = blob_path.read_bytes()
     return meta
+
+
+def delete_upload(file_id: str) -> bool:
+    """刪除磁碟上的 upload blob 與 meta。回傳是否確實刪到任一檔案。"""
+    blob_path = _UPLOAD_DIR / f"{file_id}.bin"
+    meta_path = _UPLOAD_DIR / f"{file_id}{_META_SUFFIX}"
+    removed = False
+    for p in (blob_path, meta_path):
+        try:
+            p.unlink()
+            removed = True
+        except FileNotFoundError:
+            pass
+    return removed

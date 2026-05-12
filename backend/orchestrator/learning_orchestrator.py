@@ -193,20 +193,13 @@ class LearningOrchestrator:
         mastery_map: dict[str, float],
         stable_high: bool,
     ) -> tuple[int | None, list[dict]]:
-        # 優先走順序：若下一個 stage 尚未完成，直接前進，不做排名
+        # 優先走順序：若下一個 stage 尚未完成，直接前進
         seq_idx = current_idx + 1
-        if seq_idx < len(stages) and stages[seq_idx]["stage_id"] not in completed_stage_ids:
-            ranked = self._rank_next_stage_candidates(
-                stages=stages,
-                current_idx=current_idx,
-                completed_stage_ids=completed_stage_ids,
-                weak_concepts=weak_concepts,
-                mastery_map=mastery_map,
-                stable_high=stable_high,
-            )
-            return seq_idx, ranked
+        sequential_pending = (
+            seq_idx < len(stages)
+            and stages[seq_idx]["stage_id"] not in completed_stage_ids
+        )
 
-        # 順序 stage 已完成（或已到末尾），才用排名演算法選最佳待學節點
         ranked = self._rank_next_stage_candidates(
             stages=stages,
             current_idx=current_idx,
@@ -215,6 +208,11 @@ class LearningOrchestrator:
             mastery_map=mastery_map,
             stable_high=stable_high,
         )
+
+        if sequential_pending:
+            return seq_idx, ranked
+
+        # 順序 stage 已完成（或已到末尾），才用排名演算法選最佳待學節點
         if ranked:
             best = ranked[0]
             idx = next((i for i, s in enumerate(stages) if s["stage_id"] == best["stage_id"]), None)
@@ -387,6 +385,7 @@ class LearningOrchestrator:
         provider_name: str | None,
         model_name: str | None,
         emit: WSEmitter,
+        source_file_ids: list[str] | None = None,
     ) -> None:
         hash_seed = "".join(c["text"][:80] for c in source_chunks)
         content_hash = hashlib.sha256(hash_seed.encode()).hexdigest()[:16]
@@ -459,6 +458,7 @@ class LearningOrchestrator:
             provider_name=provider_name,
             model_name=model_name,
             question_mode=question_mode,
+            source_file_ids=source_file_ids or [],
         )
 
         await emit({
@@ -1375,7 +1375,7 @@ class LearningOrchestrator:
         web_context = ""
         if scope == "out_of_scope":
             try:
-                results = search_web(question, max_results=3)
+                results = await search_web(question, max_results=3)
                 if results:
                     web_context = "\n".join(
                         f"- {r['title']}: {r['snippet']} ({r['url']})"

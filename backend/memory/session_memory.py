@@ -1,7 +1,11 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from ..db.database import get_db
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 DECISION_HISTORY_MAX_PER_SESSION = 200
 
@@ -58,15 +62,18 @@ async def create_pending_session(
     provider_name: str | None = None,
     model_name: str | None = None,
     question_mode: str = "short_answer",
+    source_file_ids: list[str] | None = None,
 ) -> None:
     db = await get_db()
     pending_map = {"nodes": nodes, "summary": summary}
+    file_ids_json = json.dumps(source_file_ids or [], ensure_ascii=False)
     # UPSERT：若 session 已以 generating stub 存在，直接更新為 pending_confirmation
     await db.execute(
         """INSERT INTO sessions
            (session_id, user_id, content_hash, total_stages, raw_content_summary,
-            status, stages_json, pending_map_json, provider_name, model_name, question_mode, title)
-           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?, ?, ?)
+            status, stages_json, pending_map_json, provider_name, model_name,
+            question_mode, title, source_file_ids_json)
+           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              content_hash=excluded.content_hash,
              total_stages=excluded.total_stages,
@@ -78,6 +85,7 @@ async def create_pending_session(
              model_name=excluded.model_name,
              question_mode=excluded.question_mode,
              title=excluded.title,
+             source_file_ids_json=excluded.source_file_ids_json,
              updated_at=CURRENT_TIMESTAMP""",
         (
             session_id, user_id, content_hash, len(stages),
@@ -88,6 +96,7 @@ async def create_pending_session(
             model_name,
             question_mode,
             summary,
+            file_ids_json,
         ),
     )
     await db.commit()
@@ -99,7 +108,7 @@ async def activate_pending_session(session_id: str) -> None:
         """UPDATE sessions
            SET status = 'active', pending_map_json = NULL, updated_at = ?
            WHERE session_id = ?""",
-        (datetime.utcnow(), session_id),
+        (_utcnow(), session_id),
     )
     await db.commit()
 
@@ -120,7 +129,7 @@ async def complete_session(session_id: str) -> None:
     db = await get_db()
     await db.execute(
         "UPDATE sessions SET status = 'completed', updated_at = ? WHERE session_id = ?",
-        (datetime.utcnow(), session_id),
+        (_utcnow(), session_id),
     )
     await db.commit()
 
@@ -179,7 +188,7 @@ async def update_current_stage(session_id: str, stage_id: int) -> None:
     db = await get_db()
     await db.execute(
         "UPDATE sessions SET current_stage_id = ?, updated_at = ? WHERE session_id = ?",
-        (stage_id, datetime.utcnow(), session_id),
+        (stage_id, _utcnow(), session_id),
     )
     await db.commit()
 
@@ -506,14 +515,23 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> boo
 
 
 async def delete_session(session_id: str, user_id: str) -> bool:
-    """刪除 session 及相關學習記錄，但保留 concept_mastery（學習成效不刪）。"""
+    """刪除 session 及相關學習記錄與 upload blob，但保留 concept_mastery（學習成效不刪）。"""
+    from ..files.upload_store import delete_upload
+
     db = await get_db()
     async with db.execute(
-        "SELECT session_id FROM sessions WHERE session_id = ? AND user_id = ?",
+        "SELECT source_file_ids_json FROM sessions WHERE session_id = ? AND user_id = ?",
         (session_id, user_id),
     ) as cur:
-        if not await cur.fetchone():
-            return False
+        row = await cur.fetchone()
+    if not row:
+        return False
+
+    try:
+        file_ids = json.loads(row[0] or "[]")
+    except Exception:
+        file_ids = []
+
     for tbl in ("qa_records", "stage_progress", "source_chunks", "decision_records", "tutor_records"):
         await db.execute(f"DELETE FROM {tbl} WHERE session_id = ?", (session_id,))
     await db.execute(
@@ -521,6 +539,11 @@ async def delete_session(session_id: str, user_id: str) -> bool:
         (session_id, user_id),
     )
     await db.commit()
+
+    # 清理磁碟上的 upload blob（失敗不阻擋 session 刪除）
+    for fid in file_ids:
+        if isinstance(fid, str):
+            delete_upload(fid)
     return True
 
 

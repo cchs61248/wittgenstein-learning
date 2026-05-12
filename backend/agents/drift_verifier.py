@@ -78,19 +78,25 @@ class DriftVerifierAgent(BaseAgent):
                         "issue": f"chunk_id '{cc['chunk_id']}' 不存在於 source_chunks",
                     })
 
+        # 後端強制：只要任一 claim_check 未通過，aligned 必為 False（不信任 LLM 的 aligned 欄位）
+        llm_aligned = bool(data.get("aligned", False))
+        has_unsupported = any(not c.get("supported", True) for c in claim_checks)
+        aligned = llm_aligned and not has_unsupported
+
         result = {
-            "aligned": bool(data.get("aligned", False)),
+            "aligned": aligned,
             "issues": data.get("issues") or [],
             "missing_evidence": data.get("missing_evidence") or [],
             "revision_hint": str(data.get("revision_hint", "")).strip(),
             "claim_checks": claim_checks,
             "unsupported_claims": data.get("unsupported_claims") or [],
         }
-        aligned = result["aligned"]
         if not aligned:
             self._log.warning(
-                "DriftVerifier NOT aligned  session=%s  content_type=%s  issues=%s",
-                ctx.session_id, content_type, result["issues"],
+                "DriftVerifier NOT aligned  session=%s  content_type=%s  "
+                "llm_aligned=%s  has_unsupported=%s  issues=%s",
+                ctx.session_id, content_type, llm_aligned, has_unsupported,
+                result["issues"],
             )
         self._log_end(ctx, t0, {"aligned": aligned, "issues": len(result["issues"])})
         return result
