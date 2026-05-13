@@ -103,40 +103,44 @@
  * 5. 對比驗證：主文字 16:1 (AAA)、muted 9:1 (AAA)、accent 10:1 (AAA)
  */
 :root[data-theme="dark"] {
-  --bg: #1a1815;
-  --bg-card: #23211d;
-  --bg-hover: #2d2a25;
-  --bg-selected: #3a352d;
+  /* Notion 風：中性深灰（保留 0.5% 暖意保留品牌一絲味），消除 halation 與「米黃」感 */
+  --bg: #1d1d1c;
+  --bg-card: #252524;
+  --bg-hover: #2e2e2c;
+  --bg-selected: #383834;
 
-  --border: #2e2a24;
-  --border-strong: #4a4339;
+  --border: #2f2f2d;
+  --border-strong: #454540;
 
-  --text: #ebe4d4;
-  --text-muted: #b8ad99;
-  --text-subtle: #8a8175;
+  /* 文字：中性白 + 微暖（不再米黃），對比 ~13:1（AAA） */
+  --text: #e6e5e1;
+  --text-muted: #9b988f;
+  --text-subtle: #6d6b66;
 
-  --accent: #fbbf24;
-  --accent-hover: #fde047;
-  --accent-light: #fcd34d;
-  --accent-bg: rgba(251, 191, 36, 0.10);
-  --accent-border: rgba(251, 191, 36, 0.32);
+  /* accent：用於文字色（表格 ID、章節標題、徽章）— 柔和暖琥珀，避免「整片亮黃」 */
+  --accent: #c9a574;
+  --accent-hover: #d8b988;
+  --accent-light: #b89466;
+  --accent-bg: rgba(201, 165, 116, 0.10);
+  --accent-border: rgba(201, 165, 116, 0.28);
 
-  --secondary: #fb923c;
-  --secondary-bg: rgba(251, 146, 60, 0.08);
+  --secondary: #d49a6a;
+  --secondary-bg: rgba(212, 154, 106, 0.08);
 
+  /* CTA：按鈕底色、進度條尾端 — 保留亮橘，當作焦點色 */
   --cta: #fb923c;
   --cta-hover: #fdba74;
   --cta-shadow: rgba(251, 146, 60, 0.28);
 
-  --green: #6ee7b7;
-  --green-bg: rgba(110, 231, 183, 0.10);
-  --green-border: rgba(110, 231, 183, 0.30);
-  --yellow: #fcd34d;
-  --yellow-bg: rgba(252, 211, 77, 0.10);
-  --yellow-border: rgba(252, 211, 77, 0.28);
-  --red: #fca5a5;
-  --red-bg: rgba(252, 165, 165, 0.10);
-  --red-border: rgba(252, 165, 165, 0.28);
+  --green: #8db796;
+  --green-bg: rgba(141, 183, 150, 0.10);
+  --green-border: rgba(141, 183, 150, 0.28);
+  --yellow: #d4b574;
+  --yellow-bg: rgba(212, 181, 116, 0.10);
+  --yellow-border: rgba(212, 181, 116, 0.26);
+  --red: #d99595;
+  --red-bg: rgba(217, 149, 149, 0.10);
+  --red-border: rgba(217, 149, 149, 0.26);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
@@ -144,44 +148,42 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
   --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.6);
 
-  /* 補充 token：暖紙黑 */
-  --ambient-glow-1: rgba(251, 191, 36, 0.025);
-  --ambient-glow-2: rgba(251, 146, 60, 0.025);
-  --ambient-glow-3: rgba(60, 50, 35, 0.18);
-  --surface-elevated-start: #28251f;
-  --surface-elevated-mid: #23211d;
-  --surface-toggle-start: #28251f;
-  --surface-toggle-end: #2d2a23;
-  --surface-band-end: #23211d;
-  --scrollbar-track: #1f1d1a;
-  --scrollbar-thumb-start: #4a3f30;
-  --scrollbar-thumb-end: #6b5840;
-  --scrollbar-thumb-hover-start: #6b5840;
-  --scrollbar-thumb-hover-end: #8a7250;
-  --header-grad-start: #1f1d1a;
-  --header-grad-end: #252320;
-  --modal-scrim: rgba(0, 0, 0, 0.72);
-  --kicked-scrim: rgba(0, 0, 0, 0.78);
-  --sidebar-backdrop: rgba(0, 0, 0, 0.5);
+  /* 補充 token：Notion 風中性深灰 */
+  --ambient-glow-1: transparent;
+  --ambient-glow-2: transparent;
+  --ambient-glow-3: transparent;
+  --surface-elevated-start: #2a2a28;
+  --surface-elevated-mid: #252524;
+  --surface-toggle-start: #28272a;
+  --surface-toggle-end: #2e2e2c;
+  --surface-band-end: #252524;
+  --scrollbar-track: #1a1a19;
+  --scrollbar-thumb-start: #3a3a37;
+  --scrollbar-thumb-end: #555550;
+  --scrollbar-thumb-hover-start: #555550;
+  --scrollbar-thumb-hover-end: #6e6e68;
+  --header-grad-start: #1a1a19;
+  --header-grad-end: #232322;
+  --modal-scrim: rgba(0, 0, 0, 0.60);
+  --kicked-scrim: rgba(0, 0, 0, 0.68);
+  --sidebar-backdrop: rgba(0, 0, 0, 0.40);
   --btn-primary-text: #1a1815;
   --btn-primary-border: #fdba74;
   --btn-primary-active-shadow: rgba(0, 0, 0, 0.4);
-  --quote-rule: rgba(251, 191, 36, 0.32);
+  --quote-rule: rgba(201, 165, 116, 0.36);
   --info-fg: #93c5fd;
   --info-bg: rgba(59, 130, 246, 0.10);
   --info-border: rgba(147, 197, 253, 0.28);
   --danger-fg: #fca5a5;
   --danger-bg: rgba(248, 113, 113, 0.10);
   --auth-bg:
-    radial-gradient(ellipse 110% 80% at 50% -20%, rgba(251, 191, 36, 0.05), transparent 55%),
-    radial-gradient(ellipse 90% 70% at 100% 30%, rgba(251, 146, 60, 0.04), transparent 50%),
-    radial-gradient(ellipse 80% 60% at 0% 80%, rgba(60, 50, 35, 0.35), transparent 55%),
-    linear-gradient(165deg, #1a1815 0%, #23211d 50%, #28251f 100%);
-  --auth-dot: rgba(251, 191, 36, 0.04);
-  --auth-blob-1: #4a3f30;
-  --auth-blob-2: #6b5840;
-  --auth-blob-3: #3a352d;
-  --auth-svg-shadow: rgba(0, 0, 0, 0.6);
+    radial-gradient(ellipse 90% 70% at 0% 80%, rgba(50, 50, 45, 0.35), transparent 55%),
+    linear-gradient(165deg, #1d1d1c 0%, #252524 60%, #2a2a28 100%);
+  --auth-dot: rgba(201, 165, 116, 0.04);
+  --auth-blob-1: #353532;
+  --auth-blob-2: #45433f;
+  --auth-blob-3: #2a2a28;
+  --auth-svg-shadow: rgba(0, 0, 0, 0.5);
 }
 
 /* 暗色模式：AuthForm 暖色插畫降亮度/飽和讓它更和諧 */
@@ -194,9 +196,16 @@
   background: rgba(252, 165, 165, 0.08);
 }
 
-/* 暗色模式：brand-mark 內部裝飾邊框收斂（白色裝飾在暖紙黑底太刺眼）*/
+/* 暗色模式：brand-mark 內部裝飾邊框收斂（白色裝飾在深底太刺眼）*/
 :root[data-theme="dark"] .brand-mark::after {
-  border-color: rgba(26, 24, 21, 0.55);
+  border-color: rgba(29, 29, 28, 0.6);
+}
+
+/* 暗色模式：襯線字在純黑底容易擠成一團，加微 letter-spacing 增加可讀性 */
+:root[data-theme="dark"] .markdown-content,
+:root[data-theme="dark"] .markdown-content p,
+:root[data-theme="dark"] .markdown-content li {
+  letter-spacing: 0.01em;
 }
 
 /* 暗色模式：頂部彩色 brand bar 降飽和（避免太搶焦點）*/
@@ -220,6 +229,24 @@
 :root[data-theme="dark"] .stage-sidebar,
 :root[data-theme="dark"] .main-content {
   border-color: rgba(74, 67, 57, 0.4);
+}
+
+/* 暗色模式：active 狀態用亮一階的 accent 補回焦點（不影響其他「文字 accent」場景）*/
+:root[data-theme="dark"] .stage-current {
+  color: #e8c590;
+  background: rgba(232, 197, 144, 0.12);
+  border-color: rgba(232, 197, 144, 0.35);
+}
+:root[data-theme="dark"] .stage-current .stage-dot {
+  background: #e8c590;
+  box-shadow: 0 0 0 3px rgba(232, 197, 144, 0.28);
+}
+
+/* 暗色模式：tabs / 進行中徽章保持亮橘（焦點不被拖累）*/
+:root[data-theme="dark"] .book-status-badge.status-active {
+  color: var(--cta);
+  background: rgba(251, 146, 60, 0.12);
+  border-color: rgba(251, 146, 60, 0.30);
 }
 
 body {
