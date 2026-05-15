@@ -21,6 +21,7 @@ from ..utils.token_counter import TokenCounter
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..tools.web_search import search_web
 from .context_builder import build_adaptive_context
+from .debounced_writer import DebouncedExplanationWriter
 
 WSEmitter = Callable[[dict], Awaitable[None]]
 
@@ -635,71 +636,76 @@ class LearningOrchestrator:
         progress_md = build_progress_table(stages, stage_index)
         if not skip_progress_emit:
             await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
-        # 立即持久化：即使尚未收到第一段教師串流，重整後也能還原進度表、並走 _resume 而非重跑整段
-        await session_memory.store_stage_explanation(
-            session_id, stage["stage_id"],
-            _pack_persisted_explanation(progress_md, ""),
-        )
 
-        # 2. 串流講解（📖 + 🔗）
-        ctx = AgentContext(
-            session_id=session_id,
-            user_id=user_id,
-            task_payload={
-                "stage": stage,
-                "prev_stage_title": prev_stage["title"] if prev_stage else None,
-                "user_profile_summary": user_profile_summary,
-                "adaptive_context": adaptive_ctx,
-            },
-        )
-        full_explanation = ""
-        async for chunk in self.teacher.stream_explanation(ctx):
-            full_explanation += chunk
+        # 建立 debounced writer，所有 stage 期間的講解寫入都走它（含進度表前綴）
+        async def _pack_and_store(sid: str, st: int, teacher_text: str) -> None:
             await session_memory.store_stage_explanation(
-                session_id, stage["stage_id"],
-                _pack_persisted_explanation(progress_md, full_explanation),
+                sid, st, _pack_persisted_explanation(progress_md, teacher_text)
             )
-            await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
-        explanation_rewritten = False
-        explain_verify = await self._verify_grounding(
-            session_id=session_id,
-            user_id=user_id,
-            stage=stage,
-            content_type="explanation",
-            candidate_text=full_explanation,
+
+        writer = DebouncedExplanationWriter(
+            store_fn=_pack_and_store,
+            session_id=session_id, stage_id=stage["stage_id"],
+            min_interval_s=0.5, min_delta_chars=200,
         )
-        if not explain_verify.get("aligned", False):
-            guidance = explain_verify.get("revision_hint") or "請僅依據 source_chunks 重寫，避免教材外推。"
-            retry_ctx = AgentContext(
+        # 立即先寫保底進度表（teacher 為空字串）— 重整後可從 _resume_from_stored 走還原路徑。
+        # writer 的初始 _latest / _last_written 同為 ""，update("")+flush() 不會觸發寫入，
+        # 故此處直接呼叫 _pack_and_store 種一筆基線。
+        await _pack_and_store(session_id, stage["stage_id"], "")
+
+        try:
+            # 2. 串流講解（📖 + 🔗）
+            ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
                 task_payload={
-                    "stage": {
-                        **stage,
-                        "content": stage.get("content", "") + f"\n\n（對齊修正要求：{guidance}）",
-                    },
+                    "stage": stage,
                     "prev_stage_title": prev_stage["title"] if prev_stage else None,
                     "user_profile_summary": user_profile_summary,
                     "adaptive_context": adaptive_ctx,
                 },
             )
             full_explanation = ""
-            async for chunk in self.teacher.stream_explanation(retry_ctx):
+            async for chunk in self.teacher.stream_explanation(ctx):
                 full_explanation += chunk
-                await session_memory.store_stage_explanation(
-                    session_id, stage["stage_id"],
-                    _pack_persisted_explanation(progress_md, full_explanation),
+                await writer.update(full_explanation)
+                await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
+            explanation_rewritten = False
+            explain_verify = await self._verify_grounding(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                content_type="explanation",
+                candidate_text=full_explanation,
+            )
+            if not explain_verify.get("aligned", False):
+                guidance = explain_verify.get("revision_hint") or "請僅依據 source_chunks 重寫，避免教材外推。"
+                retry_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={
+                        "stage": {
+                            **stage,
+                            "content": stage.get("content", "") + f"\n\n（對齊修正要求：{guidance}）",
+                        },
+                        "prev_stage_title": prev_stage["title"] if prev_stage else None,
+                        "user_profile_summary": user_profile_summary,
+                        "adaptive_context": adaptive_ctx,
+                    },
                 )
-            explanation_rewritten = True
-        if explanation_rewritten:
-            await emit({"type": "explanation_reset", "payload": {}})
-            await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
-            await emit({"type": "explanation_chunk", "payload": {"chunk": full_explanation, "is_final": False}})
-        wm.current_explanation = full_explanation
-        await session_memory.store_stage_explanation(
-            session_id, stage["stage_id"],
-            _pack_persisted_explanation(progress_md, full_explanation),
-        )
+                full_explanation = ""
+                async for chunk in self.teacher.stream_explanation(retry_ctx):
+                    full_explanation += chunk
+                    await writer.update(full_explanation)
+                explanation_rewritten = True
+            if explanation_rewritten:
+                await emit({"type": "explanation_reset", "payload": {}})
+                await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
+                await emit({"type": "explanation_chunk", "payload": {"chunk": full_explanation, "is_final": False}})
+            wm.current_explanation = full_explanation
+        finally:
+            # 確保即便串流／drift 修正中途拋例外，最後仍寫一次最新狀態
+            await writer.flush()
 
         # 3. 提取教學意圖（non-streaming call，供問題生成器對齊）
         teaching_intent = await self.teacher.extract_teaching_intent(full_explanation, stage)
