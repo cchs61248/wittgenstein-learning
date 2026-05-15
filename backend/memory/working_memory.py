@@ -26,6 +26,7 @@ class WorkingMemory:
     source_corpus: str = ""
     question_mode: str = "short_answer"
     current_teaching_intent: Optional[dict] = None
+    current_generation_id: Optional[str] = None
 
     def get_compressed_history(self, max_turns: int = 3) -> list[dict]:
         recent = self.stage_turns[-max_turns:]
