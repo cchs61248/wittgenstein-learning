@@ -79,6 +79,35 @@ def build_progress_table(stages: list[dict], current_idx: int) -> str:
     return "".join(lines)
 
 
+# 受 generation_id 保護的 emit 包裝
+# - 對「會被串流疊代取代」的訊息類型自動附帶 generation_id 並比對當前
+# - 對系統訊息（error / kicked / explanation_complete 等）直接通過
+_GENERATION_FILTERED_TYPES = {
+    "explanation_chunk",
+    "explanation_reset",
+}
+
+
+def make_generation_scoped_emit(base_emit, generation_id: str, get_current):
+    """
+    生成一個 emit 函式：
+    - 若訊息類型在 _GENERATION_FILTERED_TYPES 中：
+      * 比對 get_current() != generation_id 時直接丟棄（不呼叫 base_emit）
+      * 否則 payload 自動補上 generation_id 後 emit
+    - 其他訊息直接通過。
+    """
+    async def scoped_emit(msg: dict) -> None:
+        msg_type = msg.get("type")
+        if msg_type in _GENERATION_FILTERED_TYPES:
+            if get_current() != generation_id:
+                return  # 自己已被取代，靜默丟棄
+            payload = dict(msg.get("payload") or {})
+            payload["generation_id"] = generation_id
+            msg = {**msg, "payload": payload}
+        await base_emit(msg)
+    return scoped_emit
+
+
 class LearningOrchestrator:
     def __init__(self, llm: BaseLLMProvider):
         tc = TokenCounter()
