@@ -141,6 +141,40 @@ async def _build_source_chunks_from_payload(
     return all_chunks, file_ids
 
 
+async def _wait_or_lookup_cache(
+    key: str,
+    timeout_s: float,
+    cache_lookup,    # Optional[Callable[[], Awaitable[Optional[dict]]]]
+    emit_cached,     # Optional[Callable[[dict], Awaitable[None]]]
+) -> bool:
+    """
+    若 _active_generations 已有相同 key 的舊任務：
+    - 等待最多 timeout_s
+    - 等完後（不論 timeout 或正常結束）若提供 cache_lookup，呼叫之；命中則 emit_cached 並回傳 True
+    - 否則回傳 False（呼叫端應繼續跑新任務）
+    若沒有舊任務直接回傳 False。
+    """
+    prev = _active_generations.get(key)
+    if not prev:
+        return False
+    try:
+        await asyncio.wait_for(prev.wait(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        pass
+    if cache_lookup is None:
+        return False
+    try:
+        cached = await cache_lookup()
+    except Exception as e:
+        ws_logger().warning("dedup cache lookup failed for key=%s: %s", key, e)
+        return False
+    if cached is None:
+        return False
+    if emit_cached:
+        await emit_cached(cached)
+    return True
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -187,31 +221,56 @@ async def websocket_endpoint(
             )
 
             if msg_type == "start_session":
+                _start_key = f"{session_id}:start"
+
+                async def _cache_lookup():
+                    row = await session_memory.get_session(session_id)
+                    if row and row.get("stages_json"):
+                        return {"session_row": row}
+                    return None
+
+                async def _emit_cached(_cached):
+                    # 已存在，靜默忽略重複觸發；resume_session 路徑會接手
+                    await emit({"type": "session_generating", "payload": {"session_id": session_id}})
+
+                hit = await _wait_or_lookup_cache(
+                    _start_key, timeout_s=300,
+                    cache_lookup=_cache_lookup, emit_cached=_emit_cached,
+                )
+                if hit:
+                    continue
+
+                _start_evt = asyncio.Event()
+                _active_generations[_start_key] = _start_evt
                 try:
-                    provider_name: str = p.get("provider", DEFAULT_PROVIDER)
-                    model: str | None = p.get("model") or None
+                    try:
+                        provider_name: str = p.get("provider", DEFAULT_PROVIDER)
+                        model: str | None = p.get("model") or None
 
-                    built = await _build_source_chunks_from_payload(p, emit)
-                    if built is None:
-                        continue  # emit already sent
-                    source_chunks, source_file_ids = built
+                        built = await _build_source_chunks_from_payload(p, emit)
+                        if built is None:
+                            continue  # emit already sent
+                        source_chunks, source_file_ids = built
 
-                    llm = create_provider(provider_name, model=model)
-                    orchestrator = LearningOrchestrator(llm)
-                    _orchestrators[session_id] = orchestrator
-                    await orchestrator.start_session(
-                        session_id=session_id,
-                        user_id=user_id,
-                        source_chunks=source_chunks,
-                        source_file_ids=source_file_ids,
-                        target_depth=p.get("target_depth", "intermediate"),
-                        question_mode=p.get("question_mode", "short_answer"),
-                        provider_name=provider_name,
-                        model_name=model,
-                        emit=emit,
-                    )
-                except Exception as e:
-                    await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
+                        llm = create_provider(provider_name, model=model)
+                        orchestrator = LearningOrchestrator(llm)
+                        _orchestrators[session_id] = orchestrator
+                        await orchestrator.start_session(
+                            session_id=session_id,
+                            user_id=user_id,
+                            source_chunks=source_chunks,
+                            source_file_ids=source_file_ids,
+                            target_depth=p.get("target_depth", "intermediate"),
+                            question_mode=p.get("question_mode", "short_answer"),
+                            provider_name=provider_name,
+                            model_name=model,
+                            emit=emit,
+                        )
+                    except Exception as e:
+                        await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
+                finally:
+                    _start_evt.set()
+                    _active_generations.pop(_start_key, None)
 
             elif msg_type == "confirm_map":
                 orch = _orchestrators.get(session_id)
