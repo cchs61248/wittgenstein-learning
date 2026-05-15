@@ -420,6 +420,7 @@ export default function App() {
         break;
       case 'session_started':
         setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
+        useSessionStore.getState().setCurrentGenerationId(null);
         if (useSessionStore.getState().pendingAdvanceStageId === null) {
           useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
         }
@@ -427,6 +428,15 @@ export default function App() {
         break;
       case 'explanation_chunk': {
         const st = useSessionStore.getState();
+        const gid = msg.payload.generation_id;
+        // 過時 generation 的 chunk 丟棄（避免 stale loading state）
+        if (gid && st.currentGenerationId && gid !== st.currentGenerationId) {
+          break;
+        }
+        // 第一次見到 generation_id 就鎖定它
+        if (gid && !st.currentGenerationId) {
+          st.setCurrentGenerationId(gid);
+        }
         if (!msg.payload.is_final && st.pendingAdvanceStageId === null) {
           if (!st.isExplanationLoading) {
             st.beginExplanationLoading(st.currentStageId);
@@ -484,6 +494,7 @@ export default function App() {
         })));
         break;
       case 'session_snapshot': {
+        useSessionStore.getState().setCurrentGenerationId(null);
         const curStageId = useSessionStore.getState().currentStageId;
         const filteredExpl: Record<number, string> = {};
         for (const [k, v] of Object.entries(msg.payload.stage_explanations)) {

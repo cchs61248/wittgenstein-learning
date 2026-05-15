@@ -39,6 +39,7 @@ export interface SessionStartedPayload {
 export interface ExplanationChunkPayload {
   chunk: string;
   is_final: boolean;
+  generation_id?: string;
 }
 
 export interface ExplanationCompletePayload {

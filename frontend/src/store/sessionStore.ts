@@ -29,6 +29,8 @@ interface SessionState {
   sessionId: string | null;
   stages: StageWithStatus[];
   currentStageId: number | null;
+  currentGenerationId: string | null;
+  setCurrentGenerationId: (id: string | null) => void;
   setSession: (sessionId: string, stages: StageInfo[], stageStatuses?: Record<string, string>) => void;
 
   // 講解
@@ -231,6 +233,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   sessionId: localStorage.getItem('wl_session_id'),
   stages: [],
   currentStageId: null,
+  currentGenerationId: null,
+  setCurrentGenerationId: (id) => set({ currentGenerationId: id }),
   setSession: (sessionId, stages, stageStatuses?) => {
     localStorage.setItem('wl_session_id', sessionId);
     set((s) => {
@@ -387,6 +391,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         isExplanationLoading: false,
         isRetryLoading: false,
         stageExplanations: updated,
+        currentGenerationId: null,
       };
     }),
   selectedStageId: null,
@@ -661,6 +666,7 @@ export const useSessionStore = create<SessionState>((set) => ({
               : st.status,
         })),
         currentStageId: nextStageId,
+        currentGenerationId: null,
         explanationText: '',
         isStreaming: false,
         isExplanationLoading: nextStageId !== null && !nextExpl[nextStageId],
@@ -705,6 +711,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     pendingNextQuestion: null,
     isAwaitingFeedback: false,
     tutorReply: null,
+    currentGenerationId: null,
   }),
   clearSession: () => {
     localStorage.removeItem('wl_session_id');
@@ -719,6 +726,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       sessionId: null,
       stages: [],
       currentStageId: null,
+      currentGenerationId: null,
       explanationText: '',
       isStreaming: false,
       currentQuestion: null,
