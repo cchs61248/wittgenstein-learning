@@ -598,6 +598,12 @@ class LearningOrchestrator:
     ) -> None:
         _t_stage = time.perf_counter()
         wm = get_working_memory(session_id)
+        wm.current_generation_id = uuid.uuid4().hex[:12]
+        emit = make_generation_scoped_emit(
+            emit,
+            generation_id=wm.current_generation_id,
+            get_current=lambda: wm.current_generation_id,
+        )
         wm.reset_for_new_stage(stages[stage_index]["stage_id"])
         wm.question_mode = question_mode
         wm.source_corpus = self._build_source_corpus(stages)
@@ -1564,6 +1570,12 @@ class LearningOrchestrator:
         emit: WSEmitter,
     ) -> None:
         wm = get_working_memory(session_id)
+        wm.current_generation_id = uuid.uuid4().hex[:12]
+        emit = make_generation_scoped_emit(
+            emit,
+            generation_id=wm.current_generation_id,
+            get_current=lambda: wm.current_generation_id,
+        )
         wm.reset_for_new_stage(stages[stage_index]["stage_id"])
         stage = stages[stage_index]
 
