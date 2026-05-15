@@ -1543,10 +1543,13 @@ class LearningOrchestrator:
         if stored_progress and stored_progress["attempts"] > 1:
             wm.current_attempt = stored_progress["attempts"]
         _stored_best_score = stored_progress["best_score"] if stored_progress else 0.0
+        existing_status = (stored_progress or {}).get("status", "in_progress")
 
         await session_memory.update_current_stage(session_id, stage["stage_id"])
+        # 不要降級已完成章節 — 保留 DB 中的 completed status
         await session_memory.upsert_stage_progress(
-            session_id, stage["stage_id"], "in_progress",
+            session_id, stage["stage_id"],
+            "completed" if existing_status == "completed" else "in_progress",
             wm.current_attempt,  # 保留已持久化的輪次，不歸零
             _stored_best_score,  # 保留已記錄的最佳分數
             {},
@@ -1739,6 +1742,12 @@ class LearningOrchestrator:
                 },
             })
         elif qa_records:
+            # 純複習守門：若此 stage 在 DB 中已 completed，且所有題目都答過，
+            # 表示使用者只是切回來看，不應再次呼叫 _make_progress_decision
+            #（會造成重複 decision_record 寫入、可能觸發 advance → run_stage 重跑）。
+            if existing_status == "completed":
+                return
+
             # 所有 stored_questions 都已回答。需判斷兩種情境：
             # (A) 正常完成：呼叫 _make_progress_decision
             # (B) Race condition：retry 已決策（current_attempt 已 +1 並持久化），
