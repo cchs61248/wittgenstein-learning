@@ -194,22 +194,6 @@ function loadStageDecisions(): Record<number, StageDecisionPayload> {
   }
 }
 
-function selectedStageKey(sid: string | null): string | null {
-  return sid ? `wl_selected_stage_${sid}` : null;
-}
-
-function loadSelectedStage(): number | null {
-  try {
-    const sid = localStorage.getItem('wl_session_id');
-    const key = selectedStageKey(sid);
-    if (!key) return null;
-    const raw = localStorage.getItem(key);
-    return raw !== null ? Number(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
 const DECISION_HISTORY_MAX = 200;
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -377,9 +361,6 @@ export const useSessionStore = create<SessionState>((set) => ({
         decisionHistory: isNewSession ? [] : s.decisionHistory,
         stageDecisions: isNewSession ? {} : s.stageDecisions,
         stageQuestions: isNewSession ? {} : s.stageQuestions,
-        // 切換 session 時重抓該 session 的 selectedStageId（持久化在 wl_selected_stage_${sid}）
-        // 同 session 更新（isNewSession=false）保留現有 selection
-        ...(isNewSession ? { selectedStageId: loadSelectedStage() } : {}),
         ...stageReset,
       };
     });
@@ -443,19 +424,8 @@ export const useSessionStore = create<SessionState>((set) => ({
         currentGenerationId: null,
       };
     }),
-  selectedStageId: loadSelectedStage(),
-  setSelectedStage: (id) =>
-    set((s) => {
-      const key = selectedStageKey(s.sessionId);
-      if (key) {
-        if (id === null) {
-          localStorage.removeItem(key);
-        } else {
-          localStorage.setItem(key, String(id));
-        }
-      }
-      return { selectedStageId: id };
-    }),
+  selectedStageId: null,
+  setSelectedStage: (id) => set({ selectedStageId: id }),
 
   currentQuestion: null,
   lastFeedback: null,
@@ -761,8 +731,6 @@ export const useSessionStore = create<SessionState>((set) => ({
   advanceStage: (nextStageId) =>
     set((s) => {
       localStorage.removeItem('wl_answer_pending');
-      const selKey = selectedStageKey(s.sessionId);
-      if (selKey) localStorage.removeItem(selKey);
       const updatedStageQaHistories = s.currentStageId !== null && s.qaHistory.length > 0
         ? { ...s.stageQaHistories, [s.currentStageId]: s.qaHistory }
         : s.stageQaHistories;
@@ -835,9 +803,6 @@ export const useSessionStore = create<SessionState>((set) => ({
     currentGenerationId: null,
   }),
   clearSession: () => {
-    const prevSid = localStorage.getItem('wl_session_id');
-    const selKey = selectedStageKey(prevSid);
-    if (selKey) localStorage.removeItem(selKey);
     localStorage.removeItem('wl_session_id');
     localStorage.removeItem('wl_provider');
     localStorage.removeItem('wl_model');
