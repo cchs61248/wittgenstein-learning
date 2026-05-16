@@ -86,6 +86,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
   const stageQaHistories = useSessionStore((s) => s.stageQaHistories);
   const stageDecisions = useSessionStore((s) => s.stageDecisions);
   const stageSourceChunks = useSessionStore((s) => s.stageSourceChunks);
+  const decisionHistory = useSessionStore((s) => s.decisionHistory);
   const [answer, setAnswer] = useState('');
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -95,6 +96,9 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
   const reviewingCompletedStage =
     selectedStageId !== null &&
     stages.some((s) => s.stage_id === selectedStageId && s.status === 'completed');
+  // 全 completed session 且使用者在「當前學習」視角 → 顯示課程地圖（取代殘留的 lastFeedback 卡片）
+  const allStagesCompleted = stages.length > 0 && stages.every((s) => s.status === 'completed');
+  const showCourseSummary = allStagesCompleted && selectedStageId === null && !currentQuestion;
 
   const reviewHistoryList: QaHistoryItem[] =
     reviewingCompletedStage && selectedStageId !== null
@@ -170,6 +174,67 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
   };
 
   const renderBody = () => {
+    if (showCourseSummary) {
+      const decisionLabel: Record<string, string> = {
+        advance: '前進下一章',
+        retry: '原章節重答',
+        remediate: '進入補強章節',
+        reteach: '進入重教章節',
+      };
+      return (
+        <div className="course-summary">
+          <div className="course-summary-header">
+            <h3 style={{ margin: '4px 0' }}>🎉 已完成所有章節</h3>
+            <p className="panel-placeholder" style={{ margin: '4px 0' }}>
+              以下是你的學習軌跡（共 {decisionHistory.length} 個決策節點）：
+            </p>
+          </div>
+          {decisionHistory.length > 0 ? (
+            <ol className="track-list" style={{ listStyle: 'none', padding: 0, margin: '8px 0' }}>
+              {decisionHistory.map((d, idx) => (
+                <li
+                  key={`${idx}-${d.at}`}
+                  className="track-item"
+                  style={{
+                    padding: '10px 12px',
+                    marginBottom: 8,
+                    borderLeft: '3px solid var(--accent, #7d8cc4)',
+                    background: 'var(--card-bg, rgba(125, 140, 196, 0.06))',
+                    borderRadius: 4,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600 }}>{idx + 1}. {d.stageTitle || `Stage ${d.stageId ?? '?'}`}</span>
+                    <span className={`score-badge ${d.bestScore >= 0.75 ? 'score-pass' : 'score-fail'}`}>
+                      {Math.round(d.bestScore * 100)} 分
+                    </span>
+                    <span className="question-type" style={{ fontSize: 11 }}>
+                      {decisionLabel[d.decision] ?? d.decision}
+                    </span>
+                  </div>
+                  {d.nextStageId !== null && (
+                    <p style={{ margin: '2px 0', fontSize: 12, opacity: 0.75 }}>
+                      → 前往 Stage {d.nextStageId}
+                      {d.nextStageScore !== null && d.nextStageScore !== undefined && (
+                        <span style={{ marginLeft: 6, opacity: 0.7 }}>
+                          （選擇分數 {d.nextStageScore.toFixed(2)}）
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="panel-placeholder">尚無學習軌跡記錄。</p>
+          )}
+          <p className="panel-placeholder" style={{ marginTop: 12, fontSize: 12 }}>
+            點側邊欄任一章節可回顧詳細答題記錄。
+          </p>
+        </div>
+      );
+    }
+
     if (reviewingCompletedStage) {
       if (reviewQaLoad === 'idle' || reviewQaLoad === 'loading') {
         return <p className="panel-placeholder">正在載入答題記錄…</p>;
