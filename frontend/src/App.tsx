@@ -155,7 +155,12 @@ export default function App() {
         : window.matchMedia('(max-width: 768px)').matches
     );
     setActivePage(p?.activePage === 'stats' ? 'stats' : 'learn');
-    useSessionStore.getState().setSelectedStage(p?.selectedStageId ?? null);
+    // 分辨 "prefs 從未寫入 selectedStageId (undefined)" vs "明確寫成 null"。
+    // 前者：保留 store 從 wl_selected_stage_${sid} 載入的值（覆寫 useEffect 還沒 trigger 的時序縫隙）。
+    // 後者：使用者明確切回「當前學習」，照 prefs 設為 null。
+    if (p?.selectedStageId !== undefined) {
+      useSessionStore.getState().setSelectedStage(p.selectedStageId);
+    }
   }, []);
 
   useEffect(() => {
