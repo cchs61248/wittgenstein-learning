@@ -25,6 +25,12 @@ from .utils.text_extractor import extract_text
 from .utils.chunker import build_source_chunks
 from .utils.logger import setup_logging, ws_logger
 from .ws.connection_manager import WebSocketManager
+from .ws.generation_handle import (
+    register as _gen_register,
+    get_active as _gen_get,
+    finish as _gen_finish,
+    cancel as _gen_cancel,
+)
 
 
 @asynccontextmanager
@@ -148,17 +154,17 @@ async def _wait_or_lookup_cache(
     emit_cached,     # Optional[Callable[[dict], Awaitable[None]]]
 ) -> bool:
     """
-    若 _active_generations 已有相同 key 的舊任務：
+    若 generation_handle registry 已有相同 key 的舊任務：
     - 等待最多 timeout_s
     - 等完後（不論 timeout 或正常結束）若提供 cache_lookup，呼叫之；命中則 emit_cached 並回傳 True
     - 否則回傳 False（呼叫端應繼續跑新任務）
     若沒有舊任務直接回傳 False。
     """
-    prev = _active_generations.get(key)
+    prev = _gen_get(key)
     if not prev:
         return False
     try:
-        await asyncio.wait_for(prev.wait(), timeout=timeout_s)
+        await asyncio.wait_for(prev.event.wait(), timeout=timeout_s)
     except asyncio.TimeoutError:
         pass
     if cache_lookup is None:
@@ -240,21 +246,20 @@ async def websocket_endpoint(
                 if hit:
                     continue
 
-                _start_evt = asyncio.Event()
-                _active_generations[_start_key] = _start_evt
-                try:
+                provider_name: str = p.get("provider", DEFAULT_PROVIDER)
+                model: str | None = p.get("model") or None
+
+                built = await _build_source_chunks_from_payload(p, emit)
+                if built is None:
+                    continue  # emit already sent
+                source_chunks, source_file_ids = built
+
+                llm = create_provider(provider_name, model=model)
+                orchestrator = LearningOrchestrator(llm)
+                _orchestrators[session_id] = orchestrator
+
+                async def _run_start():
                     try:
-                        provider_name: str = p.get("provider", DEFAULT_PROVIDER)
-                        model: str | None = p.get("model") or None
-
-                        built = await _build_source_chunks_from_payload(p, emit)
-                        if built is None:
-                            continue  # emit already sent
-                        source_chunks, source_file_ids = built
-
-                        llm = create_provider(provider_name, model=model)
-                        orchestrator = LearningOrchestrator(llm)
-                        _orchestrators[session_id] = orchestrator
                         await orchestrator.start_session(
                             session_id=session_id,
                             user_id=user_id,
@@ -268,9 +273,18 @@ async def websocket_endpoint(
                         )
                     except Exception as e:
                         await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
-                finally:
-                    _start_evt.set()
-                    _active_generations.pop(_start_key, None)
+                    finally:
+                        _gen_finish(_start_key)
+
+                task = asyncio.create_task(_run_start())
+                _gen_register(_start_key, task)
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    await emit({
+                        "type": "generation_cancelled",
+                        "payload": {"key": _start_key, "kind": "start_session"},
+                    })
 
             elif msg_type == "confirm_map":
                 _confirm_key = session_id
@@ -308,19 +322,27 @@ async def websocket_endpoint(
                     orch = LearningOrchestrator(llm)
                     _orchestrators[session_id] = orch
 
-                _gen_evt: asyncio.Event | None = asyncio.Event()
-                _active_generations[_confirm_key] = _gen_evt
+                async def _run_confirm():
+                    try:
+                        await orch.confirm_session(
+                            session_id=session_id,
+                            user_id=user_id,
+                            emit=emit,
+                        )
+                    except Exception as e:
+                        await emit({"type": "error", "payload": {"message": f"確認知識地圖失敗：{e}"}})
+                    finally:
+                        _gen_finish(_confirm_key)
+
+                task = asyncio.create_task(_run_confirm())
+                _gen_register(_confirm_key, task)
                 try:
-                    await orch.confirm_session(
-                        session_id=session_id,
-                        user_id=user_id,
-                        emit=emit,
-                    )
-                except Exception as e:
-                    await emit({"type": "error", "payload": {"message": f"確認知識地圖失敗：{e}"}})
-                finally:
-                    _gen_evt.set()
-                    _active_generations.pop(_confirm_key, None)
+                    await task
+                except asyncio.CancelledError:
+                    await emit({
+                        "type": "generation_cancelled",
+                        "payload": {"key": _confirm_key, "kind": "confirm_map"},
+                    })
 
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)
@@ -352,58 +374,74 @@ async def websocket_endpoint(
                 if await _wait_or_lookup_cache(_answer_key, 60, _ans_cache, _ans_emit):
                     continue
 
-                _answer_evt = asyncio.Event()
-                _active_generations[_answer_key] = _answer_evt
+                async def _run_answer():
+                    try:
+                        await orch.handle_answer(
+                            session_id=session_id,
+                            user_id=user_id,
+                            question_id=_question_id,
+                            answer=p["answer"],
+                            emit=emit,
+                        )
+                    finally:
+                        _gen_finish(_answer_key)
+
+                task = asyncio.create_task(_run_answer())
+                _gen_register(_answer_key, task)
                 try:
-                    await orch.handle_answer(
-                        session_id=session_id,
-                        user_id=user_id,
-                        question_id=_question_id,
-                        answer=p["answer"],
-                        emit=emit,
-                    )
-                finally:
-                    _answer_evt.set()
-                    _active_generations.pop(_answer_key, None)
+                    await task
+                except asyncio.CancelledError:
+                    await emit({
+                        "type": "generation_cancelled",
+                        "payload": {"key": _answer_key, "kind": "submit_answer"},
+                    })
 
             elif msg_type == "resume_session":
                 session_id_to_resume: str = p.get("session_id", session_id)
-                _resume_gen_evt: asyncio.Event | None = None
+                # 若此 session 有上一輪未完成的生成，先等它結束再 resume
+                _prev = _gen_get(session_id_to_resume)
+                if _prev:
+                    try:
+                        await asyncio.wait_for(_prev.event.wait(), timeout=300)
+                    except asyncio.TimeoutError:
+                        pass
+
+                session_row = await session_memory.get_session(session_id_to_resume)
+                provider_name: str = (
+                    p.get("provider")
+                    or (session_row.get("provider_name") if session_row else None)
+                    or DEFAULT_PROVIDER
+                )
+                model: str | None = (
+                    p.get("model")
+                    or (session_row.get("model_name") if session_row else None)
+                    or None
+                )
+                llm = create_provider(provider_name, model=model)
+                orchestrator = LearningOrchestrator(llm)
+                _orchestrators[session_id_to_resume] = orchestrator
+
+                async def _run_resume():
+                    try:
+                        await orchestrator.resume_session(
+                            session_id=session_id_to_resume,
+                            user_id=user_id,
+                            emit=emit,
+                        )
+                    except Exception as e:
+                        await emit({"type": "error", "payload": {"message": f"恢復會話失敗：{e}"}})
+                    finally:
+                        _gen_finish(session_id_to_resume)
+
+                task = asyncio.create_task(_run_resume())
+                _gen_register(session_id_to_resume, task)
                 try:
-                    # 若此 session 有上一輪未完成的生成，先等它結束再 resume
-                    _prev_resume_gen = _active_generations.get(session_id_to_resume)
-                    if _prev_resume_gen:
-                        try:
-                            await asyncio.wait_for(_prev_resume_gen.wait(), timeout=300)
-                        except asyncio.TimeoutError:
-                            pass
-                    session_row = await session_memory.get_session(session_id_to_resume)
-                    provider_name: str = (
-                        p.get("provider")
-                        or (session_row.get("provider_name") if session_row else None)
-                        or DEFAULT_PROVIDER
-                    )
-                    model: str | None = (
-                        p.get("model")
-                        or (session_row.get("model_name") if session_row else None)
-                        or None
-                    )
-                    llm = create_provider(provider_name, model=model)
-                    orchestrator = LearningOrchestrator(llm)
-                    _orchestrators[session_id_to_resume] = orchestrator
-                    _resume_gen_evt = asyncio.Event()
-                    _active_generations[session_id_to_resume] = _resume_gen_evt
-                    await orchestrator.resume_session(
-                        session_id=session_id_to_resume,
-                        user_id=user_id,
-                        emit=emit,
-                    )
-                except Exception as e:
-                    await emit({"type": "error", "payload": {"message": f"恢復會話失敗：{e}"}})
-                finally:
-                    if _resume_gen_evt:
-                        _resume_gen_evt.set()
-                        _active_generations.pop(session_id_to_resume, None)
+                    await task
+                except asyncio.CancelledError:
+                    await emit({
+                        "type": "generation_cancelled",
+                        "payload": {"key": session_id_to_resume, "kind": "resume_session"},
+                    })
 
             elif msg_type == "request_hint":
                 await emit({
@@ -447,18 +485,41 @@ async def websocket_endpoint(
                 if await _wait_or_lookup_cache(_tutor_key, 60, _tutor_cache, _tutor_emit):
                     continue
 
-                _tutor_evt = asyncio.Event()
-                _active_generations[_tutor_key] = _tutor_evt
+                async def _run_tutor():
+                    try:
+                        await orch.handle_student_question(
+                            session_id=session_id,
+                            question=_ask_question,
+                            stage_id=_ask_stage_id,
+                            emit=emit,
+                        )
+                    finally:
+                        _gen_finish(_tutor_key)
+
+                task = asyncio.create_task(_run_tutor())
+                _gen_register(_tutor_key, task)
                 try:
-                    await orch.handle_student_question(
-                        session_id=session_id,
-                        question=_ask_question,
-                        stage_id=_ask_stage_id,
-                        emit=emit,
-                    )
-                finally:
-                    _tutor_evt.set()
-                    _active_generations.pop(_tutor_key, None)
+                    await task
+                except asyncio.CancelledError:
+                    await emit({
+                        "type": "generation_cancelled",
+                        "payload": {"key": _tutor_key, "kind": "ask_tutor"},
+                    })
+
+            elif msg_type == "cancel_generation":
+                target_key = p.get("key")
+                if not target_key:
+                    # 沒指定 key 就嘗試取消該 session 任何 in-flight 的兩個常見來源
+                    cancelled = False
+                    for k in (session_id, f"{session_id}:tutor"):
+                        if await _gen_cancel(k):
+                            cancelled = True
+                    if not cancelled:
+                        _ws_log.info("cancel_generation: no in-flight task for session=%s", session_id)
+                else:
+                    ok = await _gen_cancel(target_key)
+                    if not ok:
+                        _ws_log.info("cancel_generation: key=%s not found", target_key)
 
     except (WebSocketDisconnect, RuntimeError):
         _ws_log.info("WS DISCONNECT  session=%s  user=%s", session_id, user_id)
@@ -472,9 +533,6 @@ async def websocket_endpoint(
 
 # 會話級 orchestrator 暫存（單 process 內有效）
 _orchestrators: dict[str, LearningOrchestrator] = {}
-
-# 追蹤正在生成的 session（session_id → Event），避免斷線重連時並發起多個 TeacherAgent
-_active_generations: dict[str, asyncio.Event] = {}
 
 
 @app.get("/health")
