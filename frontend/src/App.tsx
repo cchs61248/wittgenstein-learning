@@ -61,6 +61,7 @@ export default function App() {
     addTutorMessage,
     appendTutorChunk,
     clearStreamingTutor,
+    commitStreamingTutorAsCancelled,
     setTutorHistories,
     isTutorLoading,
     setPendingTutor,
@@ -592,6 +593,16 @@ export default function App() {
         clearStreamingTutor();
         addTutorMessage(msg.payload);
         break;
+      case 'generation_cancelled':
+        if (msg.payload.kind === 'ask_tutor') {
+          commitStreamingTutorAsCancelled();
+        }
+        // start_session/confirm_map/submit_answer/resume_session 取消後：partial
+        // explanation 由後端 DebouncedExplanationWriter 的 finally 寫入 DB；
+        // 前端只需停 loading 動畫，UI 端的 streaming buffer 會在下一個 explanation_chunk
+        // 或 resume_session snapshot 中自然被覆蓋/補回。
+        endExplanationLoading();
+        break;
       case 'kicked':
         wsRef.current?.close();
         bgWsRef.current?.close();
@@ -764,6 +775,23 @@ export default function App() {
     wsRef.current?.send({
       type: 'ask_tutor',
       payload: { session_id: sessionIdRef.current, question, stage_id: stageId },
+    });
+  };
+
+  const handleCancelTutor = () => {
+    if (!sessionIdRef.current) return;
+    wsRef.current?.send({
+      type: 'cancel_generation',
+      payload: { key: `${sessionIdRef.current}:tutor` },
+    });
+  };
+
+  const handleCancelExplanation = () => {
+    if (!sessionIdRef.current) return;
+    // 不指定 key — 後端 fallback 嘗試取消 session_id 上任何 in-flight 生成
+    wsRef.current?.send({
+      type: 'cancel_generation',
+      payload: {},
     });
   };
 
@@ -1055,11 +1083,12 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <ExplanationPanel ref={explanationScrollRef} />
+                  <ExplanationPanel ref={explanationScrollRef} onCancel={handleCancelExplanation} />
                 )}
                 <AskTutorPanel
                   currentStageId={selectedStageId ?? currentStageId}
                   onAskTutor={handleAskTutor}
+                  onCancel={handleCancelTutor}
                   isCollapsed={isAskTutorCollapsed}
                   onToggle={() => setIsAskTutorCollapsed((v) => !v)}
                   isLoading={isTutorLoading}

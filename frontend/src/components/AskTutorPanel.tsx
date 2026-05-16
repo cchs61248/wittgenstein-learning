@@ -10,6 +10,7 @@ const normalizeText = (text: string) => text.replace(/\\n/g, '\n');
 
 interface Props {
   onAskTutor: (question: string) => void;
+  onCancel: () => void;
   isCollapsed: boolean;
   onToggle: () => void;
   isLoading?: boolean;
@@ -77,7 +78,7 @@ function HistoryNote({
   );
 }
 
-export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = false, currentStageId }: Props) {
+export function AskTutorPanel({ onAskTutor, onCancel, isCollapsed, onToggle, isLoading = false, currentStageId }: Props) {
   const tutorHistoryMap = useSessionStore((s) => s.tutorHistory);
   const clearTutorHistory = useSessionStore((s) => s.clearTutorHistory);
   const deleteTutorMessage = useSessionStore((s) => s.deleteTutorMessage);
@@ -161,6 +162,9 @@ export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = f
                   <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
                     {normalizeText(streamingTutorAnswer)}
                   </ReactMarkdown>
+                </div>
+                <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+                  <button className="btn-ghost btn-sm" onClick={onCancel}>停止生成</button>
                 </div>
               </div>
             </div>

@@ -97,6 +97,7 @@ interface SessionState {
   streamingTutorAnswer: string;
   appendTutorChunk: (payload: { chunk: string; stage_id: number; question: string }) => void;
   clearStreamingTutor: () => void;
+  commitStreamingTutorAsCancelled: () => void;
   addTutorMessage: (msg: TutorReplyPayload) => void;
   setTutorHistories: (map: Record<number, TutorMessage[]>) => void;
   deleteTutorMessage: (stageId: number, recordId: number) => void;
@@ -462,6 +463,37 @@ export const useSessionStore = create<SessionState>((set) => ({
       streamingTutorQuestion: null,
       streamingTutorStageId: null,
       streamingTutorAnswer: '',
+    }),
+  commitStreamingTutorAsCancelled: () =>
+    set((s) => {
+      if (s.streamingTutorQuestion === null || s.streamingTutorStageId === null) {
+        return s;
+      }
+      const stageId = s.streamingTutorStageId;
+      const prev = s.tutorHistory[stageId] ?? [];
+      const cancelledMsg = {
+        question: s.streamingTutorQuestion,
+        answer: s.streamingTutorAnswer + '\n\n*（已取消）*',
+      };
+      const updated = {
+        ...s.tutorHistory,
+        [stageId]: [...prev, cancelledMsg],
+      };
+      if (s.sessionId) {
+        try {
+          localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated));
+        } catch {}
+      }
+      localStorage.removeItem('wl_tutor_pending');
+      return {
+        tutorHistory: updated,
+        streamingTutorQuestion: null,
+        streamingTutorStageId: null,
+        streamingTutorAnswer: '',
+        isTutorLoading: false,
+        pendingTutorQuestion: null,
+        pendingTutorStageId: null,
+      };
     }),
   addTutorMessage: (msg) =>
     set((s) => {

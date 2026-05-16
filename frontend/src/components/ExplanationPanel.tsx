@@ -58,7 +58,11 @@ function SourceReferenceSection({ referencedChunks }: { referencedChunks: RefChu
   );
 }
 
-export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationPanel(_props, ref) {
+interface ExplanationPanelProps {
+  onCancel?: () => void;
+}
+
+export const ExplanationPanel = forwardRef<HTMLDivElement, ExplanationPanelProps>(function ExplanationPanel({ onCancel }, ref) {
   const explanationText = useSessionStore((s) => s.explanationText);
   const isStreaming = useSessionStore((s) => s.isStreaming);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
@@ -204,6 +208,11 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{displayText}</ReactMarkdown>
         {isStreaming && !hasReviewBody && <span className="cursor-blink">▋</span>}
       </div>
+      {isStreaming && !hasReviewBody && onCancel && (
+        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+          <button className="btn-ghost btn-sm" onClick={onCancel}>停止生成</button>
+        </div>
+      )}
       {referencedChunks.length > 0 && (
         <SourceReferenceSection key={String(stageIdForDisplay)} referencedChunks={referencedChunks} />
       )}
