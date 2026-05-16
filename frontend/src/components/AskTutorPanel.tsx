@@ -83,6 +83,9 @@ export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = f
   const deleteTutorMessage = useSessionStore((s) => s.deleteTutorMessage);
   const token = useSessionStore((s) => s.token);
   const sessionId = useSessionStore((s) => s.sessionId);
+  const streamingTutorQuestion = useSessionStore((s) => s.streamingTutorQuestion);
+  const streamingTutorStageId = useSessionStore((s) => s.streamingTutorStageId);
+  const streamingTutorAnswer = useSessionStore((s) => s.streamingTutorAnswer);
   const stageHistory = currentStageId !== null && currentStageId !== undefined
     ? (tutorHistoryMap[currentStageId] ?? [])
     : [];
@@ -143,6 +146,25 @@ export function AskTutorPanel({ onAskTutor, isCollapsed, onToggle, isLoading = f
               {isLoading ? '發問中…' : '發問'}
             </button>
           </div>
+          {streamingTutorQuestion !== null && streamingTutorStageId === currentStageId && (
+            <div className="tutor-note tutor-note--streaming">
+              <div className="tutor-note-header" style={{ pointerEvents: 'none' }}>
+                <span className="tutor-note-idx">…</span>
+                <span className="tutor-note-question">
+                  {streamingTutorQuestion.length > 60 ? streamingTutorQuestion.slice(0, 60) + '…' : streamingTutorQuestion}
+                </span>
+                <span className="tutor-note-toggle-icon">輸入中</span>
+              </div>
+              <div className="tutor-note-body">
+                <p className="tutor-note-q-full">{streamingTutorQuestion}</p>
+                <div className="feedback-text markdown-content">
+                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {normalizeText(streamingTutorAnswer)}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            </div>
+          )}
           {stageHistory.length > 0 && (
             <div className="tutor-history-list">
               {[...stageHistory].reverse().map((item, reversedIdx) => (

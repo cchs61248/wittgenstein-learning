@@ -126,6 +126,12 @@ export interface TutorReplyPayload extends TutorMessage {
   scope?: TutorScope;
 }
 
+export interface TutorChunkPayload {
+  chunk: string;
+  stage_id: number;
+  question: string;
+}
+
 export interface SessionSnapshotPayload {
   stage_explanations: Record<string, string>;
   stage_qa_histories: Record<string, QaHistoryRecord[]>;
@@ -160,6 +166,7 @@ export type ServerMessage =
   | { type: 'qa_history'; payload: QaHistoryPayload }
   | { type: 'session_snapshot'; payload: SessionSnapshotPayload }
   | { type: 'resume_state'; payload: ResumeStatePayload }
+  | { type: 'tutor_chunk'; payload: TutorChunkPayload }
   | { type: 'tutor_reply'; payload: TutorReplyPayload }
   | { type: 'course_completed'; payload: { message: string } }
   | { type: 'kicked'; payload: { message: string } }

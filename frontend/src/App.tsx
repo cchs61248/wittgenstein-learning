@@ -59,6 +59,8 @@ export default function App() {
     endExplanationLoading,
     setQaHistory,
     addTutorMessage,
+    appendTutorChunk,
+    clearStreamingTutor,
     setTutorHistories,
     isTutorLoading,
     setPendingTutor,
@@ -583,7 +585,11 @@ export default function App() {
         }
         break;
       }
+      case 'tutor_chunk':
+        appendTutorChunk(msg.payload);
+        break;
       case 'tutor_reply':
+        clearStreamingTutor();
         addTutorMessage(msg.payload);
         break;
       case 'kicked':

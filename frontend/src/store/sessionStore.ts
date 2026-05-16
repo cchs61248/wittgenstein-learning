@@ -92,6 +92,11 @@ interface SessionState {
   pendingTutorStageId: number | null;
   setPendingTutor: (question: string, stageId: number | null) => void;
   clearPendingTutor: () => void;
+  streamingTutorQuestion: string | null;
+  streamingTutorStageId: number | null;
+  streamingTutorAnswer: string;
+  appendTutorChunk: (payload: { chunk: string; stage_id: number; question: string }) => void;
+  clearStreamingTutor: () => void;
   addTutorMessage: (msg: TutorReplyPayload) => void;
   setTutorHistories: (map: Record<number, TutorMessage[]>) => void;
   deleteTutorMessage: (stageId: number, recordId: number) => void;
@@ -224,6 +229,9 @@ export const useSessionStore = create<SessionState>((set) => ({
       isExplanationLoading: false,
       pendingTutorQuestion: null,
       pendingTutorStageId: null,
+      streamingTutorQuestion: null,
+      streamingTutorStageId: null,
+      streamingTutorAnswer: '',
       pendingAnswerQuestionId: null,
       pendingAnswer: null,
       isAwaitingFeedback: false,
@@ -431,6 +439,30 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_tutor_pending');
     set({ pendingTutorQuestion: null, pendingTutorStageId: null, isTutorLoading: false });
   },
+  streamingTutorQuestion: null,
+  streamingTutorStageId: null,
+  streamingTutorAnswer: '',
+  appendTutorChunk: (payload) =>
+    set((s) => {
+      // 新問題或不同 stage → 重啟累積；同問題 → append
+      if (
+        s.streamingTutorQuestion !== payload.question ||
+        s.streamingTutorStageId !== payload.stage_id
+      ) {
+        return {
+          streamingTutorQuestion: payload.question,
+          streamingTutorStageId: payload.stage_id,
+          streamingTutorAnswer: payload.chunk,
+        };
+      }
+      return { streamingTutorAnswer: s.streamingTutorAnswer + payload.chunk };
+    }),
+  clearStreamingTutor: () =>
+    set({
+      streamingTutorQuestion: null,
+      streamingTutorStageId: null,
+      streamingTutorAnswer: '',
+    }),
   addTutorMessage: (msg) =>
     set((s) => {
       const prev = s.tutorHistory[msg.stage_id] ?? [];
