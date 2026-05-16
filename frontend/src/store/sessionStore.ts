@@ -148,6 +148,10 @@ interface SessionState {
   // UI 狀態
   isConnected: boolean;
   setConnected: (v: boolean) => void;
+  reconnectAttempt: number | null;
+  setReconnectAttempt: (n: number | null) => void;
+  reconnectGaveUp: boolean;
+  setReconnectGaveUp: (v: boolean) => void;
   courseCompleted: boolean;
   setCourseCompleted: () => void;
   resetExplanation: () => void;
@@ -759,6 +763,10 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   isConnected: false,
   setConnected: (v) => set({ isConnected: v }),
+  reconnectAttempt: null,
+  reconnectGaveUp: false,
+  setReconnectAttempt: (n) => set({ reconnectAttempt: n }),
+  setReconnectGaveUp: (v) => set({ reconnectGaveUp: v }),
   courseCompleted: false,
   setCourseCompleted: () => set((s) => ({
     courseCompleted: true,
@@ -811,6 +819,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       decisionHistory: [],
       stageDecisions: {},
       isExplanationLoading: false,
+      reconnectAttempt: null,
+      reconnectGaveUp: false,
     });
   },
 }));
