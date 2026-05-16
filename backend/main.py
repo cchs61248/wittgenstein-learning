@@ -141,6 +141,40 @@ async def _build_source_chunks_from_payload(
     return all_chunks, file_ids
 
 
+async def _wait_or_lookup_cache(
+    key: str,
+    timeout_s: float,
+    cache_lookup,    # Optional[Callable[[], Awaitable[Optional[dict]]]]
+    emit_cached,     # Optional[Callable[[dict], Awaitable[None]]]
+) -> bool:
+    """
+    若 _active_generations 已有相同 key 的舊任務：
+    - 等待最多 timeout_s
+    - 等完後（不論 timeout 或正常結束）若提供 cache_lookup，呼叫之；命中則 emit_cached 並回傳 True
+    - 否則回傳 False（呼叫端應繼續跑新任務）
+    若沒有舊任務直接回傳 False。
+    """
+    prev = _active_generations.get(key)
+    if not prev:
+        return False
+    try:
+        await asyncio.wait_for(prev.wait(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        pass
+    if cache_lookup is None:
+        return False
+    try:
+        cached = await cache_lookup()
+    except Exception as e:
+        ws_logger().warning("dedup cache lookup failed for key=%s: %s", key, e)
+        return False
+    if cached is None:
+        return False
+    if emit_cached:
+        await emit_cached(cached)
+    return True
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -187,33 +221,75 @@ async def websocket_endpoint(
             )
 
             if msg_type == "start_session":
+                _start_key = f"{session_id}:start"
+
+                async def _cache_lookup():
+                    row = await session_memory.get_session(session_id)
+                    if row and row.get("stages_json"):
+                        return {"session_row": row}
+                    return None
+
+                async def _emit_cached(_cached):
+                    # 已存在，靜默忽略重複觸發；resume_session 路徑會接手
+                    await emit({"type": "session_generating", "payload": {"session_id": session_id}})
+
+                hit = await _wait_or_lookup_cache(
+                    _start_key, timeout_s=300,
+                    cache_lookup=_cache_lookup, emit_cached=_emit_cached,
+                )
+                if hit:
+                    continue
+
+                _start_evt = asyncio.Event()
+                _active_generations[_start_key] = _start_evt
                 try:
-                    provider_name: str = p.get("provider", DEFAULT_PROVIDER)
-                    model: str | None = p.get("model") or None
+                    try:
+                        provider_name: str = p.get("provider", DEFAULT_PROVIDER)
+                        model: str | None = p.get("model") or None
 
-                    built = await _build_source_chunks_from_payload(p, emit)
-                    if built is None:
-                        continue  # emit already sent
-                    source_chunks, source_file_ids = built
+                        built = await _build_source_chunks_from_payload(p, emit)
+                        if built is None:
+                            continue  # emit already sent
+                        source_chunks, source_file_ids = built
 
-                    llm = create_provider(provider_name, model=model)
-                    orchestrator = LearningOrchestrator(llm)
-                    _orchestrators[session_id] = orchestrator
-                    await orchestrator.start_session(
-                        session_id=session_id,
-                        user_id=user_id,
-                        source_chunks=source_chunks,
-                        source_file_ids=source_file_ids,
-                        target_depth=p.get("target_depth", "intermediate"),
-                        question_mode=p.get("question_mode", "short_answer"),
-                        provider_name=provider_name,
-                        model_name=model,
-                        emit=emit,
-                    )
-                except Exception as e:
-                    await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
+                        llm = create_provider(provider_name, model=model)
+                        orchestrator = LearningOrchestrator(llm)
+                        _orchestrators[session_id] = orchestrator
+                        await orchestrator.start_session(
+                            session_id=session_id,
+                            user_id=user_id,
+                            source_chunks=source_chunks,
+                            source_file_ids=source_file_ids,
+                            target_depth=p.get("target_depth", "intermediate"),
+                            question_mode=p.get("question_mode", "short_answer"),
+                            provider_name=provider_name,
+                            model_name=model,
+                            emit=emit,
+                        )
+                    except Exception as e:
+                        await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
+                finally:
+                    _start_evt.set()
+                    _active_generations.pop(_start_key, None)
 
             elif msg_type == "confirm_map":
+                _confirm_key = session_id
+
+                async def _confirm_cache():
+                    row = await session_memory.get_session(session_id)
+                    if row and row.get("status") and row["status"] != "pending_confirmation":
+                        return {"row": row}
+                    return None
+
+                async def _confirm_emit(_cached):
+                    # 上一輪 confirm 已完成 — 不重跑，靜默忽略（resume_session 會接手還原 UI）
+                    pass
+
+                if await _wait_or_lookup_cache(
+                    _confirm_key, 300, _confirm_cache, _confirm_emit,
+                ):
+                    continue
+
                 orch = _orchestrators.get(session_id)
                 if not orch:
                     # 重整後 in-memory orchestrator 遺失，新建一個並從 DB 恢復
@@ -231,15 +307,9 @@ async def websocket_endpoint(
                     llm = create_provider(provider_name, model=model)
                     orch = LearningOrchestrator(llm)
                     _orchestrators[session_id] = orch
-                # 若此 session 有上一輪未完成的生成，先等它結束再開始
-                _prev_gen = _active_generations.get(session_id)
-                if _prev_gen:
-                    try:
-                        await asyncio.wait_for(_prev_gen.wait(), timeout=300)
-                    except asyncio.TimeoutError:
-                        pass
+
                 _gen_evt: asyncio.Event | None = asyncio.Event()
-                _active_generations[session_id] = _gen_evt
+                _active_generations[_confirm_key] = _gen_evt
                 try:
                     await orch.confirm_session(
                         session_id=session_id,
@@ -250,56 +320,51 @@ async def websocket_endpoint(
                     await emit({"type": "error", "payload": {"message": f"確認知識地圖失敗：{e}"}})
                 finally:
                     _gen_evt.set()
-                    _active_generations.pop(session_id, None)
+                    _active_generations.pop(_confirm_key, None)
 
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)
-                if orch:
-                    _question_id = p["question_id"]
-                    _answer_key = f"{session_id}:answer:{_question_id}"
-                    _prev_answer = _active_generations.get(_answer_key)
-                    if _prev_answer:
-                        try:
-                            await asyncio.wait_for(_prev_answer.wait(), timeout=60)
-                        except asyncio.TimeoutError:
-                            pass
-                        try:
-                            all_qa = await session_memory.get_all_stage_qa_records(session_id)
-                            cached_qa = None
-                            for stage_records in all_qa.values():
-                                cached_qa = next(
-                                    (r for r in stage_records if r["question_id"] == _question_id),
-                                    None,
-                                )
-                                if cached_qa:
-                                    break
-                            if cached_qa:
-                                await emit({
-                                    "type": "feedback",
-                                    "payload": {
-                                        "question_id": _question_id,
-                                        "score": cached_qa["score"],
-                                        "feedback_text": cached_qa["feedback"],
-                                        "needs_clarification": False,
-                                        "clarification_question": None,
-                                    },
-                                })
-                        except Exception as e:
-                            _ws_log.warning("submit_answer dedup DB check failed: %s", e)
-                        continue
-                    _answer_evt = asyncio.Event()
-                    _active_generations[_answer_key] = _answer_evt
-                    try:
-                        await orch.handle_answer(
-                            session_id=session_id,
-                            user_id=user_id,
-                            question_id=_question_id,
-                            answer=p["answer"],
-                            emit=emit,
-                        )
-                    finally:
-                        _answer_evt.set()
-                        _active_generations.pop(_answer_key, None)
+                if not orch:
+                    continue
+                _question_id = p["question_id"]
+                _answer_key = f"{session_id}:answer:{_question_id}"
+
+                async def _ans_cache():
+                    all_qa = await session_memory.get_all_stage_qa_records(session_id)
+                    for records in all_qa.values():
+                        r = next((x for x in records if x["question_id"] == _question_id), None)
+                        if r:
+                            return r
+                    return None
+
+                async def _ans_emit(r):
+                    await emit({
+                        "type": "feedback",
+                        "payload": {
+                            "question_id": _question_id,
+                            "score": r["score"],
+                            "feedback_text": r["feedback"],
+                            "needs_clarification": False,
+                            "clarification_question": None,
+                        },
+                    })
+
+                if await _wait_or_lookup_cache(_answer_key, 60, _ans_cache, _ans_emit):
+                    continue
+
+                _answer_evt = asyncio.Event()
+                _active_generations[_answer_key] = _answer_evt
+                try:
+                    await orch.handle_answer(
+                        session_id=session_id,
+                        user_id=user_id,
+                        question_id=_question_id,
+                        answer=p["answer"],
+                        emit=emit,
+                    )
+                finally:
+                    _answer_evt.set()
+                    _active_generations.pop(_answer_key, None)
 
             elif msg_type == "resume_session":
                 session_id_to_resume: str = p.get("session_id", session_id)
@@ -348,54 +413,52 @@ async def websocket_endpoint(
 
             elif msg_type == "ask_tutor":
                 orch = _orchestrators.get(session_id)
-                if orch:
-                    raw_sid = p.get("stage_id")
-                    _ask_question = p.get("question", "").strip()
-                    _ask_stage_id = int(raw_sid) if raw_sid is not None else None
+                if not orch:
+                    continue
+                raw_sid = p.get("stage_id")
+                _ask_question = p.get("question", "").strip()
+                _ask_stage_id = int(raw_sid) if raw_sid is not None else None
+                _tutor_key = f"{session_id}:tutor"
 
-                    # 同 session 若有進行中的 ask_tutor，等它結束後再決定是否重跑
-                    _tutor_key = f"{session_id}:tutor"
-                    _prev_tutor = _active_generations.get(_tutor_key)
-                    if _prev_tutor:
-                        try:
-                            await asyncio.wait_for(_prev_tutor.wait(), timeout=60)
-                        except asyncio.TimeoutError:
-                            pass
-                        # 等待後查 DB：若上一輪已寫入答案，直接回傳快取，不重跑 LLM
-                        try:
-                            wm_chk = get_working_memory(session_id)
-                            sid_chk = _ask_stage_id if _ask_stage_id is not None else wm_chk.current_stage_id
-                            all_tutor = await session_memory.get_all_tutor_records(session_id)
-                            cached = next(
-                                (r for r in all_tutor.get(sid_chk, []) if r["question"] == _ask_question),
-                                None,
-                            )
-                            if cached:
-                                _cached_payload: dict = {
-                                    "question": _ask_question,
-                                    "answer": cached["answer"],
-                                    "in_scope": cached["in_scope"],
-                                    "stage_id": sid_chk,
-                                }
-                                if "id" in cached:
-                                    _cached_payload["id"] = cached["id"]
-                                await emit({"type": "tutor_reply", "payload": _cached_payload})
-                                continue  # 已有快取答案，跳過 LLM 重跑
-                        except Exception as e:
-                            _ws_log.warning("ask_tutor dedup DB check failed: %s", e)
+                async def _tutor_cache():
+                    wm_chk = get_working_memory(session_id)
+                    sid_chk = _ask_stage_id if _ask_stage_id is not None else wm_chk.current_stage_id
+                    all_tutor = await session_memory.get_all_tutor_records(session_id)
+                    cached = next(
+                        (r for r in all_tutor.get(sid_chk, []) if r["question"] == _ask_question),
+                        None,
+                    )
+                    if not cached:
+                        return None
+                    return {"record": cached, "stage_id": sid_chk}
 
-                    _tutor_evt = asyncio.Event()
-                    _active_generations[_tutor_key] = _tutor_evt
-                    try:
-                        await orch.handle_student_question(
-                            session_id=session_id,
-                            question=_ask_question,
-                            stage_id=_ask_stage_id,
-                            emit=emit,
-                        )
-                    finally:
-                        _tutor_evt.set()
-                        _active_generations.pop(_tutor_key, None)
+                async def _tutor_emit(found):
+                    cached = found["record"]
+                    _payload: dict = {
+                        "question": _ask_question,
+                        "answer": cached["answer"],
+                        "in_scope": cached["in_scope"],
+                        "stage_id": found["stage_id"],
+                    }
+                    if "id" in cached:
+                        _payload["id"] = cached["id"]
+                    await emit({"type": "tutor_reply", "payload": _payload})
+
+                if await _wait_or_lookup_cache(_tutor_key, 60, _tutor_cache, _tutor_emit):
+                    continue
+
+                _tutor_evt = asyncio.Event()
+                _active_generations[_tutor_key] = _tutor_evt
+                try:
+                    await orch.handle_student_question(
+                        session_id=session_id,
+                        question=_ask_question,
+                        stage_id=_ask_stage_id,
+                        emit=emit,
+                    )
+                finally:
+                    _tutor_evt.set()
+                    _active_generations.pop(_tutor_key, None)
 
     except (WebSocketDisconnect, RuntimeError):
         _ws_log.info("WS DISCONNECT  session=%s  user=%s", session_id, user_id)
