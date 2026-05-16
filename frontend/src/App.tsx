@@ -467,14 +467,21 @@ export default function App() {
         setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
         listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
-      case 'session_started':
+      case 'session_started': {
         setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
         useSessionStore.getState().setCurrentGenerationId(null);
-        if (useSessionStore.getState().pendingAdvanceStageId === null) {
-          useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
+        const stateAfter = useSessionStore.getState();
+        const curSid = stateAfter.currentStageId;
+        const statusMap = msg.payload.stage_statuses ?? {};
+        const curStageStatus = curSid !== null ? statusMap[String(curSid)] : undefined;
+        // 已完成的 stage 不開 loading — 否則 beginExplanationLoading 會把 stageExplanations[curSid]
+        // 從 cache 清掉，導致「返回當前學習」後顯示空白「等待學習開始」畫面
+        if (stateAfter.pendingAdvanceStageId === null && curStageStatus !== 'completed') {
+          stateAfter.beginExplanationLoading(curSid);
         }
         listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
+      }
       case 'explanation_chunk': {
         const st = useSessionStore.getState();
         const gid = msg.payload.generation_id;
