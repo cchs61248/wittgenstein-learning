@@ -36,6 +36,13 @@ function generateSessionId() {
   return 'sess_' + Math.random().toString(36).slice(2, 11);
 }
 
+// React 18 strict mode 在 dev 下會 mount→unmount→mount，init useEffect 第一次的
+// clearSession() 會清掉 wl_session_id，導致第二次 mount 讀到 null 後 fallback 到
+// getActiveSession（拿到「最近 active」未完成 session，無視使用者實際選的 completed session）。
+// 在 module load 時讀一次當下值，跨 strict-mode 兩次 mount 都用這個 snapshot。
+const initialSessionIdSnapshot: string | null =
+  typeof window !== 'undefined' ? localStorage.getItem('wl_session_id') : null;
+
 export default function App() {
   const { token, email, clearAuth } = useSessionStore();
   const {
@@ -231,8 +238,10 @@ export default function App() {
       clearSession();
       return;
     }
-    // 必須在 clearSession 之前讀取，clearSession 會移除 wl_session_id
-    const lastSessionId = localStorage.getItem('wl_session_id');
+    // 用 module-level snapshot 跨 React 18 strict-mode 兩次 mount。第一次 mount 的
+    // clearSession() 會清掉 localStorage.wl_session_id，第二次 mount 若直接 getItem
+    // 會拿到 null，導致 fallback 到 getActiveSession() 拿錯誤的 session。
+    const lastSessionId = initialSessionIdSnapshot;
     setBookshelf([]);
     clearSession(); // 切換帳號前清空舊帳號的 session state
     let cancelled = false;
@@ -467,14 +476,21 @@ export default function App() {
         setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
         listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
-      case 'session_started':
+      case 'session_started': {
         setSession(msg.payload.session_id, msg.payload.stages, msg.payload.stage_statuses);
         useSessionStore.getState().setCurrentGenerationId(null);
-        if (useSessionStore.getState().pendingAdvanceStageId === null) {
-          useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
+        const stateAfter = useSessionStore.getState();
+        const curSid = stateAfter.currentStageId;
+        const statusMap = msg.payload.stage_statuses ?? {};
+        const curStageStatus = curSid !== null ? statusMap[String(curSid)] : undefined;
+        // 已完成的 stage 不開 loading — 否則 beginExplanationLoading 會把 stageExplanations[curSid]
+        // 從 cache 清掉，導致「返回當前學習」後顯示空白「等待學習開始」畫面
+        if (stateAfter.pendingAdvanceStageId === null && curStageStatus !== 'completed') {
+          stateAfter.beginExplanationLoading(curSid);
         }
         listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
+      }
       case 'explanation_chunk': {
         const st = useSessionStore.getState();
         const gid = msg.payload.generation_id;

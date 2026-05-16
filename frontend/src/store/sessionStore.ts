@@ -287,9 +287,15 @@ export const useSessionStore = create<SessionState>((set) => ({
           }))
         : mappedStages;
       const currentStage = viewStages.find((st) => st.status === 'current');
+      // 全 completed session（無 current stage）優先 fallback 到「最後一個 completed」，
+      // 而非 stages[0]，符合「課程在這結束」的直覺與後端 _resume_from_stored 重 emit 的章節對齊
+      const lastCompletedStage = [...viewStages].reverse().find((st) => st.status === 'completed');
       const nextCurrentStageId = shouldHoldCurrentStage
         ? s.currentStageId
-        : currentStage?.stage_id ?? stages[0]?.stage_id ?? null;
+        : currentStage?.stage_id
+          ?? lastCompletedStage?.stage_id
+          ?? stages[0]?.stage_id
+          ?? null;
       const currentStageChanged =
         !isNewSession &&
         s.currentStageId !== null &&
@@ -303,6 +309,12 @@ export const useSessionStore = create<SessionState>((set) => ({
       if (stageQaHistories !== s.stageQaHistories) {
         localStorage.setItem('wl_stage_qa_histories', JSON.stringify(stageQaHistories));
       }
+      if (isNewSession) {
+        // 切到不同 session 時清掉跨 session 殘留的 pending state，避免下次重整時
+        // 從 localStorage 重新載回「AI 評估中」假象
+        localStorage.removeItem('wl_answer_pending');
+        localStorage.removeItem('wl_tutor_pending');
+      }
       const stageReset = isNewSession ? {
         explanationText: '',
         isStreaming: false,
@@ -312,6 +324,11 @@ export const useSessionStore = create<SessionState>((set) => ({
         lastDecision: null,
         pendingNextQuestion: null,
         isAwaitingFeedback: false,
+        pendingAnswer: null,
+        pendingAnswerQuestionId: null,
+        pendingTutorQuestion: null,
+        pendingTutorStageId: null,
+        isTutorLoading: false,
         courseCompleted: false,
         tutorReply: null,
         pendingAdvanceStageId: null,
