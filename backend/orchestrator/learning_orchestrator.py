@@ -1304,6 +1304,29 @@ class LearningOrchestrator:
                 session_id, user_id, stages, next_stage_idx, wm.question_mode, emit
             )
 
+    async def _stream_tutor_answer(
+        self,
+        *,
+        messages,
+        system_prompt: str,
+        emit: WSEmitter,
+        stage_id: int,
+        question: str,
+    ) -> str:
+        """串流產生 tutor 回答，每 chunk emit `tutor_chunk`，回傳完整字串。"""
+        parts: list[str] = []
+        async for chunk in self.teacher.llm.stream_chat(messages, system_prompt=system_prompt):
+            parts.append(chunk)
+            await emit({
+                "type": "tutor_chunk",
+                "payload": {
+                    "chunk": chunk,
+                    "stage_id": stage_id,
+                    "question": question,
+                },
+            })
+        return "".join(parts)
+
     async def handle_student_question(
         self,
         session_id: str,
@@ -1452,10 +1475,13 @@ class LearningOrchestrator:
                 ),
             )
         ]
-        ans_resp = await self.teacher.llm.chat(
-            answer_messages, system_prompt=SYSTEM_PROMPTS["tutor_reply"]
-        )
-        answer = ans_resp.content.strip()
+        answer = (await self._stream_tutor_answer(
+            messages=answer_messages,
+            system_prompt=SYSTEM_PROMPTS["tutor_reply"],
+            emit=emit,
+            stage_id=effective_stage_id,
+            question=question,
+        )).strip()
         record_id: int | None = None
         try:
             record_id = await session_memory.insert_tutor_record(

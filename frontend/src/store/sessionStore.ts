@@ -92,6 +92,12 @@ interface SessionState {
   pendingTutorStageId: number | null;
   setPendingTutor: (question: string, stageId: number | null) => void;
   clearPendingTutor: () => void;
+  streamingTutorQuestion: string | null;
+  streamingTutorStageId: number | null;
+  streamingTutorAnswer: string;
+  appendTutorChunk: (payload: { chunk: string; stage_id: number; question: string }) => void;
+  clearStreamingTutor: () => void;
+  commitStreamingTutorAsCancelled: () => void;
   addTutorMessage: (msg: TutorReplyPayload) => void;
   setTutorHistories: (map: Record<number, TutorMessage[]>) => void;
   deleteTutorMessage: (stageId: number, recordId: number) => void;
@@ -142,6 +148,10 @@ interface SessionState {
   // UI 狀態
   isConnected: boolean;
   setConnected: (v: boolean) => void;
+  reconnectAttempt: number | null;
+  setReconnectAttempt: (n: number | null) => void;
+  reconnectGaveUp: boolean;
+  setReconnectGaveUp: (v: boolean) => void;
   courseCompleted: boolean;
   setCourseCompleted: () => void;
   resetExplanation: () => void;
@@ -224,6 +234,9 @@ export const useSessionStore = create<SessionState>((set) => ({
       isExplanationLoading: false,
       pendingTutorQuestion: null,
       pendingTutorStageId: null,
+      streamingTutorQuestion: null,
+      streamingTutorStageId: null,
+      streamingTutorAnswer: '',
       pendingAnswerQuestionId: null,
       pendingAnswer: null,
       isAwaitingFeedback: false,
@@ -431,6 +444,61 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.removeItem('wl_tutor_pending');
     set({ pendingTutorQuestion: null, pendingTutorStageId: null, isTutorLoading: false });
   },
+  streamingTutorQuestion: null,
+  streamingTutorStageId: null,
+  streamingTutorAnswer: '',
+  appendTutorChunk: (payload) =>
+    set((s) => {
+      // 新問題或不同 stage → 重啟累積；同問題 → append
+      if (
+        s.streamingTutorQuestion !== payload.question ||
+        s.streamingTutorStageId !== payload.stage_id
+      ) {
+        return {
+          streamingTutorQuestion: payload.question,
+          streamingTutorStageId: payload.stage_id,
+          streamingTutorAnswer: payload.chunk,
+        };
+      }
+      return { streamingTutorAnswer: s.streamingTutorAnswer + payload.chunk };
+    }),
+  clearStreamingTutor: () =>
+    set({
+      streamingTutorQuestion: null,
+      streamingTutorStageId: null,
+      streamingTutorAnswer: '',
+    }),
+  commitStreamingTutorAsCancelled: () =>
+    set((s) => {
+      if (s.streamingTutorQuestion === null || s.streamingTutorStageId === null) {
+        return s;
+      }
+      const stageId = s.streamingTutorStageId;
+      const prev = s.tutorHistory[stageId] ?? [];
+      const cancelledMsg = {
+        question: s.streamingTutorQuestion,
+        answer: s.streamingTutorAnswer + '\n\n*（已取消）*',
+      };
+      const updated = {
+        ...s.tutorHistory,
+        [stageId]: [...prev, cancelledMsg],
+      };
+      if (s.sessionId) {
+        try {
+          localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated));
+        } catch {}
+      }
+      localStorage.removeItem('wl_tutor_pending');
+      return {
+        tutorHistory: updated,
+        streamingTutorQuestion: null,
+        streamingTutorStageId: null,
+        streamingTutorAnswer: '',
+        isTutorLoading: false,
+        pendingTutorQuestion: null,
+        pendingTutorStageId: null,
+      };
+    }),
   addTutorMessage: (msg) =>
     set((s) => {
       const prev = s.tutorHistory[msg.stage_id] ?? [];
@@ -695,6 +763,10 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   isConnected: false,
   setConnected: (v) => set({ isConnected: v }),
+  reconnectAttempt: null,
+  reconnectGaveUp: false,
+  setReconnectAttempt: (n) => set({ reconnectAttempt: n }),
+  setReconnectGaveUp: (v) => set({ reconnectGaveUp: v }),
   courseCompleted: false,
   setCourseCompleted: () => set((s) => ({
     courseCompleted: true,
@@ -747,6 +819,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       decisionHistory: [],
       stageDecisions: {},
       isExplanationLoading: false,
+      reconnectAttempt: null,
+      reconnectGaveUp: false,
     });
   },
 }));

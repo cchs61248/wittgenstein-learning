@@ -50,6 +50,8 @@ export default function App() {
     setPendingAdvance,
     setPendingCourseComplete,
     setConnected,
+    setReconnectAttempt,
+    setReconnectGaveUp,
     setPendingMap,
     pendingMap,
     resetExplanation,
@@ -59,6 +61,9 @@ export default function App() {
     endExplanationLoading,
     setQaHistory,
     addTutorMessage,
+    appendTutorChunk,
+    clearStreamingTutor,
+    commitStreamingTutorAsCancelled,
     setTutorHistories,
     isTutorLoading,
     setPendingTutor,
@@ -71,6 +76,8 @@ export default function App() {
 
   const isExplanationLoading = useSessionStore((s) => s.isExplanationLoading);
   const isRetryLoading = useSessionStore((s) => s.isRetryLoading);
+  const reconnectAttempt = useSessionStore((s) => s.reconnectAttempt);
+  const reconnectGaveUp = useSessionStore((s) => s.reconnectGaveUp);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const currentStageId = useSessionStore((s) => s.currentStageId);
   /** 僅在「視角為正在生成的那一章」時全螢幕 loading；回顧其他章（含本地尚無快取全文）一律走主欄 */
@@ -290,6 +297,20 @@ export default function App() {
           onMessage: handleMessage,
           onOpen: () => setConnected(true),
           onClose: () => setConnected(false),
+          onReconnecting: (n) => setReconnectAttempt(n),
+          onReconnected: () => {
+            setReconnectAttempt(null);
+            setReconnectGaveUp(false);
+            setConnected(true);
+            ws.send({
+              type: 'resume_session',
+              payload: { session_id: savedSessionId, provider: activeProviderRef.current, model: activeModelRef.current },
+            });
+          },
+          onGiveUp: () => {
+            setReconnectAttempt(null);
+            setReconnectGaveUp(true);
+          },
         });
         ws.connect();
         wsRef.current = ws;
@@ -311,6 +332,20 @@ export default function App() {
             });
           },
           onClose: () => setConnected(false),
+          onReconnecting: (n) => setReconnectAttempt(n),
+          onReconnected: () => {
+            setReconnectAttempt(null);
+            setReconnectGaveUp(false);
+            setConnected(true);
+            ws.send({
+              type: 'resume_session',
+              payload: { session_id: savedSessionId, provider: activeProviderRef.current, model: activeModelRef.current },
+            });
+          },
+          onGiveUp: () => {
+            setReconnectAttempt(null);
+            setReconnectGaveUp(true);
+          },
         });
         ws.connect();
         wsRef.current = ws;
@@ -381,6 +416,20 @@ export default function App() {
           onMessage: handleMessage,
           onOpen: () => setConnected(true),
           onClose: () => setConnected(false),
+          onReconnecting: (n) => setReconnectAttempt(n),
+          onReconnected: () => {
+            setReconnectAttempt(null);
+            setReconnectGaveUp(false);
+            setConnected(true);
+            ws.send({
+              type: 'resume_session',
+              payload: { session_id: currentSid, provider: activeProviderRef.current, model: activeModelRef.current },
+            });
+          },
+          onGiveUp: () => {
+            setReconnectAttempt(null);
+            setReconnectGaveUp(true);
+          },
         });
         ws.connect();
         wsRef.current = ws;
@@ -583,8 +632,22 @@ export default function App() {
         }
         break;
       }
+      case 'tutor_chunk':
+        appendTutorChunk(msg.payload);
+        break;
       case 'tutor_reply':
+        clearStreamingTutor();
         addTutorMessage(msg.payload);
+        break;
+      case 'generation_cancelled':
+        if (msg.payload.kind === 'ask_tutor') {
+          commitStreamingTutorAsCancelled();
+        }
+        // start_session/confirm_map/submit_answer/resume_session 取消後：partial
+        // explanation 由後端 DebouncedExplanationWriter 的 finally 寫入 DB；
+        // 前端只需停 loading 動畫，UI 端的 streaming buffer 會在下一個 explanation_chunk
+        // 或 resume_session snapshot 中自然被覆蓋/補回。
+        endExplanationLoading();
         break;
       case 'kicked':
         wsRef.current?.close();
@@ -641,6 +704,7 @@ export default function App() {
       bgProviderRef.current = provider;
       bgModelRef.current = model || undefined;
 
+      // bgWs 故意不重連 — 短暫存在；listSessions 輪詢處理連線中斷後的恢復
       const bgWs = new LearningWebSocket(newSid, token, {
         onMessage: (msg) => {
           if (msg.type === 'session_generating') {
@@ -658,6 +722,20 @@ export default function App() {
                 onMessage: handleMessage,
                 onOpen: () => setConnected(true),
                 onClose: () => setConnected(false),
+                onReconnecting: (n) => setReconnectAttempt(n),
+                onReconnected: () => {
+                  setReconnectAttempt(null);
+                  setReconnectGaveUp(false);
+                  setConnected(true);
+                  ws.send({
+                    type: 'resume_session',
+                    payload: { session_id: newSid, provider: activeProviderRef.current, model: activeModelRef.current },
+                  });
+                },
+                onGiveUp: () => {
+                  setReconnectAttempt(null);
+                  setReconnectGaveUp(true);
+                },
               });
               ws.connect();
               wsRef.current = ws;
@@ -733,6 +811,21 @@ export default function App() {
         ws.send({ type: 'start_session', payload: startPayload });
       },
       onClose: () => setConnected(false),
+      onReconnecting: (n) => setReconnectAttempt(n),
+      onReconnected: () => {
+        setReconnectAttempt(null);
+        setReconnectGaveUp(false);
+        setConnected(true);
+        // 重連時 session 已在 DB，改送 resume_session 重建記憶體狀態
+        ws.send({
+          type: 'resume_session',
+          payload: { session_id: newSid, provider: activeProviderRef.current, model: activeModelRef.current },
+        });
+      },
+      onGiveUp: () => {
+        setReconnectAttempt(null);
+        setReconnectGaveUp(true);
+      },
     });
     ws.connect();
     wsRef.current = ws;
@@ -758,6 +851,23 @@ export default function App() {
     wsRef.current?.send({
       type: 'ask_tutor',
       payload: { session_id: sessionIdRef.current, question, stage_id: stageId },
+    });
+  };
+
+  const handleCancelTutor = () => {
+    if (!sessionIdRef.current) return;
+    wsRef.current?.send({
+      type: 'cancel_generation',
+      payload: { key: `${sessionIdRef.current}:tutor` },
+    });
+  };
+
+  const handleCancelExplanation = () => {
+    if (!sessionIdRef.current) return;
+    // 不指定 key — 後端 fallback 嘗試取消 session_id 上任何 in-flight 生成
+    wsRef.current?.send({
+      type: 'cancel_generation',
+      payload: {},
     });
   };
 
@@ -936,6 +1046,29 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      {(reconnectAttempt !== null || reconnectGaveUp) && (
+        <div
+          className="reconnect-banner"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 1000,
+            padding: '8px 16px',
+            background: reconnectGaveUp ? '#c0392b' : '#f39c12',
+            color: 'white',
+            textAlign: 'center',
+            fontSize: 14,
+          }}
+          role="status"
+          aria-live="polite"
+        >
+          {reconnectGaveUp
+            ? '連線中斷且自動重連失敗，請手動重新整理頁面。'
+            : `連線中斷，正在重新連線…（第 ${reconnectAttempt} 次）`}
+        </div>
+      )}
       <header className="app-header">
         <div className="header-brand">
           <span className="brand-mark" aria-hidden="true" />
@@ -1049,11 +1182,12 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <ExplanationPanel ref={explanationScrollRef} />
+                  <ExplanationPanel ref={explanationScrollRef} onCancel={handleCancelExplanation} />
                 )}
                 <AskTutorPanel
                   currentStageId={selectedStageId ?? currentStageId}
                   onAskTutor={handleAskTutor}
+                  onCancel={handleCancelTutor}
                   isCollapsed={isAskTutorCollapsed}
                   onToggle={() => setIsAskTutorCollapsed((v) => !v)}
                   isLoading={isTutorLoading}

@@ -3,16 +3,49 @@ import unittest
 from unittest.mock import AsyncMock
 
 from backend import main as main_module
+from backend.ws import generation_handle as gh
+
+
+def _register_running(key: str) -> asyncio.Task:
+    async def _block():
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(_block())
+    gh.register(key, task)
+    return task
+
+
+def _register_done(key: str) -> asyncio.Task:
+    async def _block():
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(_block())
+    gh.register(key, task)
+    handle = gh.get_active(key)
+    if handle:
+        handle.event.set()
+    return task
+
+
+async def _cleanup():
+    for h in list(gh._registry.values()):
+        if not h.task.done():
+            h.task.cancel()
+            try:
+                await h.task
+            except (asyncio.CancelledError, BaseException):
+                pass
+    gh._registry.clear()
 
 
 class TestConfirmMapDbFallback(unittest.IsolatedAsyncioTestCase):
     """Verify the cache_lookup pattern for confirm_map works when wait times out."""
 
     async def asyncSetUp(self):
-        main_module._active_generations.clear()
+        await _cleanup()
 
     async def asyncTearDown(self):
-        main_module._active_generations.clear()
+        await _cleanup()
 
     async def test_no_prev_returns_false_so_handler_runs(self):
         """No prev generation → helper returns False → caller runs the original handler."""
@@ -26,8 +59,7 @@ class TestConfirmMapDbFallback(unittest.IsolatedAsyncioTestCase):
 
     async def test_prev_timeout_then_cache_hit_skips_handler(self):
         """Prev still running → timeout → cache says already done → emit and return True."""
-        evt = asyncio.Event()
-        main_module._active_generations["sess_Y"] = evt  # Don't set — simulates running
+        _register_running("sess_Y")  # Don't set — simulates running
 
         cache = AsyncMock(return_value={"row": {"status": "active"}})
         emit = AsyncMock()
@@ -40,9 +72,7 @@ class TestConfirmMapDbFallback(unittest.IsolatedAsyncioTestCase):
 
     async def test_prev_completes_cache_pending_confirmation_returns_false(self):
         """Prev completes but DB still says pending_confirmation → cache returns None → False."""
-        evt = asyncio.Event()
-        main_module._active_generations["sess_Z"] = evt
-        evt.set()
+        _register_done("sess_Z")
 
         async def cache():
             # Mimics the actual lookup logic
