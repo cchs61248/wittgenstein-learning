@@ -496,9 +496,10 @@ async def websocket_endpoint(
                     else:
                         _ws_log.info("cancel_generation: key=%s not found", target_key)
                 for k in cancelled_keys:
+                    kind = "ask_tutor" if k.endswith(":tutor") else "other"
                     await emit({
                         "type": "generation_cancelled",
-                        "payload": {"key": k},
+                        "payload": {"key": k, "kind": kind},
                     })
 
     except (WebSocketDisconnect, RuntimeError):

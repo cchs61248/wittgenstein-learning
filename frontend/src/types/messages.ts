@@ -168,7 +168,7 @@ export type ServerMessage =
   | { type: 'resume_state'; payload: ResumeStatePayload }
   | { type: 'tutor_chunk'; payload: TutorChunkPayload }
   | { type: 'tutor_reply'; payload: TutorReplyPayload }
-  | { type: 'generation_cancelled'; payload: { key: string; kind: 'start_session' | 'confirm_map' | 'submit_answer' | 'resume_session' | 'ask_tutor' } }
+  | { type: 'generation_cancelled'; payload: { key: string; kind: 'ask_tutor' | 'other' } }
   | { type: 'course_completed'; payload: { message: string } }
   | { type: 'kicked'; payload: { message: string } }
   | { type: 'error'; payload: ErrorPayload };
