@@ -47,15 +47,27 @@ class TestConfirmMapDbFallback(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await _cleanup()
 
-    async def test_no_prev_returns_false_so_handler_runs(self):
-        """No prev generation → helper returns False → caller runs the original handler."""
-        cache = AsyncMock(return_value={"row": {"status": "active"}})
+    async def test_no_prev_cache_miss_returns_false_so_handler_runs(self):
+        """No prev + cache miss (session 仍是 pending_confirmation) → handler 要跑。"""
+        cache = AsyncMock(return_value=None)
         emit = AsyncMock()
         hit = await main_module._wait_or_lookup_cache(
             "sess_X", timeout_s=0.05, cache_lookup=cache, emit_cached=emit,
         )
         self.assertFalse(hit)
-        cache.assert_not_called()  # No prev event, cache never queried
+        cache.assert_awaited_once()  # 新行為：無條件先 cache lookup
+        emit.assert_not_called()
+
+    async def test_no_prev_cache_hit_skips_handler(self):
+        """No prev + cache 命中（session 已 confirmed）→ emit cached + skip handler。"""
+        cache = AsyncMock(return_value={"row": {"status": "active"}})
+        emit = AsyncMock()
+        hit = await main_module._wait_or_lookup_cache(
+            "sess_X2", timeout_s=0.05, cache_lookup=cache, emit_cached=emit,
+        )
+        self.assertTrue(hit)
+        cache.assert_awaited_once()
+        emit.assert_awaited_once_with({"row": {"status": "active"}})
 
     async def test_prev_timeout_then_cache_hit_skips_handler(self):
         """Prev still running → timeout → cache says already done → emit and return True."""

@@ -154,12 +154,32 @@ async def _wait_or_lookup_cache(
     emit_cached,     # Optional[Callable[[dict], Awaitable[None]]]
 ) -> bool:
     """
-    若 generation_handle registry 已有相同 key 的舊任務：
-    - 等待最多 timeout_s
-    - 等完後（不論 timeout 或正常結束）若提供 cache_lookup，呼叫之；命中則 emit_cached 並回傳 True
-    - 否則回傳 False（呼叫端應繼續跑新任務）
-    若沒有舊任務直接回傳 False。
+    依序：
+    1. 無條件 cache lookup（歷史命中：例如 tutor 同問題已答過、submit 同題已評過）。
+       命中即 emit_cached 並回傳 True。
+    2. cache miss 且 registry 有相同 key 的舊任務：wait 最多 timeout_s，
+       完成後（或 timeout）再查一次 cache；命中即 emit + return True。
+    3. 都沒命中：回傳 False（呼叫端應繼續跑新任務）。
     """
+    async def _try_cache() -> bool:
+        if cache_lookup is None:
+            return False
+        try:
+            cached = await cache_lookup()
+        except Exception as e:
+            ws_logger().warning("dedup cache lookup failed for key=%s: %s", key, e)
+            return False
+        if cached is None:
+            return False
+        if emit_cached:
+            await emit_cached(cached)
+        return True
+
+    # 步驟 1：先查歷史 cache（不論有無 inflight）
+    if await _try_cache():
+        return True
+
+    # 步驟 2：若 inflight 任務還在跑，等對方完成後再查一次
     prev = _gen_get(key)
     if not prev:
         return False
@@ -167,18 +187,7 @@ async def _wait_or_lookup_cache(
         await asyncio.wait_for(prev.event.wait(), timeout=timeout_s)
     except asyncio.TimeoutError:
         pass
-    if cache_lookup is None:
-        return False
-    try:
-        cached = await cache_lookup()
-    except Exception as e:
-        ws_logger().warning("dedup cache lookup failed for key=%s: %s", key, e)
-        return False
-    if cached is None:
-        return False
-    if emit_cached:
-        await emit_cached(cached)
-    return True
+    return await _try_cache()
 
 
 @app.websocket("/ws/{session_id}")

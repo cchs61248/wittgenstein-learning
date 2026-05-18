@@ -50,16 +50,27 @@ class TestWaitOrLookupCacheHelper(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await _cleanup()
 
-    async def test_no_prev_returns_false(self):
-        """無舊任務：直接 return False，不查 cache。"""
-        cache = AsyncMock(return_value={"x": 1})
+    async def test_no_prev_cache_miss_returns_false(self):
+        """無舊任務 + cache miss：return False。"""
+        cache = AsyncMock(return_value=None)
         emit = AsyncMock()
         hit = await main_module._wait_or_lookup_cache(
             "k1", timeout_s=1.0, cache_lookup=cache, emit_cached=emit,
         )
         self.assertFalse(hit)
-        cache.assert_not_called()
+        cache.assert_awaited_once()
         emit.assert_not_called()
+
+    async def test_no_prev_cache_hit_emits_and_returns_true(self):
+        """無舊任務 + cache 命中（歷史命中）：emit + return True。"""
+        cache = AsyncMock(return_value={"result": "history"})
+        emit = AsyncMock()
+        hit = await main_module._wait_or_lookup_cache(
+            "k1b", timeout_s=1.0, cache_lookup=cache, emit_cached=emit,
+        )
+        self.assertTrue(hit)
+        cache.assert_awaited_once()
+        emit.assert_awaited_once_with({"result": "history"})
 
     async def test_prev_completes_cache_hit_emits_and_returns_true(self):
         """舊任務完成 → cache 命中 → emit + return True。"""
