@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .config import DB_PATH, CORS_ORIGINS, CORS_ORIGIN_REGEX, DEFAULT_PROVIDER
 from .db.database import init_db, close_db
+from .db.inflight_lock import cleanup_stale as inflight_cleanup_stale
 from .auth.router import router as auth_router
 from .routers.upload import router as upload_router
 from .routers.session import router as session_router
@@ -38,6 +39,13 @@ async def lifespan(app: FastAPI):
     setup_logging()
     ws_logger().info("Wittgenstein Learning System starting up")
     await init_db(DB_PATH)
+    # 清掉前次 worker 強制關閉時殘留的孤兒 inflight locks（Phase 3 Task B2）
+    try:
+        n = await inflight_cleanup_stale(max_age_s=600)
+        if n:
+            ws_logger().info(f"inflight_locks: cleaned {n} stale entries on startup")
+    except Exception as e:
+        ws_logger().warning(f"inflight_locks cleanup_stale failed on startup: {e}")
     yield
     await close_db()
     ws_logger().info("Wittgenstein Learning System shutting down")
