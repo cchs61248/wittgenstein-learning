@@ -31,6 +31,9 @@ from .ws.generation_handle import (
     get_active as _gen_get,
     finish as _gen_finish,
     cancel as _gen_cancel,
+    register_async as _gen_register_async,
+    finish_async as _gen_finish_async,
+    cancel_async as _gen_cancel_async,
 )
 
 
@@ -291,11 +294,18 @@ async def websocket_endpoint(
                     except Exception as e:
                         await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
                     finally:
-                        _gen_finish(_start_key)
+                        await _gen_finish_async(_start_key)
 
                 task = asyncio.create_task(_run_start())
-                _gen_register(_start_key, task)
                 # 不 await task — dispatcher loop 必須能接收 cancel_generation 等後續訊息
+                handle = await _gen_register_async(
+                    _start_key, task, session_id=session_id, kind="start_session"
+                )
+                if handle is None:
+                    # race lost：另一個 worker / connection 已在跑同個 start_session；
+                    # 無 cache_lookup 可用，cancel 剛建的 task + log + 略過
+                    task.cancel()
+                    _ws_log.warning("start_session: race lost for key=%s", _start_key)
 
             elif msg_type == "confirm_map":
                 _confirm_key = session_id
@@ -343,10 +353,19 @@ async def websocket_endpoint(
                     except Exception as e:
                         await emit({"type": "error", "payload": {"message": f"確認知識地圖失敗：{e}"}})
                     finally:
-                        _gen_finish(_confirm_key)
+                        await _gen_finish_async(_confirm_key)
 
                 task = asyncio.create_task(_run_confirm())
-                _gen_register(_confirm_key, task)
+                handle = await _gen_register_async(
+                    _confirm_key, task, session_id=session_id, kind="confirm_map"
+                )
+                if handle is None:
+                    # race lost：重跑 cache lookup（前一 task 應已寫 DB）
+                    task.cancel()
+                    if not await _wait_or_lookup_cache(
+                        _confirm_key, 300, _confirm_cache, _confirm_emit,
+                    ):
+                        _ws_log.warning("confirm_map: race lost, no cache hit for key=%s", _confirm_key)
 
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)
@@ -392,10 +411,18 @@ async def websocket_endpoint(
                     except Exception as e:
                         await emit({"type": "error", "payload": {"message": f"評分失敗：{e}"}})
                     finally:
-                        _gen_finish(_answer_key)
+                        await _gen_finish_async(_answer_key)
 
                 task = asyncio.create_task(_run_answer())
-                _gen_register(_answer_key, task)
+                handle = await _gen_register_async(
+                    _answer_key, task, session_id=session_id, kind="submit_answer"
+                )
+                if handle is None:
+                    task.cancel()
+                    if not await _wait_or_lookup_cache(
+                        _answer_key, 60, _ans_cache, _ans_emit,
+                    ):
+                        _ws_log.warning("submit_answer: race lost, no cache hit for key=%s", _answer_key)
 
             elif msg_type == "resume_session":
                 session_id_to_resume: str = p.get("session_id", session_id)
@@ -432,10 +459,17 @@ async def websocket_endpoint(
                     except Exception as e:
                         await emit({"type": "error", "payload": {"message": f"恢復會話失敗：{e}"}})
                     finally:
-                        _gen_finish(session_id_to_resume)
+                        await _gen_finish_async(session_id_to_resume)
 
                 task = asyncio.create_task(_run_resume())
-                _gen_register(session_id_to_resume, task)
+                handle = await _gen_register_async(
+                    session_id_to_resume, task,
+                    session_id=session_id_to_resume, kind="resume_session",
+                )
+                if handle is None:
+                    # race lost：另一個 worker 已在 resume 同 session；無 cache，跳過即可
+                    task.cancel()
+                    _ws_log.warning("resume_session: race lost for key=%s", session_id_to_resume)
 
             elif msg_type == "request_hint":
                 await emit({
@@ -492,10 +526,18 @@ async def websocket_endpoint(
                     except Exception as e:
                         await emit({"type": "error", "payload": {"message": f"AI 回答失敗：{e}"}})
                     finally:
-                        _gen_finish(_tutor_key)
+                        await _gen_finish_async(_tutor_key)
 
                 task = asyncio.create_task(_run_tutor())
-                _gen_register(_tutor_key, task)
+                handle = await _gen_register_async(
+                    _tutor_key, task, session_id=session_id, kind="ask_tutor"
+                )
+                if handle is None:
+                    task.cancel()
+                    if not await _wait_or_lookup_cache(
+                        _tutor_key, 60, _tutor_cache, _tutor_emit,
+                    ):
+                        _ws_log.warning("ask_tutor: race lost, no cache hit for key=%s", _tutor_key)
 
             elif msg_type == "cancel_generation":
                 target_key = p.get("key")
@@ -503,12 +545,12 @@ async def websocket_endpoint(
                 if not target_key:
                     # 沒指定 key 就嘗試取消該 session 任何 in-flight 的兩個常見來源
                     for k in (session_id, f"{session_id}:tutor"):
-                        if await _gen_cancel(k):
+                        if await _gen_cancel_async(k):
                             cancelled_keys.append(k)
                     if not cancelled_keys:
                         _ws_log.info("cancel_generation: no in-flight task for session=%s", session_id)
                 else:
-                    if await _gen_cancel(target_key):
+                    if await _gen_cancel_async(target_key):
                         cancelled_keys.append(target_key)
                     else:
                         _ws_log.info("cancel_generation: key=%s not found", target_key)
