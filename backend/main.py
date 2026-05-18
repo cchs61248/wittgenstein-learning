@@ -158,6 +158,35 @@ async def _build_source_chunks_from_payload(
     return all_chunks, file_ids
 
 
+async def _build_orchestrator_for_session(
+    session_id: str,
+    p: dict | None = None,
+) -> LearningOrchestrator:
+    """
+    Phase 3 Task C1 — stateless：每個 WS 訊息進來都從 DB 重建 orchestrator，
+    不再保留 _orchestrators in-memory pool。
+
+    優先順序：
+    1. payload (p) 內帶的 provider / model
+    2. DB 內 session row 的 provider_name / model_name（resume_session 走這路徑）
+    3. DEFAULT_PROVIDER fallback
+    """
+    p = p or {}
+    session_row = await session_memory.get_session(session_id)
+    provider_name: str = (
+        p.get("provider")
+        or (session_row.get("provider_name") if session_row else None)
+        or DEFAULT_PROVIDER
+    )
+    model: str | None = (
+        p.get("model")
+        or (session_row.get("model_name") if session_row else None)
+        or None
+    )
+    llm = create_provider(provider_name, model=model)
+    return LearningOrchestrator(llm)
+
+
 async def _wait_or_lookup_cache(
     key: str,
     timeout_s: float,
@@ -276,7 +305,6 @@ async def websocket_endpoint(
 
                 llm = create_provider(provider_name, model=model)
                 orchestrator = LearningOrchestrator(llm)
-                _orchestrators[session_id] = orchestrator
 
                 async def _run_start():
                     try:
@@ -325,23 +353,7 @@ async def websocket_endpoint(
                 ):
                     continue
 
-                orch = _orchestrators.get(session_id)
-                if not orch:
-                    # 重整後 in-memory orchestrator 遺失，新建一個並從 DB 恢復
-                    session_row = await session_memory.get_session(session_id)
-                    provider_name: str = (
-                        p.get("provider")
-                        or (session_row.get("provider_name") if session_row else None)
-                        or DEFAULT_PROVIDER
-                    )
-                    model: str | None = (
-                        p.get("model")
-                        or (session_row.get("model_name") if session_row else None)
-                        or None
-                    )
-                    llm = create_provider(provider_name, model=model)
-                    orch = LearningOrchestrator(llm)
-                    _orchestrators[session_id] = orch
+                orch = await _build_orchestrator_for_session(session_id, p)
 
                 async def _run_confirm():
                     try:
@@ -368,9 +380,7 @@ async def websocket_endpoint(
                         _ws_log.warning("confirm_map: race lost, no cache hit for key=%s", _confirm_key)
 
             elif msg_type == "submit_answer":
-                orch = _orchestrators.get(session_id)
-                if not orch:
-                    continue
+                orch = await _build_orchestrator_for_session(session_id, p)
                 _question_id = p["question_id"]
                 _answer_key = f"{session_id}:answer:{_question_id}"
 
@@ -447,7 +457,6 @@ async def websocket_endpoint(
                 )
                 llm = create_provider(provider_name, model=model)
                 orchestrator = LearningOrchestrator(llm)
-                _orchestrators[session_id_to_resume] = orchestrator
 
                 async def _run_resume():
                     try:
@@ -478,9 +487,7 @@ async def websocket_endpoint(
                 })
 
             elif msg_type == "ask_tutor":
-                orch = _orchestrators.get(session_id)
-                if not orch:
-                    continue
+                orch = await _build_orchestrator_for_session(session_id, p)
                 raw_sid = p.get("stage_id")
                 _ask_question = p.get("question", "").strip()
                 _ask_stage_id = int(raw_sid) if raw_sid is not None else None
@@ -565,14 +572,10 @@ async def websocket_endpoint(
         _ws_log.info("WS DISCONNECT  session=%s  user=%s", session_id, user_id)
         ws_manager.disconnect(session_id, websocket)
         # 只有在此 WS 確實是當前連線（disconnect 後 session 已無 WS）時才清除資源，
-        # 避免把後繼裝置的 orchestrator / working memory 一起清掉。
+        # 避免把後繼裝置的 working memory 一起清掉。
+        # Phase 3 Task C1：orchestrator 已 stateless 化（每訊息重建），無需 pop。
         if not ws_manager.has_active_ws(session_id):
-            _orchestrators.pop(session_id, None)
             delete_working_memory(session_id)
-
-
-# 會話級 orchestrator 暫存（單 process 內有效）
-_orchestrators: dict[str, LearningOrchestrator] = {}
 
 
 @app.get("/health")
