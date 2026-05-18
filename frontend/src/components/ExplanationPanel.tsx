@@ -87,6 +87,7 @@ export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationP
 
   useEffect(() => {
     if (selectedStageId === null || !sessionId || !token) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPersistedFetch('idle');
       return;
     }

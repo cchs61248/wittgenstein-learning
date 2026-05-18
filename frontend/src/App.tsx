@@ -237,6 +237,7 @@ export default function App() {
   // 掛載時：若有 token，先查詢是否有活躍會話；沒有才顯示上傳 modal
   useEffect(() => {
     if (!token) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBookshelf([]);
       clearSession();
       return;

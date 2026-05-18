@@ -215,6 +215,7 @@ export function BookshelfPanel({
   // 依目前前景 session 還原：是否在「章節列表」內（重整後不跳回書櫃總覽）
   useEffect(() => {
     if (!activeSessionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setView('list');
       setViewingSessionId(null);
       lastHydratedSession.current = null;
@@ -236,6 +237,7 @@ export function BookshelfPanel({
   useEffect(() => {
     if (view !== 'map' || !viewingSessionId) return;
     if (!books.some((b) => b.sessionId === viewingSessionId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setView('list');
       setViewingSessionId(null);
     }

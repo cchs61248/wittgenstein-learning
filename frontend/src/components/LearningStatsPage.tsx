@@ -174,6 +174,7 @@ export const LearningStatsPage = forwardRef<HTMLDivElement, { token: string; ses
   useEffect(() => {
     if (!sessionId) return;
     const prefs = getSessionLayoutPrefs(sessionId);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setShowEvidence(prefs?.statsEvidenceExpanded ?? false);
   }, [sessionId]);
 
@@ -371,10 +372,12 @@ export const LearningStatsPage = forwardRef<HTMLDivElement, { token: string; ses
   }, [stats?.misconceptions, misconceptionPage]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMisconceptionPage(1);
   }, [stats?.misconceptions]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setConceptPage(1);
   }, [stats?.concepts]);
 

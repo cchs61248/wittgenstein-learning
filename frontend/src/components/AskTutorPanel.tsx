@@ -106,6 +106,7 @@ export function AskTutorPanel({ onAskTutor, onCancel, isCollapsed, onToggle, isL
   useEffect(() => {
     if (streamingTutorQuestion === null) {
       // 串流結束：reset sticky，下次串流重新啟用 auto-scroll
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStickyToBottom(true);
       return;
     }

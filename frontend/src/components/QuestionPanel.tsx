@@ -123,6 +123,7 @@ export function QuestionPanel({ onSubmit, isCollapsed, onToggle }: Props) {
 
   useEffect(() => {
     if (selectedStageId === null || !sessionId || !token) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setReviewQaLoad('idle');
       return;
     }
