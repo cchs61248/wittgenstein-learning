@@ -666,7 +666,7 @@ class LearningOrchestrator:
                 },
             )
             full_explanation = ""
-            async for chunk in self.teacher.stream_explanation(ctx):
+            async for chunk in self.teacher.stream_explanation_with_intent(ctx):
                 full_explanation += chunk
                 await writer.update(full_explanation)
                 await emit({"type": "explanation_chunk", "payload": {"chunk": chunk, "is_final": False}})
@@ -694,7 +694,7 @@ class LearningOrchestrator:
                     },
                 )
                 full_explanation = ""
-                async for chunk in self.teacher.stream_explanation(retry_ctx):
+                async for chunk in self.teacher.stream_explanation_with_intent(retry_ctx):
                     full_explanation += chunk
                     await writer.update(full_explanation)
                 explanation_rewritten = True
@@ -707,8 +707,9 @@ class LearningOrchestrator:
             # 確保即便串流／drift 修正中途拋例外，最後仍寫一次最新狀態
             await writer.flush()
 
-        # 3. 提取教學意圖（non-streaming call，供問題生成器對齊）
-        teaching_intent = await self.teacher.extract_teaching_intent(full_explanation, stage)
+        # 3. 提取教學意圖：優先用 stream_explanation_with_intent 內聯抽出的 last_intent；
+        # 若 LLM 未輸出 INTENT 區塊（某 provider 不穩定）才 fallback 至獨立 extract LLM 呼叫。
+        teaching_intent = self.teacher.last_intent or await self.teacher.extract_teaching_intent(full_explanation, stage)
         wm.current_teaching_intent = teaching_intent
 
         # 4. 生成問題
