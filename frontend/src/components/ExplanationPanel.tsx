@@ -58,13 +58,8 @@ function SourceReferenceSection({ referencedChunks }: { referencedChunks: RefChu
   );
 }
 
-interface ExplanationPanelProps {
-  onCancel?: () => void;
-}
-
-export const ExplanationPanel = forwardRef<HTMLDivElement, ExplanationPanelProps>(function ExplanationPanel({ onCancel }, ref) {
+export const ExplanationPanel = forwardRef<HTMLDivElement>(function ExplanationPanel(_props, ref) {
   const explanationText = useSessionStore((s) => s.explanationText);
-  const isStreaming = useSessionStore((s) => s.isStreaming);
   const selectedStageId = useSessionStore((s) => s.selectedStageId);
   const currentStageId = useSessionStore((s) => s.currentStageId);
   const sessionId = useSessionStore((s) => s.sessionId);
@@ -179,7 +174,7 @@ export const ExplanationPanel = forwardRef<HTMLDivElement, ExplanationPanelProps
     );
   }
 
-  if (!displayText.trim() && !isStreaming) {
+  if (!displayText.trim()) {
     return (
       <div ref={ref} className="explanation-panel empty">
         <div className="empty-ornament" aria-hidden="true" />
@@ -206,13 +201,7 @@ export const ExplanationPanel = forwardRef<HTMLDivElement, ExplanationPanelProps
       )}
       <div className="markdown-content">
         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{displayText}</ReactMarkdown>
-        {isStreaming && !hasReviewBody && <span className="cursor-blink">▋</span>}
       </div>
-      {isStreaming && !hasReviewBody && onCancel && (
-        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
-          <button className="btn-ghost btn-sm" onClick={onCancel}>停止生成</button>
-        </div>
-      )}
       {referencedChunks.length > 0 && (
         <SourceReferenceSection key={String(stageIdForDisplay)} referencedChunks={referencedChunks} />
       )}

@@ -881,15 +881,6 @@ export default function App() {
     });
   };
 
-  const handleCancelExplanation = () => {
-    if (!sessionIdRef.current) return;
-    // 不指定 key — 後端 fallback 嘗試取消 session_id 上任何 in-flight 生成
-    wsRef.current?.send({
-      type: 'cancel_generation',
-      payload: {},
-    });
-  };
-
   const handleSwitchSession = async (entry: BookEntry) => {
     if (entry.sessionId === sessionIdRef.current) return;
     clearPendingTutor();
@@ -1201,7 +1192,7 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <ExplanationPanel ref={explanationScrollRef} onCancel={handleCancelExplanation} />
+                  <ExplanationPanel ref={explanationScrollRef} />
                 )}
                 <AskTutorPanel
                   currentStageId={selectedStageId ?? currentStageId}
