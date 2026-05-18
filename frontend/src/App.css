@@ -1238,6 +1238,23 @@ body {
   background: var(--danger-bg);
 }
 
+.tutor-note-cancel {
+  margin-left: auto;
+  justify-self: end;
+  font-size: 11px;
+  padding: 2px 8px;
+  color: var(--danger-fg);
+  border: 1px solid var(--danger-border, var(--border));
+  background: var(--bg-card);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tutor-note-cancel:hover {
+  background: var(--danger-bg);
+}
+
 .tutor-note-body {
   padding: 10px 14px 12px;
   border-top: 1px solid var(--border);

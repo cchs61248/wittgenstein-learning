@@ -149,12 +149,20 @@ export function AskTutorPanel({ onAskTutor, onCancel, isCollapsed, onToggle, isL
           </div>
           {streamingTutorQuestion !== null && streamingTutorStageId === currentStageId && (
             <div className="tutor-note tutor-note--streaming">
-              <div className="tutor-note-header" style={{ pointerEvents: 'none' }}>
+              <div className="tutor-note-header">
                 <span className="tutor-note-idx">…</span>
                 <span className="tutor-note-question">
                   {streamingTutorQuestion.length > 60 ? streamingTutorQuestion.slice(0, 60) + '…' : streamingTutorQuestion}
                 </span>
                 <span className="tutor-note-toggle-icon">輸入中</span>
+                <button
+                  className="btn-ghost btn-sm tutor-note-cancel"
+                  onClick={onCancel}
+                  type="button"
+                  aria-label="停止生成"
+                >
+                  停止生成
+                </button>
               </div>
               <div className="tutor-note-body">
                 <p className="tutor-note-q-full">{streamingTutorQuestion}</p>
@@ -162,9 +170,6 @@ export function AskTutorPanel({ onAskTutor, onCancel, isCollapsed, onToggle, isL
                   <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
                     {normalizeText(streamingTutorAnswer)}
                   </ReactMarkdown>
-                </div>
-                <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
-                  <button className="btn-ghost btn-sm" onClick={onCancel}>停止生成</button>
                 </div>
               </div>
             </div>
