@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -91,6 +91,29 @@ export function AskTutorPanel({ onAskTutor, onCancel, isCollapsed, onToggle, isL
     ? (tutorHistoryMap[currentStageId] ?? [])
     : [];
   const [question, setQuestion] = useState('');
+  const streamingBodyRef = useRef<HTMLDivElement | null>(null);
+  const [stickyToBottom, setStickyToBottom] = useState(true);
+
+  // 偵測使用者是否手動 scroll 離底；50px 容差讓「快回到底」仍視為 sticky
+  const handleStreamingScroll = () => {
+    const el = streamingBodyRef.current;
+    if (!el) return;
+    const dist = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    setStickyToBottom(dist < 50);
+  };
+
+  // 新 chunk 進來時 auto-scroll 到底（但只在 sticky 狀態）
+  useEffect(() => {
+    if (streamingTutorQuestion === null) {
+      // 串流結束：reset sticky，下次串流重新啟用 auto-scroll
+      setStickyToBottom(true);
+      return;
+    }
+    if (!stickyToBottom) return;
+    const el = streamingBodyRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [streamingTutorAnswer, streamingTutorQuestion, stickyToBottom]);
 
   const handleDeleteItem = async (recordId: number) => {
     if (!token || !sessionId || currentStageId === null) return;
@@ -164,7 +187,11 @@ export function AskTutorPanel({ onAskTutor, onCancel, isCollapsed, onToggle, isL
                   停止生成
                 </button>
               </div>
-              <div className="tutor-note-body">
+              <div
+                className="tutor-note-body"
+                ref={streamingBodyRef}
+                onScroll={handleStreamingScroll}
+              >
                 <p className="tutor-note-q-full">{streamingTutorQuestion}</p>
                 <div className="feedback-text markdown-content">
                   <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>

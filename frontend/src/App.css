@@ -1255,6 +1255,13 @@ body {
   background: var(--danger-bg);
 }
 
+/* Streaming bubble：限制高度 + 內部捲動。
+   page 高度不被個別串流回答撐開；smart sticky 由 component 處理。 */
+.tutor-note--streaming .tutor-note-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
 .tutor-note-body {
   padding: 10px 14px 12px;
   border-top: 1px solid var(--border);
