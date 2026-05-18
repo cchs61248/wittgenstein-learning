@@ -30,7 +30,7 @@
 - **Source Truth 後端掌控**：上傳後 `text_extractor → chunker` 建立 `source_chunks` 表，LLM 只做語義切分回傳 `chunk_id`，原文一律由後端回填，杜絕幻覺引用
 - **Teacher 串流講解**：Markdown 即時渲染，依學生掌握度 / 混淆模式 / 選課理由（Phase 4）自適應，每個概念至少 2 個生活化類比，類比明確標記為「說明工具」不可作為題目素材
 - **Citation Accuracy 驗證**：DriftVerifier 逐條 claim 比對原文，同時支援 Markdown `[chunk_id]` 與 JSON 陣列兩種格式；不通過自動重生（附 revision_hint）
-- **教學意圖對齊**：TeacherAgent 講解後 extract teaching_intent（reinforced_concepts、analogies_used、repair_target、main_chunk_ids），QuestionGenerator 至少一題對齊修正目標
+- **教學意圖對齊**：TeacherAgent 講解串流結尾共生 `<<INTENT_JSON>>{key_concepts, expected_misunderstandings, evidence_chunk_ids}<<END_INTENT>>` 區塊（`stream_explanation_with_intent` 內聯抽取、不外送給前端、不進 DB），QuestionGenerator 至少一題對齊；LLM 偶發未輸出區塊時 fallback 走獨立 `extract_teaching_intent` LLM call（罕見）
 - **結構化錯誤診斷**：Evaluator 輸出 `misconception_patterns`（concept / pattern / severity / repair_strategy），存入長期記憶供跨會話追蹤
 - **智能進度決策**（純規則，純程式邏輯，不呼叫 LLM）：高嚴重度根本誤解或同一錯誤重複 ≥ 2 次立即觸發換框架重教；詳細 10 條優先序見 [BACKEND_FLOW §7.6](./BACKEND_FLOW.md#76-進度決策_make_progress_decision)
 - **retry / remediate 不清空原文**：retry 在原文尾端附加「第 N 次嘗試」標題；remediate 完整串流補強教學文章並持久化，頁面重整後不重新生成
@@ -46,9 +46,11 @@
 
 ### 跨裝置與多連線
 
-- **單裝置強制登出**（Migration 011）：JWT 帶 `sv`（session_version）；新登入 `session_version += 1`，舊 token `sv` 不符即無效。多裝置切換時舊連線收 `kicked`（WebSocket code 4002）後關閉
+- **單裝置強制登出**（Migration 011）：JWT 帶 `sv`（session_version）；新登入 `session_version += 1`，舊 token `sv` 不符即無效。多裝置切換時舊連線收 `kicked`（WebSocket code 4002）後關閉；同瀏覽器多分頁共用 `client_id`、允許並存（不會被 4002 踢）
 - **跨裝置 UI 狀態同步**（Migration 012）：書櫃排序、版面 prefs 寫入 `user_learning_profile.ui_state_json`，`GET/PUT /user/ui-state` 同步
-- **重連去重**：`ask_tutor` 等長任務有 `_active_generations` Event；同 session 重連時等已在跑的同問題回應，避免 LLM 重跑
+- **跨 worker dedup**（Migration 016）：`inflight_locks` 表 + `_GenerationHandle` 同步寫 DB；同 session 重複觸發或多 worker 同時收到請求時，後者走「先查 DB cache hit → 否則放棄 race」路徑，避免重複 LLM call
+- **取消機制**：前端「停止生成」送 `cancel_generation` → 後端 task.cancel() + release DB lock → 回 `generation_cancelled` + 已生成部分留在 DB（拜 `DebouncedExplanationWriter` 持久化）
+- **WS 自動重連**：指數退避 1/2/4/8/16/32s（上限 6 次共 63 秒），重連後自動 replay `resume_session`；onGiveUp 後紅色 banner 提示手動重整；`verifyAuth` 區分網路斷與 token 失效（網路問題不誤踢登出）
 
 ### LLM Provider（5 個）
 
@@ -147,14 +149,21 @@ backend/
 ├── agents/                     # 六個功能 Agent + BaseAgent
 │   ├── base_agent.py           # _messages 自動 _reset()，token 預算管理
 │   ├── content_splitter.py     # 語義切分（只回傳 chunk_id，不生成原文）
-│   ├── teacher.py              # 串流講解 + extract_teaching_intent（Phase 3）
+│   ├── teacher.py              # 串流講解：stream_explanation_with_intent 內聯抽 INTENT JSON（省 1 次 LLM 來回）+ extract_teaching_intent fallback
 │   ├── question_generator.py   # 出題（布魯姆 + teaching_intent 對齊 + JSON repair）
 │   ├── evaluator.py            # 評分 + misconception_patterns 結構化診斷（Phase 3）
 │   ├── progress_manager.py     # 決策（純規則，high_severity / repeated_patterns，Phase 4）
 │   └── drift_verifier.py       # Citation accuracy 驗證（逐條 claim 核對，Phase 4）
 ├── orchestrator/
 │   ├── learning_orchestrator.py  # 協調所有元件的主控流程
-│   └── context_builder.py        # 學生狀態包組裝（Phase 2）
+│   ├── debounced_writer.py       # DebouncedExplanationWriter：時間 + size 雙閘門 throttle 寫 DB
+│   └── context_builder.py        # 學生狀態包組裝
+├── ws/
+│   └── generation_handle.py    # _GenerationHandle (task + event)；同步 register/finish/cancel +
+│                                 #   async register_async/finish_async/cancel_async（同步寫 inflight_locks DB lock）
+├── db/
+│   ├── database.py             # SQLite 連線、16 個 migration（內嵌）；PRAGMA WAL
+│   └── inflight_lock.py        # acquire/release/is_active/cleanup_stale（startup 清孤兒）
 ├── memory/
 │   ├── working_memory.py       # 當次輪次狀態（含 current_teaching_intent）
 │   ├── session_memory.py       # 本次學習進度 + source_chunks（SQLite）
@@ -175,8 +184,7 @@ backend/
 │   └── upload_store.py         # 磁碟讀寫 data/uploads/{file_id}.bin + .meta.json
 ├── tools/
 │   └── web_search.py           # DuckDuckGo Instant Answer API（ask_tutor 離題時用）
-├── auth/                       # JWT 帳號系統（單裝置強制登出，session_version）
-└── db/                         # SQLite 連線、15 個 migration（內嵌於 database.py）
+└── auth/                       # JWT 帳號系統（單裝置強制登出，session_version）
 ```
 
 ### 前端（React 19 + TypeScript + Vite + Zustand）
@@ -220,7 +228,7 @@ frontend/src/
 
 ### 資料庫 Schema
 
-九張資料表，由 `database.py` 內嵌的 **15 個 migration** 增量建立（冪等：`try/except ALTER` 與 `CREATE TABLE IF NOT EXISTS`，無 `schema_migrations` 追蹤表）：
+十張資料表，由 `database.py` 內嵌的 **16 個 migration** 增量建立（冪等：`try/except ALTER` 與 `CREATE TABLE IF NOT EXISTS`，無 `schema_migrations` 追蹤表）：
 
 | 表 | 用途 |
 |----|------|
@@ -233,6 +241,7 @@ frontend/src/
 | `tutor_records` | ask_tutor 問答（含 `scope` 三態，Migration 013–014） |
 | `concept_mastery` | 跨會話概念掌握度（EMA α=0.3）、結構化 misconception_patterns、成功 analogies |
 | `user_learning_profile` | 學習風格、平均嘗試次數、`ui_state_json`（跨裝置 UI 同步，Migration 012） |
+| `inflight_locks` | 跨 worker dedup lock：`key`/`session_id`/`kind`/`started_at`/`worker_pid`（Migration 016）；startup 清 stale ≥ 10 分鐘的孤兒 |
 
 完整 schema、欄位、index、migration 列表見 [BACKEND_FLOW §3](./BACKEND_FLOW.md#3-資料庫-schema)。
 
@@ -249,6 +258,7 @@ frontend/src/
 | `submit_answer` | `question_id`、`answer` |
 | `resume_session` | `session_id`、`provider?`、`model?` |
 | `ask_tutor` | `question`、`stage_id?` |
+| `cancel_generation` | `key?`（不指定則 fallback 嘗試取消該 session 任何 in-flight） |
 | `request_hint` | （目前固定回「即將開放」） |
 
 **Server → Client**
@@ -268,7 +278,10 @@ frontend/src/
 | `stage_decision` | `decision`、`message`、`next_stage_id?`、`best_score`、`reason_lines`、`strategy_snapshot` | 進度決策；`strategy_snapshot` 含 selection_reason、high_severity_misconceptions、repeated_patterns_detected |
 | `qa_history` | `records` | resume 時的歷史答題 |
 | `resume_state` | `current_question?`、`last_feedback?` | resume 時送出 |
-| `tutor_reply` | `question`、`answer`、`in_scope`、`scope`、`stage_id`、`id?` | `scope ∈ {current_chapter, other_chapter, out_of_scope}`；`id` 為 tutor_records.id（供前端刪除） |
+| `tutor_chunk` | `chunk`、`stage_id`、`question` | ask_tutor 串流片段（前端逐字渲染） |
+| `tutor_reply_complete` | `stage_id`、`question`、`full_answer` | tutor 串流結束 |
+| `tutor_reply` | `question`、`answer`、`in_scope`、`scope`、`stage_id`、`id?` | 用於 cache hit（DB 已有同問題紀錄）直接 emit、不走 stream；`scope ∈ {current_chapter, other_chapter, out_of_scope}`；`id` 為 tutor_records.id（供前端刪除） |
+| `generation_cancelled` | `key`、`kind ∈ {ask_tutor, other}` | 對應 client `cancel_generation` 的回應；前端用 `kind === 'ask_tutor'` 判斷是否清 streaming bubble |
 | `hint` | `message` | 回應 `request_hint` |
 | `course_completed` | `message` | 所有 stage 完成 |
 | `error` | `message` | 錯誤通知 |

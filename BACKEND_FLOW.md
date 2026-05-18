@@ -24,6 +24,7 @@
 8. [七個核心元件詳解](#8-七個核心元件詳解)
 9. [LLM 抽象層與 Provider](#9-llm-抽象層與-provider)
 10. [設定與環境變數](#10-設定與環境變數)
+11. [WS 基礎設施（Phase 1–3 增補）](#11-ws-基礎設施phase-13-增補)
 
 ---
 
@@ -68,11 +69,26 @@
 **Source Truth 架構**：後端掌控所有原文（`source_chunks` 表），LLM 只做語義切分與推理，不生成原文引用。
 
 **單 process 內的狀態**：
-- `_orchestrators: dict[str, LearningOrchestrator]` — 以 `session_id` 為鍵
-- `WorkingMemory._store: dict[str, WorkingMemory]` — 以 `session_id` 為鍵
+- `WorkingMemory._store: dict[str, WorkingMemory]` — 以 `session_id` 為鍵；resume_session / start_session 主動 build
+- `generation_handle._registry: dict[str, _GenerationHandle]` — 以 generation key 為鍵；done_callback 自動清
+
+> Phase 3 Task C1 起：**`_orchestrators` in-memory pool 已移除**。`backend/main.py` 內 `_build_orchestrator_for_session(session_id, p)` 在每次 WS 訊息進來時從 DB session row 重建 orchestrator instance（partial stateless — orchestrator 不快取，WorkingMemory 仍 in-process）。
+
+**跨 worker 同步（Phase 3 Task B）**：
+- `inflight_locks` DB 表 + `generation_handle.register_async/finish_async/cancel_async` — 同步寫 DB lock
+- `_wait_or_lookup_cache` helper（Phase 1 + Bug F）：先查歷史 cache（命中 emit + return True）→ miss 才看 inflight registry → 等對方完成後再查 cache
+- WAL 模式啟用：並發 acquire/release/cleanup_stale 無 deadlock
 
 **WebSocketManager 多裝置管理**：
-- 同一用戶新連線進來時，舊連線收到 `kicked` 訊息後被強制關閉（code 4002）
+- 同一用戶**不同 client_id** 新連線進來時，舊連線收到 `kicked` 訊息後被強制關閉（code 4002）
+- 同瀏覽器**多分頁**共用同個 `client_id`（localStorage 跨分頁同享）→ 允許並存
+
+**重連機制（Phase 2）**：
+- 前端 `LearningWebSocket` 指數退避 1/2/4/8/16/32s（上限 6 次共 63 秒），重連後自動 replay `resume_session`
+- `verifyAuth` 三態 `'ok' | 'invalid' | 'network'` — 網路斷不誤踢登出
+
+**串流寫入持久化（Phase 1）**：
+- `DebouncedExplanationWriter`（time + size 雙閘門 throttle）把 chunks 寫入 `stage_progress.full_explanation`；cancel / disconnect / 例外時透過 `finally writer.flush()` 確保已生成部分留在 DB
 
 **跨重啟的持久狀態**：全部存於 SQLite（`data/learning.db`）
 
@@ -86,7 +102,8 @@ uvicorn run:app --port 8000
     ├── run.py → 將上層目錄加入 sys.path，讓 backend.* 匯入正常
     │
     └── lifespan(app)
-            ├── init_db(DB_PATH)           # 建立 DB 連線、執行 migrations
+            ├── init_db(DB_PATH)           # 建立 DB 連線、執行 migrations、PRAGMA WAL
+            ├── inflight_lock.cleanup_stale(max_age_s=600)  # Phase 3：清前次 worker 強制關閉殘留的孤兒 lock
             └── （應用結束）close_db()      # 關閉 DB 連線
 ```
 
@@ -109,8 +126,9 @@ uvicorn run:app --port 8000
 | 013 (Python) | 建立 `tutor_records` 表 + index（ask_tutor 問答按 stage 持久化）；`CREATE TABLE IF NOT EXISTS` |
 | 014 (Python) | `ALTER TABLE tutor_records ADD COLUMN scope TEXT DEFAULT NULL`（三態邊界判定：`current_chapter` / `other_chapter` / `out_of_scope`） |
 | 015 (Python) | `ALTER TABLE sessions ADD COLUMN source_file_ids_json TEXT DEFAULT '[]'`（記錄 session 引用的 upload file_ids，供 `delete_session` 時 GC 磁碟 blob） |
+| 016 (Python) | 建立 `inflight_locks` 表 + index（Phase 3 Task B：跨 worker dedup lock）；`CREATE TABLE IF NOT EXISTS` |
 
-Migration 002–005、007–008、010–012、014–015 均用 `try/except` 包裹，已存在欄位時靜默跳過（冪等）。006、009、013 使用 `CREATE TABLE IF NOT EXISTS`。注意：程式碼中 006（`decision_records`）的建立語句實際位於 010 之後，但邏輯上屬於 Migration 006。沒有正式的 `schema_migrations` 追蹤表，所有狀態依賴 `try/except`／`IF NOT EXISTS` 的冪等性。
+Migration 002–005、007–008、010–012、014–015 均用 `try/except` 包裹，已存在欄位時靜默跳過（冪等）。006、009、013、016 使用 `CREATE TABLE IF NOT EXISTS`。注意：程式碼中 006（`decision_records`）的建立語句實際位於 010 之後，但邏輯上屬於 Migration 006。沒有正式的 `schema_migrations` 追蹤表，所有狀態依賴 `try/except`／`IF NOT EXISTS` 的冪等性。`PRAGMA journal_mode=WAL` 在 `init_db()` 內啟用，允許多 reader + 1 writer 並存。
 
 ---
 
@@ -253,6 +271,23 @@ INDEX: idx_tutor_records_session ON tutor_records(session_id, stage_id)
 ```
 
 `ask_tutor` 每筆問答持久化於此。`get_all_tutor_records` 載入時，若 `scope` 為 NULL（舊資料），會用 `in_scope` 反推（`1 → current_chapter`、`0 → out_of_scope`）。
+
+### `inflight_locks`（Migration 016，Phase 3 Task B）
+```
+key          TEXT PRIMARY KEY        # generation key（ws layer 命名）：
+                                     #   sess_X          → start_session / confirm_map / resume_session
+                                     #   sess_X:tutor    → ask_tutor
+                                     #   sess_X:answer:Q → submit_answer
+session_id   TEXT NOT NULL
+kind         TEXT NOT NULL           # 'start_session' | 'confirm_map' | 'submit_answer' |
+                                     #   'resume_session' | 'ask_tutor'
+started_at   REAL NOT NULL           # Unix timestamp，cleanup_stale 用
+worker_pid   INTEGER                 # debug 用
+meta_json    TEXT                    # 預留擴展欄位
+INDEX: idx_inflight_session ON inflight_locks(session_id)
+```
+
+跨 worker dedup 機制：`register_async` 嘗試 `INSERT`（PRIMARY KEY 衝突即 lock 已被占有），衝突回 `None`、呼叫端做 race lost 處理。`done_callback` / `finish_async` / `cancel_async` 都會 release lock。`cleanup_stale(max_age_s=600)` 在 FastAPI lifespan startup 跑一次，清掉前次 worker 強制關閉時殘留的孤兒 lock。
 
 ---
 
@@ -461,6 +496,7 @@ class WorkingMemory:
 | `submit_answer` | `session_id`，`question_id`，`answer` | 提交答案 |
 | `resume_session` | `session_id`，`provider?`，`model?` | 重整後恢復 session |
 | `ask_tutor` | `question`，`stage_id?` | 學生對教材提出問題；`stage_id` 為 null 時自動取 `wm.current_stage_id` |
+| `cancel_generation` | `key?` | 取消指定 key 的 in-flight task；`key` 不指定則嘗試取消該 session 任何 in-flight（fallback） |
 | `request_hint` | — | 請求提示（目前回傳固定「即將開放」） |
 
 ### 伺服器 → 客戶端
@@ -480,7 +516,10 @@ class WorkingMemory:
 | `stage_decision` | `decision`，`message`，`next_stage_id?`，`best_score`，`reason_lines`，`strategy_snapshot` | 進度決策；`strategy_snapshot` 含 selection_reason（Phase 4） |
 | `qa_history` | `records` | `_resume_from_stored` 時推送歷史答題 |
 | `resume_state` | `current_question?`，`last_feedback?` | `_resume_from_stored` 時推送 |
-| `tutor_reply` | `question`，`answer`，`in_scope`，`scope`，`stage_id`，`id?` | 回應 `ask_tutor`；`scope` 為三態字串，`id` 為 tutor_records.id（供前端刪除） |
+| `tutor_chunk` | `chunk: str`，`stage_id: int`，`question: str` | ask_tutor 串流片段（Phase 2：逐字渲染） |
+| `tutor_reply_complete` | `stage_id`，`question`，`full_answer` | tutor 串流結束（搭配 `tutor_chunk`） |
+| `tutor_reply` | `question`，`answer`，`in_scope`，`scope`，`stage_id`，`id?` | DB cache hit 路徑直接 emit 完整答覆（不走 stream）；`scope` 三態，`id` 為 tutor_records.id |
+| `generation_cancelled` | `key`，`kind: 'ask_tutor' \| 'other'` | 對應 client `cancel_generation` 回應；前端依 `kind` 決定是否清 streaming bubble（`ask_tutor` 走 `commitStreamingTutorAsCancelled`） |
 | `hint` | `message` | 回應 `request_hint`（目前固定「即將開放」） |
 | `course_completed` | `message` | 所有 stage 完成 |
 | `error` | `message` | 錯誤通知 |
@@ -664,13 +703,16 @@ run_stage(session_id, user_id, stages, stage_index, question_mode, emit)
     │
     ├── 【步驟 1】emit: explanation_chunk（進度表 Markdown）
     │
-    ├── 【步驟 2】串流講解（TeacherAgent）
-    │   TeacherAgent.stream_explanation(ctx)
+    ├── 【步驟 2】串流講解（TeacherAgent）— Phase 3 Task A 起改用 stream_explanation_with_intent
+    │   TeacherAgent.stream_explanation_with_intent(ctx)
     │       task_payload: {stage, adaptive_context: adaptive_ctx, prev_stage_title}
     │       system prompt 包含：
     │           學生掌握度、混淆模式、最近答題、
     │           must_reinforce、forbidden_future、selection_reason（Phase 4）
-    │       每個 chunk → emit: explanation_chunk（is_final=False）
+    │           + 尾段 <<INTENT_JSON>>{...}<<END_INTENT>> 標記區塊指示
+    │       每個 chunk（標記前的純文字）→ emit: explanation_chunk（is_final=False）
+    │       標記區塊內 chunks 累積但不外送、結束後 parse 到 self.teacher.last_intent
+    │       透過 DebouncedExplanationWriter (Phase 1) throttle 寫入 stage_progress.full_explanation
     │
     │   DriftVerifierAgent.run(...)（citation accuracy 驗證，Phase 4）
     │       ├── _extract_cited_chunks()：提取 [chunk_id] 並配對原文
@@ -681,10 +723,12 @@ run_stage(session_id, user_id, stages, stage_index, question_mode, emit)
     │   wm.current_explanation = full_explanation
     │   session_memory.store_stage_explanation(...)
     │
-    ├── 【步驟 3】提取教學意圖（Phase 3）
-    │   teaching_intent = await teacher.extract_teaching_intent(full_explanation, stage)
-    │       # non-streaming，解析講解全文，輸出：
-    │       # {reinforced_concepts, analogies_used, repair_target, main_chunk_ids}
+    ├── 【步驟 3】提取教學意圖（Phase 3 Task A 改為 inline）
+    │   teaching_intent = self.teacher.last_intent or await teacher.extract_teaching_intent(full_explanation, stage)
+    │       # 主路徑：直接用 stream 共生的 INTENT JSON 區塊（last_intent 是 dict 或 None）
+    │       # Fallback：last_intent is None 時走獨立 LLM extract_teaching_intent
+    │       # 輸出：{reinforced_concepts, analogies_used, repair_target, main_chunk_ids}
+    │       #   或新格式 {key_concepts, expected_misunderstandings, evidence_chunk_ids}
     │   wm.current_teaching_intent = teaching_intent
     │
     ├── 【步驟 4】生成問題（QuestionGeneratorAgent）
@@ -1078,10 +1122,39 @@ stage["source_chunks"] = [{"chunk_id": cid, "quote": db_chunks[cid]["text"]}
 
 **重要限制（Prompt）**：每個核心敘述後標記 `[chunk_id]`，類比標示「（類比說明，非原文）」，禁止提及 forbidden_future 概念。
 
-**extract_teaching_intent（Phase 3 新增）**：
+**串流方法**：
+
+- **`stream_explanation_with_intent(ctx)`**（主路徑、最新）：包裝 LLM stream，偵測尾段的 `<<INTENT_JSON>>{...}<<END_INTENT>>` 標記區塊：
+  - 標記前的純文字 chunks 原樣 `yield`（前端正常顯示講解；buffer 留 `len(MARKER)-1` 字元餘量，避免標記被切半送出）
+  - 進入標記區塊後 chunks 累積到 `intent_buffer`、**不外送**
+  - 收到 END marker 後 `json.loads(intent_buffer.strip())` 存進 `self.last_intent`
+  - 若 LLM 沒輸出標記區塊，`emit` 正常結束、`self.last_intent = None`
+- **`stream_explanation(ctx)`**（既有）：純串流，無 intent 抽取；保留供未來需要時呼叫
+
+**Prompt 結尾的 INTENT 標記指示**（已加入 `SYSTEM_PROMPTS["teacher"]` 尾段）：
+
+```
+【教學意圖標記區塊（強制）】
+講解結束後，必須在最後加上以下標記區塊（一字不差）：
+
+<<INTENT_JSON>>
+{
+  "key_concepts": ["...本節要傳達的核心概念，依重要性排序"],
+  "expected_misunderstandings": ["...學生可能會搞錯的點"],
+  "evidence_chunk_ids": ["chunk_0001", "..."]
+}
+<<END_INTENT>>
+```
+
+注意：prompt 為 f-string `.format()` 模板，JSON 大括號實際寫成 `{{` `}}`。
+
+**`extract_teaching_intent(explanation_text, stage)`**（fallback）：
 - 串流結束後，非串流呼叫 LLM 分析講解全文
 - 輸出：`{reinforced_concepts, analogies_used, repair_target, main_chunk_ids}`
-- 存入 `wm.current_teaching_intent`，供 QuestionGeneratorAgent 使用
+- **僅 fallback 觸發**：`run_stage` line 712 走 `self.teacher.last_intent or await self.teacher.extract_teaching_intent(...)`，若 inline 抽出失敗才呼叫
+- **第二個獨立呼叫點**：`run_stage` line 1666 — resume 重整時若 DB 已有講解但沒題目、補生題目時呼叫（無 streaming context 可用，必須走獨立 extract）
+
+Phase 3 收益：5/5 stage 命中 inline 抽取，fallback 0 次觸發，每個 stage 省下 2–5 秒 LLM 來回。
 
 ### 8.4 QuestionGeneratorAgent
 
@@ -1332,3 +1405,115 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 - `youtube-transcript-api>=0.6.2`
 - `yt-dlp>=2025.1.26`（YouTube 音訊下載）
 - `faster-whisper>=1.0.3`（ASR 轉寫）
+
+---
+
+## 11. WS 基礎設施（Phase 1–3 增補）
+
+以下三套機制橫跨多個 message handler，集中說明。
+
+### 11.1 `DebouncedExplanationWriter`（Phase 1）
+
+**位置**：`backend/orchestrator/debounced_writer.py`
+
+**目的**：講解串流期間每 chunk 寫 DB 太頻繁（IO 浪費 + 鎖頻寬）→ 用時間 + size 雙閘門 throttle。
+
+```python
+class DebouncedExplanationWriter:
+    def __init__(self, store_fn, session_id, stage_id,
+                 min_interval_s=0.5, min_delta_chars=200):
+        ...
+
+    async def update(self, full_text: str) -> None:
+        """update 不會自行 sanitize；time_due 或 size_due 任一達到即 _do_write。"""
+
+    async def flush(self) -> None:
+        """確保最新狀態落地（finally 內呼叫，保證 cancel/disconnect 仍寫一次）。"""
+```
+
+關鍵：`run_stage` 的 `try / finally writer.flush()` 配合 Phase 2 cancel 機制 — 即使中途 `task.cancel()` 也會把已生成部分留在 `stage_progress.full_explanation`。
+
+### 11.2 `_GenerationHandle` + `inflight_lock`（Phase 2 + Phase 3 Task B）
+
+**位置**：`backend/ws/generation_handle.py`、`backend/db/inflight_lock.py`
+
+**目的**：5 個 dispatcher handler（start_session / confirm_map / submit_answer / resume_session / ask_tutor）共用的「**dedup + 可取消**」基礎建設。
+
+**Generation key 命名**：
+
+| message_type | key 格式 |
+|---|---|
+| start_session / confirm_map / resume_session | `{session_id}` |
+| submit_answer | `{session_id}:answer:{question_id}` |
+| ask_tutor | `{session_id}:tutor` |
+
+**API**：
+
+| 函式 | 同步 / async | 用途 |
+|---|---|---|
+| `register(key, task)` | sync | 純 in-process registry（既有 unit tests 在用） |
+| `register_async(key, task, *, session_id, kind)` | async | **主用**：同步 `INSERT inflight_locks`；衝突回 None |
+| `get_active(key)` | sync | 取 in-process handle |
+| `finish(key)` | sync | 純 clear registry |
+| `finish_async(key)` | async | clear registry + `DELETE inflight_locks` |
+| `cancel(key)` | async | task.cancel() + clear registry |
+| `cancel_async(key)` | async | task.cancel() + clear registry + release DB lock |
+
+**保險機制**：`register_async` 在 `task.add_done_callback` 內 `asyncio.create_task(inflight_lock.release(key))` — 即使呼叫端忘了 `finish_async`，task 結束時 DB lock 仍會釋放。
+
+**Phase 2 Bug D 修補**：5 處 handler 內**不 await task**（fire-and-forget），dispatcher loop 必須能繼續處理 `cancel_generation` 訊息；`cancel_generation` handler 自己 emit `generation_cancelled`（帶 `kind` 字段，前端用 `'ask_tutor'` vs `'other'` 判斷是否清 streaming bubble）。
+
+### 11.3 `_wait_or_lookup_cache` helper（Phase 1 + Bug F 修補）
+
+**位置**：`backend/main.py:158`
+
+**行為**（Phase 1 + Bug F 後）：
+
+```
+async def _wait_or_lookup_cache(key, timeout_s, cache_lookup, emit_cached) -> bool:
+    1. 先 cache_lookup（無條件，不論有無 inflight）→ 命中即 emit + return True
+    2. cache miss → 查 inflight registry
+       - 無 inflight → return False（呼叫端走新任務路徑）
+       - 有 inflight → wait 最多 timeout_s
+    3. 等完後再 cache_lookup → 命中 emit + return True；否則 return False
+```
+
+Bug F 修補關鍵：原本只在「有 inflight」時才查 cache，導致 tutor 重複問同問題會跑 LLM 兩次（第一次完成後 registry 已清，第二次來時 prev=None 直接跑新 LLM）。改為「**無條件先 cache lookup**」對 4 個 caller (start_session / confirm_map / submit_answer / ask_tutor) 都是正確行為。
+
+各 caller 的 cache_lookup 內容：
+
+| caller | cache_lookup 邏輯 |
+|---|---|
+| start_session | session row 已存在且 `content_hash` 命中（或 row 已 `status != pending_confirmation`） |
+| confirm_map | session row `status != pending_confirmation`（已 confirm 過） |
+| submit_answer | `qa_records` 已有同 question_id 記錄 |
+| ask_tutor | `tutor_records` 已有同 stage_id + 同 question 文字記錄 |
+
+### 11.4 Orchestrator stateless（Phase 3 Task C1）
+
+**`_build_orchestrator_for_session(session_id, p)` (main.py)**：每個 WS message 從 DB session row 重建 `LearningOrchestrator` instance。
+
+優先序：`payload.provider/model` > `sessions.provider_name/model_name` > `DEFAULT_PROVIDER`。
+
+**已移除**：`_orchestrators: dict[str, LearningOrchestrator]` in-memory cache 與其 `pop / set` 邏輯。WS disconnect cleanup 仍呼叫 `delete_working_memory(session_id)`（WorkingMemory 沒走 stateless 化，仍用 in-process `_store`）。
+
+### 11.5 cancel_generation dispatch
+
+```python
+elif msg_type == "cancel_generation":
+    target_key = p.get("key")
+    cancelled_keys: list[str] = []
+    if not target_key:
+        # 不指定 key fallback：嘗試取消該 session 兩個常見 key
+        for k in (session_id, f"{session_id}:tutor"):
+            if await _gen_cancel_async(k):
+                cancelled_keys.append(k)
+    else:
+        if await _gen_cancel_async(target_key):
+            cancelled_keys.append(target_key)
+    for k in cancelled_keys:
+        kind = "ask_tutor" if k.endswith(":tutor") else "other"
+        await emit({"type": "generation_cancelled", "payload": {"key": k, "kind": kind}})
+```
+
+前端 `case 'generation_cancelled'` 看 `kind === 'ask_tutor'` → `commitStreamingTutorAsCancelled()`（streaming bubble 凍結為 history note）；其他 kind 走 `endExplanationLoading()` 通用路徑。
