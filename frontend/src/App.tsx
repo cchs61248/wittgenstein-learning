@@ -118,7 +118,9 @@ export default function App() {
   const bgProviderRef = useRef<string>('claude');
   const bgModelRef = useRef<string | undefined>(undefined);
   const stagesRef = useRef(stages);
-  stagesRef.current = stages;
+  useEffect(() => {
+    stagesRef.current = stages;
+  }, [stages]);
   const explanationScrollRef = useRef<HTMLDivElement | null>(null);
   const statsScrollRef = useRef<HTMLDivElement | null>(null);
   const storeSessionId = useSessionStore((s) => s.sessionId);
