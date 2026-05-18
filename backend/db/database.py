@@ -180,6 +180,24 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
+    # Migration 016：inflight_locks 跨 worker dedup
+    # key 用 ws layer 的 generation key（例如 sess_X、sess_X:tutor、sess_X:answer:q_1_0）；
+    # started_at = time.time() Unix timestamp；worker 啟動清理 stale lock 防止孤兒
+    await _connection.execute(
+        """CREATE TABLE IF NOT EXISTS inflight_locks (
+            key TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            worker_pid INTEGER,
+            meta_json TEXT
+        )"""
+    )
+    await _connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inflight_session ON inflight_locks(session_id)"
+    )
+    await _connection.commit()
+
 
 async def close_db() -> None:
     global _connection
