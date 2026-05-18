@@ -230,6 +230,25 @@ async def _wait_or_lookup_cache(
     return await _try_cache()
 
 
+async def _lookup_answer_cache(session_id: str, question_id: str) -> dict | None:
+    """
+    submit_answer 的 cache lookup helper（module-level，方便測試）。
+
+    只在「當前 stage」內查 cache。questioner 在補強/重教章節可能重用與原章節相同的
+    question_id（例如 stage 8 與 stage 11 同名 q_cb_1），跨 stage 共享 cache 會讓
+    新章節答題誤命中舊紀錄，導致 handle_answer 整個跳過、不發下一題、不發 stage_decision。
+    """
+    session_row = await session_memory.get_session(session_id)
+    if not session_row:
+        return None
+    current_stage_id = session_row.get("current_stage_id")
+    if current_stage_id is None:
+        return None
+    all_qa = await session_memory.get_all_stage_qa_records(session_id)
+    records = all_qa.get(int(current_stage_id), [])
+    return next((x for x in records if x["question_id"] == question_id), None)
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -385,12 +404,7 @@ async def websocket_endpoint(
                 _answer_key = f"{session_id}:answer:{_question_id}"
 
                 async def _ans_cache():
-                    all_qa = await session_memory.get_all_stage_qa_records(session_id)
-                    for records in all_qa.values():
-                        r = next((x for x in records if x["question_id"] == _question_id), None)
-                        if r:
-                            return r
-                    return None
+                    return await _lookup_answer_cache(session_id, _question_id)
 
                 async def _ans_emit(r):
                     await emit({
