@@ -106,7 +106,7 @@ export async function streamYoutubeAsr(
       buffer = buffer.slice(nl + 1);
       if (!line) continue;
 
-      let msg: YoutubeAsrEvent | null = null;
+      let msg: YoutubeAsrEvent;
       try {
         msg = JSON.parse(line) as YoutubeAsrEvent;
       } catch {

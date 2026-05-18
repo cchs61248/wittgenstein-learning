@@ -454,7 +454,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     try { const r = localStorage.getItem('wl_tutor_pending'); return r ? JSON.parse(r).stageId : null; } catch { return null; }
   })(),
   setPendingTutor: (question, stageId) => {
-    try { localStorage.setItem('wl_tutor_pending', JSON.stringify({ question, stageId })); } catch {}
+    try { localStorage.setItem('wl_tutor_pending', JSON.stringify({ question, stageId })); } catch { /* localStorage 不可用：忽略 */ }
     set({ pendingTutorQuestion: question, pendingTutorStageId: stageId, isTutorLoading: true });
   },
   clearPendingTutor: () => {
@@ -503,7 +503,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       if (s.sessionId) {
         try {
           localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated));
-        } catch {}
+        } catch { /* localStorage 不可用：忽略 */ }
       }
       localStorage.removeItem('wl_tutor_pending');
       return {
@@ -532,7 +532,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       if (!isDuplicate && s.sessionId) {
         try {
           localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated));
-        } catch {}
+        } catch { /* localStorage 不可用：忽略 */ }
       }
       localStorage.removeItem('wl_tutor_pending');
       return {
@@ -548,14 +548,14 @@ export const useSessionStore = create<SessionState>((set) => ({
       if (s.sessionId) {
         try {
           localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(map));
-        } catch {}
+        } catch { /* localStorage 不可用：忽略 */ }
       }
       return { tutorHistory: map };
     }),
   clearTutorHistory: () =>
     set((s) => {
       if (s.sessionId) {
-        try { localStorage.removeItem(`wl_tutor_${s.sessionId}`); } catch {}
+        try { localStorage.removeItem(`wl_tutor_${s.sessionId}`); } catch { /* localStorage 不可用：忽略 */ }
       }
       localStorage.removeItem('wl_tutor_history');
       return { tutorHistory: {}, tutorReply: null };
@@ -568,7 +568,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         [stageId]: prev.filter((item) => item.id !== recordId),
       };
       if (s.sessionId) {
-        try { localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated)); } catch {}
+        try { localStorage.setItem(`wl_tutor_${s.sessionId}`, JSON.stringify(updated)); } catch { /* localStorage 不可用：忽略 */ }
       }
       return { tutorHistory: updated };
     }),
@@ -676,7 +676,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setAwaitingFeedback: (v) => set({ isAwaitingFeedback: v }),
   setPendingAnswer: (answer) => set({ pendingAnswer: answer }),
   setPendingSubmit: (questionId, answer) => {
-    try { localStorage.setItem('wl_answer_pending', JSON.stringify({ questionId, answer })); } catch {}
+    try { localStorage.setItem('wl_answer_pending', JSON.stringify({ questionId, answer })); } catch { /* localStorage 不可用：忽略 */ }
     set({ pendingAnswerQuestionId: questionId, pendingAnswer: answer, isAwaitingFeedback: true });
   },
   clearPendingSubmit: () => {
