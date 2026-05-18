@@ -34,11 +34,15 @@ export async function login(email: string, password: string): Promise<AuthRespon
   return res.json();
 }
 
-export async function verifyAuth(token: string): Promise<boolean> {
+export type VerifyAuthResult = 'ok' | 'invalid' | 'network';
+
+export async function verifyAuth(token: string): Promise<VerifyAuthResult> {
   try {
     const res = await fetch(`${BASE}/auth/me?token=${encodeURIComponent(token)}`);
-    return res.ok;
+    if (res.ok) return 'ok';
+    if (res.status === 401 || res.status === 403) return 'invalid';
+    return 'network';
   } catch {
-    return false;
+    return 'network';
   }
 }

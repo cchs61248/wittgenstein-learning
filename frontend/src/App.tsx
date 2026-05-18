@@ -375,8 +375,11 @@ export default function App() {
     if (!token) return;
     let cancelled = false;
     const runCheck = async () => {
-      const ok = await verifyAuth(token);
-      if (cancelled || ok) return;
+      const status = await verifyAuth(token);
+      if (cancelled) return;
+      // 網路問題（fetch reject / 5xx）：不處理，留給 WS 重連邏輯與下次 tick；
+      // 只有 server 明確回 401/403 才視為 token 失效並登出。
+      if (status !== 'invalid') return;
       const logoutMessage = '你已在其他裝置登入，此裝置已登出。';
       setKickedMessage(logoutMessage);
       wsRef.current?.close();
