@@ -278,13 +278,7 @@ async def websocket_endpoint(
 
                 task = asyncio.create_task(_run_start())
                 _gen_register(_start_key, task)
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    await emit({
-                        "type": "generation_cancelled",
-                        "payload": {"key": _start_key, "kind": "start_session"},
-                    })
+                # 不 await task — dispatcher loop 必須能接收 cancel_generation 等後續訊息
 
             elif msg_type == "confirm_map":
                 _confirm_key = session_id
@@ -336,13 +330,6 @@ async def websocket_endpoint(
 
                 task = asyncio.create_task(_run_confirm())
                 _gen_register(_confirm_key, task)
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    await emit({
-                        "type": "generation_cancelled",
-                        "payload": {"key": _confirm_key, "kind": "confirm_map"},
-                    })
 
             elif msg_type == "submit_answer":
                 orch = _orchestrators.get(session_id)
@@ -383,18 +370,15 @@ async def websocket_endpoint(
                             answer=p["answer"],
                             emit=emit,
                         )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        await emit({"type": "error", "payload": {"message": f"評分失敗：{e}"}})
                     finally:
                         _gen_finish(_answer_key)
 
                 task = asyncio.create_task(_run_answer())
                 _gen_register(_answer_key, task)
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    await emit({
-                        "type": "generation_cancelled",
-                        "payload": {"key": _answer_key, "kind": "submit_answer"},
-                    })
 
             elif msg_type == "resume_session":
                 session_id_to_resume: str = p.get("session_id", session_id)
@@ -435,13 +419,6 @@ async def websocket_endpoint(
 
                 task = asyncio.create_task(_run_resume())
                 _gen_register(session_id_to_resume, task)
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    await emit({
-                        "type": "generation_cancelled",
-                        "payload": {"key": session_id_to_resume, "kind": "resume_session"},
-                    })
 
             elif msg_type == "request_hint":
                 await emit({
@@ -493,33 +470,36 @@ async def websocket_endpoint(
                             stage_id=_ask_stage_id,
                             emit=emit,
                         )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        await emit({"type": "error", "payload": {"message": f"AI 回答失敗：{e}"}})
                     finally:
                         _gen_finish(_tutor_key)
 
                 task = asyncio.create_task(_run_tutor())
                 _gen_register(_tutor_key, task)
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    await emit({
-                        "type": "generation_cancelled",
-                        "payload": {"key": _tutor_key, "kind": "ask_tutor"},
-                    })
 
             elif msg_type == "cancel_generation":
                 target_key = p.get("key")
+                cancelled_keys: list[str] = []
                 if not target_key:
                     # 沒指定 key 就嘗試取消該 session 任何 in-flight 的兩個常見來源
-                    cancelled = False
                     for k in (session_id, f"{session_id}:tutor"):
                         if await _gen_cancel(k):
-                            cancelled = True
-                    if not cancelled:
+                            cancelled_keys.append(k)
+                    if not cancelled_keys:
                         _ws_log.info("cancel_generation: no in-flight task for session=%s", session_id)
                 else:
-                    ok = await _gen_cancel(target_key)
-                    if not ok:
+                    if await _gen_cancel(target_key):
+                        cancelled_keys.append(target_key)
+                    else:
                         _ws_log.info("cancel_generation: key=%s not found", target_key)
+                for k in cancelled_keys:
+                    await emit({
+                        "type": "generation_cancelled",
+                        "payload": {"key": k},
+                    })
 
     except (WebSocketDisconnect, RuntimeError):
         _ws_log.info("WS DISCONNECT  session=%s  user=%s", session_id, user_id)
