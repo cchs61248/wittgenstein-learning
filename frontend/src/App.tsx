@@ -121,6 +121,7 @@ export default function App() {
   useEffect(() => {
     stagesRef.current = stages;
   }, [stages]);
+  const handleMessageRef = useRef<(msg: ServerMessage) => void>(() => {});
   const explanationScrollRef = useRef<HTMLDivElement | null>(null);
   const statsScrollRef = useRef<HTMLDivElement | null>(null);
   const storeSessionId = useSessionStore((s) => s.sessionId);
@@ -305,7 +306,7 @@ export default function App() {
         setPendingMap(session.pending_map);
         // 建立 WebSocket 連線，等待用戶確認後發送 confirm_map
         const ws = new LearningWebSocket(savedSessionId, token, {
-          onMessage: handleMessage,
+          onMessage: (msg) => handleMessageRef.current(msg),
           onOpen: () => setConnected(true),
           onClose: () => setConnected(false),
           onReconnecting: (n) => setReconnectAttempt(n),
@@ -334,7 +335,7 @@ export default function App() {
 
         // 正常恢復進行中的學習
         const ws = new LearningWebSocket(savedSessionId, token, {
-          onMessage: handleMessage,
+          onMessage: (msg) => handleMessageRef.current(msg),
           onOpen: () => {
             setConnected(true);
             ws.send({
@@ -427,7 +428,7 @@ export default function App() {
         setPendingMap(session.pending_map);
         wsRef.current?.close();
         const ws = new LearningWebSocket(currentSid, token, {
-          onMessage: handleMessage,
+          onMessage: (msg) => handleMessageRef.current(msg),
           onOpen: () => setConnected(true),
           onClose: () => setConnected(false),
           onReconnecting: (n) => setReconnectAttempt(n),
@@ -696,6 +697,10 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    handleMessageRef.current = handleMessage;
+  });
+
   const handleStart = (
     provider: ProviderType,
     depth: DepthType,
@@ -740,7 +745,7 @@ export default function App() {
               setPendingMap(kmap);
               setBgPendingMap(null);
               const ws = new LearningWebSocket(newSid, token!, {
-                onMessage: handleMessage,
+                onMessage: (msg) => handleMessageRef.current(msg),
                 onOpen: () => setConnected(true),
                 onClose: () => setConnected(false),
                 onReconnecting: (n) => setReconnectAttempt(n),
@@ -826,7 +831,7 @@ export default function App() {
     setIsWaitingForCurrentGeneration(true);
 
     const ws = new LearningWebSocket(newSid, token, {
-      onMessage: handleMessage,
+      onMessage: (msg) => handleMessageRef.current(msg),
       onOpen: () => {
         setConnected(true);
         ws.send({ type: 'start_session', payload: startPayload });
@@ -910,7 +915,7 @@ export default function App() {
       useSessionStore.setState({ sessionId: sid, stages: [], currentStageId: null });
       setPendingMap(pendingMapData);
       const ws = new LearningWebSocket(sid, token!, {
-        onMessage: handleMessage,
+        onMessage: (msg) => handleMessageRef.current(msg),
         onOpen: () => setConnected(true),
         onClose: () => setConnected(false),
       });
@@ -965,7 +970,7 @@ export default function App() {
       useSessionStore.setState({ sessionId: sid, stages: [], currentStageId: null });
       setPendingMap(session.pending_map);
       const ws = new LearningWebSocket(sid, token!, {
-        onMessage: handleMessage,
+        onMessage: (msg) => handleMessageRef.current(msg),
         onOpen: () => setConnected(true),
         onClose: () => setConnected(false),
       });
@@ -976,7 +981,7 @@ export default function App() {
       setSession(sid, session.stages, session.stage_statuses);
       useSessionStore.getState().beginExplanationLoading(useSessionStore.getState().currentStageId);
       const ws = new LearningWebSocket(sid, token!, {
-        onMessage: handleMessage,
+        onMessage: (msg) => handleMessageRef.current(msg),
         onOpen: () => {
           setConnected(true);
           ws.send({
