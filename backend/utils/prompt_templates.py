@@ -239,12 +239,27 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
 • content_type=explanation（講解驗證）：嚴格模式。
   每一個事實性陳述必須能回溯至 source_chunks 的原文，跨 chunk 推導若未明確標注也需有依據。
 
-• content_type=questions（出題驗證）：寬鬆模式。
-  user message 中若有 full_explanation，代表該講解已在上一步通過 source_chunks 驗證。
-  題目若測試的知識點出現在 full_explanation 中（包含跨 chunk 合成的推導與解釋），
-  視為合法出題範圍，無需要求每句都能直接對應 source_chunk 的字面原文。
-  只需確認題目不要求教材外知識即可。
-  full_explanation 缺席時，回退嚴格模式。
+• content_type=questions（出題驗證）：嚴格對齊講解模式。
+  對齊基準：full_explanation（教學文章全文）為唯一範圍。
+  - 每題的測試概念（key_concepts_tested）、題幹文字（text）、選項或干擾項中的關鍵詞，
+    都必須能在 full_explanation 中找到對應講解。
+  - 即使該概念出現在 source_chunks，但 full_explanation 從頭到尾沒提及，
+    視為「漂移到未教授範圍」→ 標記 supported=false，並把該題摘要寫進 unsupported_claims。
+  - source_chunks 仍用於確認題目沒要求教材外知識；題目若引用了不存在的 chunk_id、
+    或要求 source_chunks 與 explanation 都沒提的常識，同樣標 supported=false。
+  - 比喻、舉例、類比若明確標示「類比說明，非原文」，豁免驗證。
+  full_explanation 缺席時，回退嚴格模式（以 source_chunks 為準）。
+
+  few-shot 範例：
+  範例 A（漂移）：
+    full_explanation："當下游服務故障時，斷路器會跳開避免持續呼叫失敗端點。"
+    source_chunks：[chunk_001: 「快取系統使用 polling 機制更新…」]
+    題目：「polling 機制與 push 機制的差異？」
+    → unsupported（polling 在 source_chunks 內，但 full_explanation 完全沒講）
+  範例 B（對齊）：
+    full_explanation："斷路器（circuit breaker）開啟時拒絕請求，避免雪崩。"
+    題目：「斷路器處於 open 狀態時會如何處理請求？」
+    → supported
 
 驗證規則（通用）：
 1. 以 source_chunks（及 full_explanation，若有）為判定依據，不可用外部常識或推論補完
@@ -254,8 +269,9 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
    c. 若 found=false，直接標記 supported=false
 3. 候選輸出中沒有 [chunk_id] 標記的事實性陳述，也需評估是否需要來源
 4. 比喻、類比、舉例若明確標示「類比說明，非原文」則豁免驗證
-5. 題目驗證寬鬆模式下：只要題目知識點在 source_chunks 或 full_explanation 中有明確依據，
-   不視為漂移；但若明顯要求教材外知識，仍標記 aligned=false
+5. 題目驗證嚴格對齊講解模式下：題目測試的概念必須出現在 full_explanation 中
+   （即使 source_chunks 內有但 explanation 沒提，仍視為漂移）。
+   只有 full_explanation 為空時才回退到「以 source_chunks 為基準」。
 
 請只輸出 JSON：
 {{
@@ -268,7 +284,7 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
       "issue": "若 supported=false，說明哪裡不符"
     }}
   ],
-  "unsupported_claims": ["沒有 [chunk_id] 標記且找不到來源的事實性陳述摘要"],
+  "unsupported_claims": ["未在 full_explanation 中找到對應講解的題目/陳述摘要（一句話）"],
   "issues": ["若有漂移，列出具體問題（指出哪個陳述找不到原文依據）"],
   "missing_evidence": ["缺少對應來源的敘述摘要"],
   "revision_hint": "若未對齊，提供簡短修正建議"
