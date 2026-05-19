@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-12，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica／DeepSeek Provider、上傳磁碟持久化、多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合、URL 擷取品質強化（WebFetch 風格結構化輸出 + strict_main 主文截斷 + YouTube ASR fallback）、**Migration 011–015 補完（單裝置登入 session_version、跨裝置 UI 狀態、tutor_records 與 scope 三態、upload blob GC 追蹤）、ask_tutor 三態邊界判定、Enrichment 機制移除、DriftVerifier aligned 強制條件、QuestionGenerator JSON repair、Files API adapter 廢棄、A/B 批死代碼與邏輯漏洞清理**）
+> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-19，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica／DeepSeek Provider、上傳磁碟持久化、多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合、URL 擷取品質強化（WebFetch 風格結構化輸出 + strict_main 主文截斷 + YouTube ASR fallback）、Migration 011–015 補完（單裝置登入 session_version、跨裝置 UI 狀態、tutor_records 與 scope 三態、upload blob GC 追蹤）、ask_tutor 三態邊界判定、Enrichment 機制移除、DriftVerifier aligned 強制條件、QuestionGenerator JSON repair、Files API adapter 廢棄、A/B 批死代碼與邏輯漏洞清理、**出題對齊講解強化（2026-05-19）：QuestionGenerator prompt 加「出題範圍嚴格限制」（題目必須在 full_explanation 中明確出現）、DriftVerifier questions 模式改嚴格對齊（full_explanation 為唯一基準，chunks 提到但講解未涵蓋的概念視為漂移）、retry 提示注入 `unsupported_claims`、retry 後仍漂移的題目以 `[註：本題未對齊講解]` 軟性標記持久化**）
 
 ---
 
@@ -738,10 +738,27 @@ run_stage(session_id, user_id, stages, stage_index, question_mode, emit)
     │   task_payload: {stage, teaching_intent, allowed_evidence, num_questions, ...}
     │       ├── 問題與 teaching_intent.repair_target 對齊（至少 1 題）
     │       ├── 問題與 analogies_used 對齊（至少 1 題）
+    │       ├── **出題範圍嚴格限制（2026-05-19）**：題目測試的概念必須在
+    │       │   full_explanation 中明確出現並有解釋；chunks 提到但講解未涵蓋
+    │       │   的概念不得出題
     │       └── evidence 優先用 allowed_evidence（真實 DB 原文）
-    │   DriftVerifierAgent 驗證（aligned=False → 重新生成）
+    │   DriftVerifierAgent 驗證（content_type=questions，questions 模式以
+    │       full_explanation 為唯一對齊基準）：
+    │       ├── aligned=True → 採用
+    │       ├── aligned=False →
+    │       │     1. _build_question_retry_guidance(verify_result) 把
+    │       │        unsupported_claims（前 5 條）注入 retry prompt
+    │       │     2. 重新生成 questions
+    │       │     3. **重試後再次 DriftVerifier**；仍漂移的題目
+    │       │        透過 _tag_drifting_questions 比對前後 30 字 fuzzy match，
+    │       │        在 text 前加 `[註：本題未對齊講解]` 軟性標記
+    │       │        並設 `_grounding_status="drift_after_retry"`（冪等）
     │   wm.pending_questions = questions
     │   session_memory.store_stage_questions(...)
+    │   ⚠️ 三處 retry 區塊（run_stage / remediate / reteach）共用同一對 helper
+    │      方法（_build_question_retry_guidance、_tag_drifting_questions），
+    │      差別僅在 full_explanation 來源變數（full_explanation /
+    │      wm.current_explanation / teacher_only）
     │
     ├── 【步驟 5】emit: explanation_chunk（問題區塊 + is_final=True）
     ├──           emit: explanation_complete
@@ -1186,6 +1203,20 @@ Phase 3 收益：5/5 stage 命中 inline 抽取，fallback 0 次觸發，每個 
 
 > ⚠️ 修正原因：Phase 3 舊版要求「至少一題檢驗類比框架」，LLM 誤把 TeacherAgent 自創的比喻情境（如「超市收據」「自來水管線」）當作 source_chunks 中的原始素材出題，導致 DriftVerifier 必然 fail。修正後明確標示類比為教師工具，禁止作為題目素材。
 
+**出題範圍嚴格限制（2026-05-19 新增，最高優先）**：
+```
+題目測試的概念必須同時滿足：
+1. 在 source_chunks 中有原文支撐
+2. 在本篇 full_explanation 中明確出現並有解釋
+
+若 chunks 提到但講解未涵蓋的概念（例如 chunks 有 polling、circuit breaker，
+但講解沒展開）→ 禁止作為題目主題。
+規則 5 從舊版「source_chunks 或 full_explanation」收緊為「必須出現在
+full_explanation」。
+```
+
+> ⚠️ 修正原因：實測發現 LLM 會出 chunks 提到但講解略過的概念（如 polling），學生看完講解後完全答不出，違反「題目應檢驗講解理解」的契約。新規則由 QuestionGenerator prompt 與 DriftVerifier questions 模式雙重把關。
+
 **Evidence 來源**：優先 `allowed_evidence`（DB 真實原文，key: `text`），退回 `stage.source_chunks`（key: `quote`）
 
 **num_questions**：
@@ -1303,6 +1334,47 @@ def _extract_cited_chunks(candidate_text, source_chunks):
 - `content_type` — `"explanation"` 或 `"questions"`
 - `source_chunks` — 本 stage 的 source_chunks
 - `candidate_text` — 待驗證文字
+- `full_explanation` — **questions 模式必填**（2026-05-19）：本 stage 已驗證的完整講解，作為出題對齊基準
+
+**questions 模式嚴格對齊（2026-05-19）**：
+- prompt 由舊版「寬鬆模式（chunks 或 explanation 任一支撐即可）」改為「嚴格對齊講解模式」
+- LLM 收到的 USER message 多一段 `full_explanation（本次課程已驗證講解，出題對齊基準）`（drift_verifier.py:47–51）
+- 判定規則：題目測試的概念**僅以 full_explanation 為基準**；即使 source_chunks 中提及，只要 full_explanation 沒明確展開，視為漂移
+- prompt 內附 few-shot：polling drift 反例（chunks 有但講解沒）、circuit breaker 對齊正例
+- runtime label：`出題對齊基準`（drift_verifier.py:48，已從舊「出題驗證寬鬆模式依據」改名）
+
+**Retry 與軟性標記（2026-05-19，三處 retry 點共用）**：
+
+Orchestrator 在 questions 模式 `aligned=False` 時，由 helper 方法統一處理：
+
+```python
+def _build_question_retry_guidance(self, verify_result: dict) -> str:
+    """注入 retry prompt：提示 LLM 上一輪哪些題目漂移到範圍外（取前 5 條）。"""
+    unsupported = verify_result.get("unsupported_claims") or []
+    if not unsupported:
+        return "（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）"
+    bullets = "\n".join(f"- {claim}" for claim in unsupported[:5])
+    return (
+        "（對齊修正要求：上一輪以下題目漂移到未在講解中提及的範圍，請完全避免：\n"
+        f"{bullets}\n"
+        "出題只能測試講解全文中明確出現並有解釋的概念。）"
+    )
+
+def _tag_drifting_questions(self, questions, unsupported_claims) -> int:
+    """retry 後仍漂移者，前綴 `[註：本題未對齊講解]`（冪等，已標記者跳過）。
+    比對方式：fuzzy match question.text 前 30 字 與 claim 前 30 字。"""
+```
+
+流程：
+1. 第一輪 questions verify `aligned=False` → 用 `_build_question_retry_guidance` 注入 retry prompt → QuestionGenerator 重生
+2. **重試後再 verify 一次**（content_type=questions，帶 full_explanation）
+3. 仍 `aligned=False` → `_tag_drifting_questions(questions, verify_result["unsupported_claims"])` 對每題 fuzzy match，命中者：
+   - `text` 前加 `[註：本題未對齊講解] `
+   - 設 `_grounding_status = "drift_after_retry"`
+   - 已標記過則跳過（冪等）
+4. 帶標記的 questions 仍寫入 `session_memory.store_stage_questions(...)` 持久化，使用者可看見軟性提醒，前端不阻斷流程
+
+三處 retry 區塊位於 `learning_orchestrator.py` 約 line 761（run_stage）、1222（remediate）、1713（reteach），差別僅在 `full_explanation` 來源變數（`full_explanation` / `wm.current_explanation` / `teacher_only`）。
 
 **輸出（Phase 4 升級）**：
 ```json
