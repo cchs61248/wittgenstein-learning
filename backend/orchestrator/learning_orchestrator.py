@@ -206,6 +206,48 @@ class LearningOrchestrator:
         )
         return await self.drift_verifier.run(verify_ctx)
 
+    def _build_question_retry_guidance(self, verify_result: dict) -> str:
+        """組裝給 questioner 的 retry hint，把 drift_verifier 的 unsupported_claims 注入。
+
+        無 unsupported_claims 時退回預設 hint（避免 prompt 變空）。
+        最多帶 5 條 claim，避免 retry prompt 過長。
+        """
+        unsupported = verify_result.get("unsupported_claims") or []
+        if not unsupported:
+            return "（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）"
+        bullets = "\n".join(f"- {claim}" for claim in unsupported[:5])
+        return (
+            "（對齊修正要求：上一輪以下題目漂移到未在講解中提及的範圍，請完全避免：\n"
+            f"{bullets}\n"
+            "出題只能測試講解全文中明確出現並有解釋的概念。）"
+        )
+
+    def _tag_drifting_questions(
+        self,
+        questions: list[dict],
+        unsupported_claims: list[str],
+    ) -> int:
+        """retry 後仍漂移的題目加前綴標記。回傳被標記的題數。
+
+        Fuzzy match：每題的 text 前 30 字若與任一 claim 互為子串，視為對應。
+        Match 漏（claim 是 LLM 自由文字）→ 不標記，但呼叫端仍 log warning。
+        """
+        if not unsupported_claims:
+            return 0
+        tagged = 0
+        for q in questions:
+            text = q.get("text", "")
+            head = text[:30]
+            if any(
+                (head and head in claim) or (claim[:30] in text)
+                for claim in unsupported_claims
+            ):
+                if not text.startswith("[註：本題未對齊講解]"):
+                    q["text"] = "[註：本題未對齊講解] " + text
+                    q["_grounding_status"] = "drift_after_retry"
+                    tagged += 1
+        return tagged
+
     def _rank_next_stage_candidates(
         self,
         stages: list[dict],
@@ -747,7 +789,7 @@ class LearningOrchestrator:
                     "stage": {
                         **stage,
                         "content": stage.get("content", "")
-                        + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                        + "\n\n" + self._build_question_retry_guidance(questions_verify),
                     },
                     "full_explanation": full_explanation,
                     "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
@@ -760,6 +802,20 @@ class LearningOrchestrator:
             )
             q_result = await self.questioner.run(retry_q_ctx)
             questions = q_result.get("questions", [])
+            post_retry_verify = await self._verify_grounding(
+                session_id=session_id, user_id=user_id, stage=stage,
+                content_type="questions",
+                candidate_text=json.dumps(questions, ensure_ascii=False),
+                full_explanation=full_explanation,
+            )
+            if not post_retry_verify.get("aligned", False):
+                unsupported = post_retry_verify.get("unsupported_claims") or []
+                tagged = self._tag_drifting_questions(questions, unsupported)
+                self._log.warning(
+                    "Questions still drifting after retry  session=%s  stage_id=%s  "
+                    "tagged=%d  unsupported_sample=%s",
+                    session_id, stage["stage_id"], tagged, unsupported[:3],
+                )
         wm.pending_questions = questions
         await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
 
@@ -1209,7 +1265,7 @@ class LearningOrchestrator:
                         "stage": {
                             **stage,
                             "content": stage.get("content", "")
-                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                            + "\n\n" + self._build_question_retry_guidance(questions_verify),
                         },
                         "full_explanation": wm.current_explanation,
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
@@ -1221,6 +1277,20 @@ class LearningOrchestrator:
                 )
                 q_result = await self.questioner.run(retry_q_ctx)
                 questions = q_result.get("questions", [])
+                post_retry_verify = await self._verify_grounding(
+                    session_id=session_id, user_id=user_id, stage=stage,
+                    content_type="questions",
+                    candidate_text=json.dumps(questions, ensure_ascii=False),
+                    full_explanation=wm.current_explanation,
+                )
+                if not post_retry_verify.get("aligned", False):
+                    unsupported = post_retry_verify.get("unsupported_claims") or []
+                    tagged = self._tag_drifting_questions(questions, unsupported)
+                    self._log.warning(
+                        "Questions still drifting after retry (reattempt)  session=%s  "
+                        "stage_id=%s  tagged=%d  unsupported_sample=%s",
+                        session_id, stage["stage_id"], tagged, unsupported[:3],
+                    )
             used_ids = {t.question_id for t in wm.stage_turns}
             for q in questions:
                 if not q.get("question_id") or q["question_id"] in used_ids:
@@ -1699,7 +1769,7 @@ class LearningOrchestrator:
                         "stage": {
                             **stage,
                             "content": stage.get("content", "")
-                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                            + "\n\n" + self._build_question_retry_guidance(questions_verify),
                         },
                         "full_explanation": teacher_only,
                         "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
@@ -1712,6 +1782,20 @@ class LearningOrchestrator:
                 )
                 q_result = await self.questioner.run(retry_q_ctx)
                 questions = q_result.get("questions", [])
+                post_retry_verify = await self._verify_grounding(
+                    session_id=session_id, user_id=user_id, stage=stage,
+                    content_type="questions",
+                    candidate_text=json.dumps(questions, ensure_ascii=False),
+                    full_explanation=teacher_only,
+                )
+                if not post_retry_verify.get("aligned", False):
+                    unsupported = post_retry_verify.get("unsupported_claims") or []
+                    tagged = self._tag_drifting_questions(questions, unsupported)
+                    self._log.warning(
+                        "Questions still drifting after retry (dynamic stage)  session=%s  "
+                        "stage_id=%s  tagged=%d  unsupported_sample=%s",
+                        session_id, stage["stage_id"], tagged, unsupported[:3],
+                    )
             await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
         wm.pending_questions = questions
 
