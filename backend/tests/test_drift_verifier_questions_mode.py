@@ -135,6 +135,67 @@ class TestDriftVerifierQuestionsMode(unittest.IsolatedAsyncioTestCase):
             f"unsupported_claims 應提及理財型房貸: {result['unsupported_claims']}",
         )
 
+    async def test_questions_comparison_decision_not_in_explanation_misaligned(self):
+        """個別概念都在 explanation 有展開，但「對比/選擇/決策」框架沒講 → unsupported。
+
+        regression：實測 stage 6「借錢工具全解析」q_stage2_8——
+        - explanation 各別介紹「融資型房貸」「元大證金股票質押」運作（個別有展開）
+        - 但「謹慎者選哪個 / 安全性對比 / 斷頭風險」這個對比決策框架 explanation 完全沒講
+        - 題目卻考「謹慎者選哪一種」，正解出自 chunk_025（adjacent 而非 explanation）
+        過去寬鬆判定只看「key_concepts 是否在 explanation」會誤判 aligned=True，
+        但學生看完講解仍不知道怎麼選，是漂移。
+        新規則要求對比/決策型題目必須在 explanation 中找到對應的「對比段落 / 決策依據 / 適合族群」展開。
+        """
+        llm_response = {
+            "aligned": False,
+            "claim_checks": [{
+                "claim": "謹慎者在房貸與股票質押間應選哪個",
+                "cited_chunk_id": "chunk_025",
+                "supported": False,
+                "issue": "explanation 各別介紹兩種工具，但對比決策框架完全沒講；"
+                         "正解依據在 chunk_025 而非 explanation",
+            }],
+            "unsupported_claims": [
+                "謹慎者選房貸的決策邏輯（個別工具有展開，但對比決策框架在 explanation 缺席）"
+            ],
+            "issues": ["題目考對比決策但 explanation 未對該決策邏輯有展開說明"],
+            "missing_evidence": [],
+            "revision_hint": "若要考對比決策，explanation 需先展開選擇邏輯",
+        }
+        agent = _make_agent(_fake_llm(llm_response))
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "content_type": "questions",
+                "source_chunks": [{
+                    "chunk_id": "chunk_025",
+                    "text": "如果房屋貸款和股票質押能夠借出來的錢差不多，要怎麼選呢？"
+                            "這就得看你個人膽識，如果你是屬於比較謹慎的人，"
+                            "推薦房屋貸款，少了斷頭的危機，安全性高出很多；"
+                            "但如果你是個很勇猛的人，推薦你股票質押。",
+                }],
+                "candidate_text": json.dumps([{
+                    "question_id": "q1",
+                    "text": "若房貸與股票質押能借到的金額差不多，"
+                            "對於「謹慎」的人，作者建議選擇哪一種？",
+                    "evidence_chunk_ids": ["chunk_025"],
+                    "key_concepts_tested": ["融資型房貸", "元大證金股票質押"],
+                }], ensure_ascii=False),
+                "full_explanation":
+                    "### 融資型房貸\n房貸把房屋抵押給銀行借錢，"
+                    "還款期可達 30 年 [chunk_023]。\n"
+                    "### 元大證金股票質押\n股票質押把股票當抵押品，"
+                    "可借市值 60%，只要按時繳利息銀行通常會讓你續約 [chunk_024]。",
+            },
+        )
+        result = await agent.run(ctx)
+        self.assertFalse(result["aligned"])
+        self.assertTrue(
+            any("謹慎" in c or "決策" in c or "選" in c
+                for c in result["unsupported_claims"]),
+            f"unsupported_claims 應提及對比決策: {result['unsupported_claims']}",
+        )
+
     async def test_questions_concept_in_explanation_aligned(self):
         """explanation 提了 retry 機制，題目測 retry → aligned=True。"""
         llm_response = {
