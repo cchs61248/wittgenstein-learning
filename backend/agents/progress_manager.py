@@ -19,11 +19,23 @@ def _detect_repeated_patterns(evaluations: list[dict]) -> bool:
     return len(patterns) != len(set(patterns))
 
 
-def _unique_confused_concepts(evaluations: list[dict]) -> list[str]:
+def _unique_confused_concepts(
+    evaluations: list[dict], stage_key_concepts: list[str] | None = None
+) -> list[str]:
+    """從評估結果中蒐集去重後的 confused concepts。
+
+    若提供 stage_key_concepts，會把名稱對齊到 canonical 命名（normalize），
+    確保動態節點 remediation_focus 不會跨出原 stage 命名空間，
+    避免 concept_mastery 跨章節碎片化。
+    """
     concepts: list[str] = []
     for ev in evaluations:
         concepts.extend(ev.get("confused_concepts", []))
-    return list(dict.fromkeys(c for c in concepts if c))
+    deduped = list(dict.fromkeys(c for c in concepts if c))
+    if stage_key_concepts:
+        from ..utils.concept_normalize import normalize_concepts
+        return normalize_concepts(deduped, stage_key_concepts)
+    return deduped
 
 
 def _mastery_state(scores: list[float], confused: list[str], pass_threshold: float) -> str:
@@ -63,6 +75,7 @@ class ProgressManagerAgent(BaseAgent):
         source_remediation_count: int = int(payload.get("source_remediation_count", 0) or 0)
         max_reteach: int = int(payload.get("max_reteach", 2) or 2)
         max_remediation: int = int(payload.get("max_remediation", 2) or 2)
+        stage_key_concepts: list[str] = payload.get("stage_key_concepts") or []
 
         raw_attempt = payload.get("current_attempt")
         try:
@@ -85,7 +98,7 @@ class ProgressManagerAgent(BaseAgent):
             all_misconceptions.extend(ev.get("misconception_patterns", []))
         high_severity = [m for m in all_misconceptions if m.get("severity") == "high"]
         repeated_patterns = _detect_repeated_patterns(evaluations)
-        unique_confused = _unique_confused_concepts(evaluations)
+        unique_confused = _unique_confused_concepts(evaluations, stage_key_concepts)
         mastery = _mastery_state(scores, unique_confused, pass_threshold)
         is_child_stage = stage_kind in {"reteach", "remediation"}
 

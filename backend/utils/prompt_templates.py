@@ -192,6 +192,13 @@ SYSTEM_PROMPTS: dict[str, str] = {
 source_chunks 是事實基準（用來避免你 hallucinate），
 講解全文（full_explanation）才是出題範圍邊界。
 
+【概念命名規範（強制）】
+題目的 `key_concepts_tested` 欄位**必須**使用使用者訊息中提供的階段
+「關鍵概念」清單裡的字串，不可自創新名稱、不可改寫或組合。
+若題目實際涉及的概念比清單細，請把細節描述寫進 `expected_answer_hints`，
+而非新建一個 concept name——這是為了讓掌握度追蹤系統能跨章節累積，
+不被命名不一致打散。
+
 【已掌握概念禁止出題（個人化過濾）】
 若使用者訊息中提供「已掌握概念清單」（mastered_concepts），
 這些概念是學生已經穩定掌握的（mastery>=0.8），
@@ -262,12 +269,20 @@ Score 定義：
 
 【錯誤模式診斷（重要）】
 若發現學生有特定的錯誤模式，請在 misconception_patterns 中描述：
-- concept：哪個概念出錯（應為 key_concepts_tested 中的概念）
-- pattern：錯誤的具體形式（一句話，例如「把因果方向搞反」）
+- concept：哪個概念出錯（**必須**使用使用者訊息中提供的「標準概念命名」清單中的字串，
+  不可自創新名稱；若沒有清單則用 key_concepts_tested 中的概念）
+- pattern：錯誤的具體形式（一句話，例如「把因果方向搞反」），可自由文字描述細節
 - student_evidence：學生答案中的哪句話/哪個詞顯示這個錯誤
 - severity：low（細節有誤）/ medium（概念混淆）/ high（根本誤解）
 - repair_strategy：建議下一篇文章如何修正（例如「換從 X 角度說明」）
 若無明顯錯誤模式，misconception_patterns 回傳空列表 []。
+
+【概念命名規範（強制）】
+`understood_concepts`、`confused_concepts`、`misconception_patterns[].concept` 三個欄位的
+**概念名稱必須來自使用者訊息中的「標準概念命名」清單**，不可自創、不可改寫、不可組合。
+若你觀察到的學生掌握/混淆比清單細，請把細節寫入 misconception_patterns[].pattern
+（自由文字），而非新建一個 concept name。
+若沒有提供清單，才能退回使用 key_concepts_tested 中的命名。
 
 請以 JSON 格式回應：
 {{

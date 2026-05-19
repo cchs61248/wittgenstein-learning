@@ -915,6 +915,7 @@ class LearningOrchestrator:
                 "user_answer": answer,
                 "compressed_history": wm.get_compressed_history(max_turns=3),
                 "source_chunks": self._normalize_stage_source_chunks(stage),
+                "stage_key_concepts": stage.get("key_concepts", []),
             },
         )
         eval_result = await self.evaluator.run(eval_ctx)
@@ -1036,6 +1037,7 @@ class LearningOrchestrator:
                 "source_remediation_count": self._count_child_stages(stages, source_stage_id, "remediation"),
                 "max_reteach": 2,
                 "max_remediation": 2,
+                "stage_key_concepts": stage.get("key_concepts", []),
             },
         )
         decision = await self.progress.run(prog_ctx)

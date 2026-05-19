@@ -4,6 +4,10 @@ from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
+from ..utils.concept_normalize import (
+    normalize_concepts,
+    normalize_misconception_patterns,
+)
 
 
 class EvaluatorAgent(BaseAgent):
@@ -85,6 +89,7 @@ class EvaluatorAgent(BaseAgent):
         user_answer: str = payload["user_answer"]
         compressed_history: list[dict] = payload.get("compressed_history", [])
         source_chunks: list[dict] = payload.get("source_chunks", [])
+        stage_key_concepts: list[str] = payload.get("stage_key_concepts") or []
 
         # 選擇題特殊處理
         if question.get("answer_mode") == "multiple_choice":
@@ -94,9 +99,14 @@ class EvaluatorAgent(BaseAgent):
                 # 選對：直接回傳 1.0，不呼叫 LLM
                 correct_text = self._find_option_text(question, correct_id)
                 label = f"{correct_id}. {correct_text}" if correct_text else correct_id
+                # MC correct 路徑：把 question.key_concepts_tested 對齊到 stage.key_concepts。
+                # 若 QG 給的命名不在 stage 範圍（碎片化），normalize 後可能變空——
+                # 這正是預期行為，避免污染 DB。
+                understood_raw = question.get("key_concepts_tested", [])
+                understood_aligned = normalize_concepts(understood_raw, stage_key_concepts)
                 result = {
                     "score": 1.0,
-                    "understood_concepts": question.get("key_concepts_tested", []),
+                    "understood_concepts": understood_aligned,
                     "confused_concepts": [],
                     "misconception_patterns": [],
                     "feedback": f"✅ 答對了！**{label}** 是正確選項。\n\n你對這個概念的掌握很好，繼續保持！",
@@ -109,7 +119,7 @@ class EvaluatorAgent(BaseAgent):
                 )
                 return self._add_mastery_label(result)
             # 選錯：交由 LLM 依相近程度給 0.0–0.6 分
-            result = await self._score_mc_wrong(question, user_answer, compressed_history, source_chunks)
+            result = await self._score_mc_wrong(question, user_answer, compressed_history, source_chunks, stage_key_concepts)
             self._log_end(ctx, t0, {"score": result.get("score", 0)})
             return self._add_mastery_label(result)
 
@@ -120,6 +130,7 @@ class EvaluatorAgent(BaseAgent):
             history_text = "\n\n過去問答記錄（最近3輪）：\n" + "\n---\n".join(lines)
         options_text, correct_option_text = self._format_options(question)
         resolved_student_answer = self._resolve_student_answer(question, user_answer)
+        canonical_text = self._format_canonical_concepts(stage_key_concepts)
 
         self._add_message(
             MessageRole.USER,
@@ -132,6 +143,7 @@ class EvaluatorAgent(BaseAgent):
             f"要測試的概念：{', '.join(question.get('key_concepts_tested', []))}\n"
             f"評分參考要點（不公開）：{', '.join(question.get('expected_answer_hints', []))}\n"
             f"教材來源（評分只能依此判斷）：\n{self._format_source_chunks(source_chunks)}\n"
+            f"{canonical_text}"
             f"\n學生回答：{resolved_student_answer}"
             f"{history_text}",
         )
@@ -144,9 +156,40 @@ class EvaluatorAgent(BaseAgent):
             data["feedback"] = data["feedback"].replace("\\n", "\n")
         if not isinstance(data.get("misconception_patterns"), list):
             data["misconception_patterns"] = []
+        data = self._normalize_concept_fields(data, stage_key_concepts)
 
         self._log_end(ctx, t0, {"score": data.get("score", 0)})
         return self._add_mastery_label(data)
+
+    def _format_canonical_concepts(self, stage_key_concepts: list[str]) -> str:
+        if not stage_key_concepts:
+            return ""
+        return (
+            "\n【標準概念命名（請使用以下名稱填入 understood_concepts / confused_concepts "
+            "/ misconception_patterns[].concept；細部觀察請改寫入 pattern 文字欄）】\n"
+            + "、".join(stage_key_concepts)
+            + "\n"
+        )
+
+    def _normalize_concept_fields(
+        self, data: dict[str, Any], stage_key_concepts: list[str]
+    ) -> dict[str, Any]:
+        """把 evaluator LLM 輸出中的 concept 名稱對齊到 stage.key_concepts。"""
+        if not stage_key_concepts:
+            return data
+        data["understood_concepts"] = normalize_concepts(
+            data.get("understood_concepts", []), stage_key_concepts
+        )
+        data["confused_concepts"] = normalize_concepts(
+            data.get("confused_concepts", []), stage_key_concepts
+        )
+        # misconception_patterns 內每筆的 concept 也對齊；無法對齊者 concept=None
+        # （pattern 文字仍保留，上層可選擇丟棄或記錄）
+        mp_aligned = normalize_misconception_patterns(
+            data.get("misconception_patterns", []), stage_key_concepts
+        )
+        data["misconception_patterns"] = [p for p in mp_aligned if p.get("concept")]
+        return data
 
     async def _score_mc_wrong(
         self,
@@ -154,6 +197,7 @@ class EvaluatorAgent(BaseAgent):
         user_answer: str,
         compressed_history: list[dict],
         source_chunks: list[dict],
+        stage_key_concepts: list[str] | None = None,
     ) -> dict[str, Any]:
         self._reset()
         options_text, correct_option_text = self._format_options(question)
@@ -163,6 +207,8 @@ class EvaluatorAgent(BaseAgent):
         if compressed_history:
             lines = [f"Q: {t['q']}\nA: {t['a']}" for t in compressed_history[-3:]]
             history_text = "\n\n過去問答記錄（最近3輪）：\n" + "\n---\n".join(lines)
+
+        canonical_text = self._format_canonical_concepts(stage_key_concepts or [])
 
         self._add_message(
             MessageRole.USER,
@@ -174,6 +220,7 @@ class EvaluatorAgent(BaseAgent):
             f"正確選項（評分參考，不可直接告知學生）：{correct_option_text}\n"
             f"要測試的概念：{', '.join(question.get('key_concepts_tested', []))}\n"
             f"教材來源（評分只能依此判斷）：\n{self._format_source_chunks(source_chunks)}\n"
+            f"{canonical_text}"
             f"{history_text}\n\n"
             f"評分規則（此題為選擇題且學生已答錯）：\n"
             f"1. score 必須在 0.0～0.6 之間（答案錯誤，上限 0.6）\n"
@@ -195,4 +242,5 @@ class EvaluatorAgent(BaseAgent):
         # 安全夾緊：確保答錯分數不超過 0.6
         if isinstance(data.get("score"), (int, float)):
             data["score"] = min(float(data["score"]), 0.6)
+        data = self._normalize_concept_fields(data, stage_key_concepts or [])
         return data
