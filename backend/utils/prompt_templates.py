@@ -251,7 +251,13 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
   對齊基準：full_explanation（教學文章全文）為唯一範圍。
   - 每題的測試概念（key_concepts_tested）、題幹文字（text）、選項或干擾項中的關鍵詞，
     都必須能在 full_explanation 中找到對應講解。
-  - 即使該概念出現在 source_chunks，但 full_explanation 從頭到尾沒提及，
+  - **字面提及 ≠ 有展開說明**（重要）：
+    判定一個概念「在 explanation 中有講解」的最低標準是 full_explanation 必須
+    對該概念至少有一句針對「運作 / 特性 / 機制 / 原因 / 例子」的展開說明，
+    而不只是把該名詞當道具引用（如「他用 X 借了錢」「使用 Y 的特性...」）。
+    若題目考的是某概念的「運作特性 / 機制 / 差異 / 原因」，但 full_explanation
+    只字面提及該名詞而沒展開其運作，視為漂移 → supported=false。
+  - 即使該概念出現在 source_chunks，但 full_explanation 從頭到尾沒提及（或只字面提及未展開），
     視為「漂移到未教授範圍」→ 標記 supported=false，並把該題摘要寫進 unsupported_claims。
   - source_chunks 仍用於確認題目沒要求教材外知識；題目若引用了不存在的 chunk_id、
     或要求 source_chunks 與 explanation 都沒提的常識，同樣標 supported=false。
@@ -259,15 +265,22 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
   full_explanation 缺席時，回退嚴格模式（以 source_chunks 為準）。
 
   few-shot 範例：
-  範例 A（漂移）：
+  範例 A（漂移：字面也沒出現）：
     full_explanation："當下游服務故障時，斷路器會跳開避免持續呼叫失敗端點。"
     source_chunks：[chunk_001: 「快取系統使用 polling 機制更新…」]
     題目：「polling 機制與 push 機制的差異？」
     → unsupported（polling 在 source_chunks 內，但 full_explanation 完全沒講）
-  範例 B（對齊）：
+  範例 B（對齊：有展開）：
     full_explanation："斷路器（circuit breaker）開啟時拒絕請求，避免雪崩。"
     題目：「斷路器處於 open 狀態時會如何處理請求？」
     → supported
+  範例 C（漂移：字面提及但未展開，本規則重點）：
+    full_explanation："『理財型房貸』借 500 萬元來滾雪球，30 年後可能還剩 4,154 萬元 [chunk_012]。"
+    source_chunks：[chunk_012: 「理財型房貸的玩法就是這樣，只要額度還在，
+                   你每個月繳的只是資金使用費，本金照樣可以拿去用…」]
+    題目：「『理財型房貸』的運作特性，下列敘述何者正確？」
+    → unsupported（理財型房貸只在 explanation 字面出現當道具用，
+       完全沒解釋運作特性；學生看完講解無法答出運作機制 → 漂移）
 
 驗證規則（通用）：
 1. 以 source_chunks（及 full_explanation，若有）為判定依據，不可用外部常識或推論補完
@@ -277,9 +290,10 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
    c. 若 found=false，直接標記 supported=false
 3. 候選輸出中沒有 [chunk_id] 標記的事實性陳述，也需評估是否需要來源
 4. 比喻、類比、舉例若明確標示「類比說明，非原文」則豁免驗證
-5. 題目驗證嚴格對齊講解模式下：題目測試的概念必須出現在 full_explanation 中
-   （即使 source_chunks 內有但 explanation 沒提，仍視為漂移）。
-   只有 full_explanation 為空時才回退到「以 source_chunks 為基準」。
+5. 題目驗證嚴格對齊講解模式下：題目測試的概念必須在 full_explanation 中
+   **有展開說明**（運作/特性/機制/原因/例子至少一句），不能只是字面出現當道具用。
+   即使 source_chunks 內有但 explanation 沒展開（含「沒提」與「只字面提及」），
+   仍視為漂移。只有 full_explanation 為空時才回退到「以 source_chunks 為基準」。
 
 請只輸出 JSON：
 {{

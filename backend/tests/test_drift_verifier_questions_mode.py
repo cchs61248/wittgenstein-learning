@@ -83,6 +83,58 @@ class TestDriftVerifierQuestionsMode(unittest.IsolatedAsyncioTestCase):
             f"unsupported_claims 應該提及 polling: {result['unsupported_claims']}",
         )
 
+    async def test_questions_concept_mentioned_but_not_explained_misaligned(self):
+        """concept 字面在 explanation 出現但只當道具用，沒展開運作 → unsupported。
+
+        regression：實測 stage 2「理財型房貸」案——
+        - chunks 內有完整運作說明
+        - explanation 只寫「『理財型房貸』借 500 萬滾雪球」當道具引用
+        - 題目卻考「運作特性」
+        過去規則只看「字面出現 + chunk 支撐」會誤判 aligned=True，學生無法答題。
+        新規則要求 explanation 必須對該概念有「運作/特性/機制」展開說明。
+        """
+        llm_response = {
+            "aligned": False,
+            "claim_checks": [{
+                "claim": "理財型房貸的運作特性",
+                "cited_chunk_id": "chunk_012",
+                "supported": False,
+                "issue": "explanation 只字面提及『理財型房貸』當道具用，沒展開運作機制",
+            }],
+            "unsupported_claims": [
+                "理財型房貸的運作特性（字面提及但 explanation 未展開運作）"
+            ],
+            "issues": ["題目考運作特性但 explanation 未對該概念有展開說明"],
+            "missing_evidence": [],
+            "revision_hint": "若要考運作特性，explanation 需先展開該概念",
+        }
+        agent = _make_agent(_fake_llm(llm_response))
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "content_type": "questions",
+                "source_chunks": [{
+                    "chunk_id": "chunk_012",
+                    "text": "理財型房貸的玩法就是這樣，只要額度還在，"
+                            "你每個月繳的只是資金使用費，本金照樣可以拿去用。",
+                }],
+                "candidate_text": json.dumps([{
+                    "question_id": "q1",
+                    "text": "「理財型房貸」的運作特性，下列敘述何者正確？",
+                    "evidence_chunk_ids": ["chunk_012"],
+                }], ensure_ascii=False),
+                "full_explanation":
+                    "想翻身就要借錢炒股，「理財型房貸」借 500 萬元來滾雪球，"
+                    "30 年後可能還剩 4,154 萬元 [chunk_012]。",
+            },
+        )
+        result = await agent.run(ctx)
+        self.assertFalse(result["aligned"])
+        self.assertTrue(
+            any("理財型房貸" in c for c in result["unsupported_claims"]),
+            f"unsupported_claims 應提及理財型房貸: {result['unsupported_claims']}",
+        )
+
     async def test_questions_concept_in_explanation_aligned(self):
         """explanation 提了 retry 機制，題目測 retry → aligned=True。"""
         llm_response = {
