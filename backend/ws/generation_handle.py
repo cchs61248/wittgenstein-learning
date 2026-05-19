@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..db import inflight_lock
+from ..utils.logger import ws_logger
 
 
 @dataclass
@@ -27,15 +28,18 @@ _registry: dict[str, _GenerationHandle] = {}
 
 def register(key: str, task: asyncio.Task) -> _GenerationHandle:
     """Bind a task to a key. Auto-removes from registry when task completes."""
+    log = ws_logger()
     event = asyncio.Event()
     handle = _GenerationHandle(key=key, task=task, event=event)
     _registry[key] = handle
+    log.debug("generation_handle register  key=%s", key)
 
     def _on_done(_t: asyncio.Task) -> None:
         event.set()
         # 若 finish() 沒被外部呼叫（例外狀況），仍清掉自身
         if _registry.get(key) is handle:
             _registry.pop(key, None)
+            log.debug("generation_handle auto_clear  key=%s", key)
 
     task.add_done_callback(_on_done)
     return handle
@@ -47,19 +51,24 @@ def get_active(key: str) -> Optional[_GenerationHandle]:
 
 def finish(key: str) -> None:
     """正常完成路徑呼叫 — task 通常已結束，主要清 registry。"""
+    log = ws_logger()
     h = _registry.pop(key, None)
     if h:
         h.event.set()
+        log.debug("generation_handle finish  key=%s", key)
 
 
 async def cancel(key: str) -> bool:
     """Cancel the task registered at `key`. Returns True if found."""
+    log = ws_logger()
     h = _registry.get(key)
     if not h:
+        log.debug("generation_handle cancel miss  key=%s", key)
         return False
     if not h.task.done():
         h.task.cancel()
     h.event.set()
+    log.info("generation_handle cancel  key=%s  task_was_done=%s", key, h.task.done())
     return True
 
 
@@ -81,22 +90,41 @@ async def register_async(
     若某條路徑沒呼叫 finish_async/cancel_async，DB lock 仍會在 task 結束
     時自動釋放。
     """
+    log = ws_logger()
     ok = await inflight_lock.acquire(
         key, session_id=session_id, kind=kind, meta_json=meta_json
     )
     if not ok:
+        log.debug(
+            "generation_handle register_async lock_busy  key=%s  session=%s  kind=%s",
+            key, session_id, kind,
+        )
         return None
 
     event = asyncio.Event()
     handle = _GenerationHandle(key=key, task=task, event=event)
     _registry[key] = handle
+    log.debug(
+        "generation_handle register_async ok  key=%s  session=%s  kind=%s",
+        key, session_id, kind,
+    )
 
     def _on_done(_t: asyncio.Task) -> None:
         event.set()
         if _registry.get(key) is handle:
             _registry.pop(key, None)
         # 同步 callback 內 fire-and-forget release（loop 還在跑）
-        asyncio.create_task(inflight_lock.release(key))
+        release_task = asyncio.create_task(inflight_lock.release(key))
+
+        def _on_release_done(rt: asyncio.Task) -> None:
+            exc = rt.exception()
+            if exc is not None:
+                log.error(
+                    "generation_handle on_done release failed  key=%s",
+                    key, exc_info=exc,
+                )
+
+        release_task.add_done_callback(_on_release_done)
 
     task.add_done_callback(_on_done)
     return handle
@@ -104,10 +132,12 @@ async def register_async(
 
 async def finish_async(key: str) -> None:
     """正常完成路徑：clear local registry + release DB lock。"""
+    log = ws_logger()
     h = _registry.pop(key, None)
     if h:
         h.event.set()
     await inflight_lock.release(key)
+    log.debug("generation_handle finish_async  key=%s  had_handle=%s", key, h is not None)
 
 
 async def cancel_async(key: str) -> bool:
@@ -116,10 +146,15 @@ async def cancel_async(key: str) -> bool:
     回傳 True 表 local registry 有命中；False 表沒命中（但仍嘗試 release
     DB lock，因為可能是別 worker hold — 雖然當前設計沒做跨 worker 取消）。
     """
+    log = ws_logger()
     h = _registry.get(key)
     if h:
         if not h.task.done():
             h.task.cancel()
         h.event.set()
     await inflight_lock.release(key)
+    log.info(
+        "generation_handle cancel_async  key=%s  had_local_handle=%s",
+        key, h is not None,
+    )
     return h is not None

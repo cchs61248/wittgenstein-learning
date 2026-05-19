@@ -1,6 +1,8 @@
 import time
 from typing import Awaitable, Callable
 
+from ..utils.logger import orchestrator_logger
+
 StoreFn = Callable[[str, int, str], Awaitable[None]]
 
 
@@ -25,6 +27,7 @@ class DebouncedExplanationWriter:
         self._latest: str = ""
         self._last_written: str = ""
         self._last_write_at: float = time.monotonic()
+        self._log = orchestrator_logger()
 
     async def update(self, full_text: str) -> None:
         self._latest = full_text
@@ -33,14 +36,28 @@ class DebouncedExplanationWriter:
         time_due = (now - self._last_write_at) >= self._min_interval_s
         size_due = delta >= self._min_delta_chars
         if time_due or size_due:
-            await self._do_write()
+            await self._do_write(reason="time" if time_due else "size")
 
     async def flush(self) -> None:
         if self._latest != self._last_written:
-            await self._do_write()
+            await self._do_write(reason="flush")
 
-    async def _do_write(self) -> None:
+    async def _do_write(self, reason: str = "?") -> None:
         text = self._latest
-        await self._store(self._sid, self._stage, text)
+        try:
+            await self._store(self._sid, self._stage, text)
+        except Exception:
+            self._log.warning(
+                "DebouncedExplanationWriter write failed  session=%s  stage_id=%s  "
+                "reason=%s  chars=%d",
+                self._sid, self._stage, reason, len(text),
+                exc_info=True,
+            )
+            raise
         self._last_written = text
         self._last_write_at = time.monotonic()
+        self._log.debug(
+            "DebouncedExplanationWriter write ok  session=%s  stage_id=%s  "
+            "reason=%s  chars=%d",
+            self._sid, self._stage, reason, len(text),
+        )

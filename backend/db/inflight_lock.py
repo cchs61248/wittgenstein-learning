@@ -1,9 +1,11 @@
 """DB-backed inflight lock — 跨 worker dedup 的 acquire/release/is_active CRUD。"""
 import os
+import sqlite3
 import time
 from typing import Optional
 
 from .database import get_db
+from ..utils.logger import ws_logger
 
 
 async def acquire(
@@ -14,6 +16,7 @@ async def acquire(
     meta_json: Optional[str] = None,
 ) -> bool:
     """嘗試取得 lock；已存在則回 False（呼叫端應走 wait/cache 路徑）。"""
+    log = ws_logger()
     db = await get_db()
     try:
         await db.execute(
@@ -23,16 +26,38 @@ async def acquire(
             (key, session_id, kind, time.time(), os.getpid(), meta_json),
         )
         await db.commit()
+        log.debug(
+            "inflight_lock acquire ok  key=%s  session=%s  kind=%s  pid=%d",
+            key, session_id, kind, os.getpid(),
+        )
         return True
+    except sqlite3.IntegrityError:
+        # UNIQUE PRIMARY KEY 衝突 — 已有人 hold（預期路徑）
+        log.debug(
+            "inflight_lock acquire race_lost  key=%s  session=%s  kind=%s",
+            key, session_id, kind,
+        )
+        return False
     except Exception:
-        # UNIQUE PRIMARY KEY 衝突 — 已有人 hold
+        # 非預期錯誤（DB 連線壞 / schema 壞 / etc）— 留 trace 但保留 False 行為
+        log.warning(
+            "inflight_lock acquire unexpected_error → treating as race_lost  "
+            "key=%s  session=%s  kind=%s",
+            key, session_id, kind,
+            exc_info=True,
+        )
         return False
 
 
 async def release(key: str) -> None:
+    log = ws_logger()
     db = await get_db()
-    await db.execute("DELETE FROM inflight_locks WHERE key = ?", (key,))
+    cur = await db.execute("DELETE FROM inflight_locks WHERE key = ?", (key,))
     await db.commit()
+    log.debug(
+        "inflight_lock release  key=%s  deleted=%d",
+        key, cur.rowcount or 0,
+    )
 
 
 async def is_active(key: str) -> bool:
@@ -46,8 +71,22 @@ async def is_active(key: str) -> bool:
 
 async def cleanup_stale(max_age_s: float = 600) -> int:
     """清掉 started_at 過老的孤兒（worker 強制關閉時殘留）。回傳清掉的數量。"""
+    log = ws_logger()
     cutoff = time.time() - max_age_s
     db = await get_db()
+    # 先撈出要被清的細節，方便 debug
+    async with db.execute(
+        "SELECT key, session_id, kind, worker_pid, started_at "
+        "FROM inflight_locks WHERE started_at < ?",
+        (cutoff,),
+    ) as cur:
+        stale = await cur.fetchall()
+    if stale:
+        log.debug(
+            "inflight_lock cleanup_stale targets  cutoff=%.0f  count=%d  entries=%s",
+            cutoff, len(stale),
+            [(r[0], r[1], r[2], r[3]) for r in stale],
+        )
     cur = await db.execute(
         "DELETE FROM inflight_locks WHERE started_at < ?", (cutoff,)
     )
