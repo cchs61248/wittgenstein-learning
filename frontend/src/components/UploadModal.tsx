@@ -445,14 +445,14 @@ export function UploadModal({ onStart, onClose }: Props) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".txt,.md,.pdf,.docx,.doc,.pptx,.html"
+              accept=".txt,.md,.pdf,.docx,.doc,.pptx,.html,.epub"
               multiple
               style={{ display: 'none' }}
               onChange={handleFileInput}
             />
             <IconFile />
             <span>上傳檔案</span>
-            <span className="source-drop-hint">PDF · DOCX · TXT · MD</span>
+            <span className="source-drop-hint">PDF · DOCX · EPUB · TXT · MD</span>
           </div>
 
           {/* URL 輸入 */}

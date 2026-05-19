@@ -13,7 +13,7 @@ from ..utils.url_fetcher import YoutubeTranscriptUnavailable, fetch_url_content
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
-_ALLOWED = {".txt", ".md", ".pdf", ".docx", ".pptx", ".html", ".htm"}
+_ALLOWED = {".txt", ".md", ".pdf", ".docx", ".pptx", ".html", ".htm", ".epub"}
 _MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
@@ -32,7 +32,7 @@ async def upload_file(
     if suffix not in _ALLOWED:
         raise HTTPException(
             status_code=400,
-            detail=f"不支援的格式：{suffix}，請上傳 .txt .md .pdf .docx .pptx .html .htm",
+            detail=f"不支援的格式：{suffix}，請上傳 .txt .md .pdf .docx .pptx .html .htm .epub",
         )
 
     raw = await file.read()

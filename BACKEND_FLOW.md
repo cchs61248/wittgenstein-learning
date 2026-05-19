@@ -402,7 +402,7 @@ class WorkingMemory:
 
 ### `POST /upload`（需 `Authorization: Bearer <token>`）
 - 接收：multipart/form-data，欄位 `file`
-- 允許格式：`.txt .md .pdf .docx .pptx .html .htm`；單檔限 10 MB
+- 允許格式：`.txt .md .pdf .docx .pptx .html .htm .epub`；單檔限 10 MB
 - 將原始 bytes + filename + mime_type 寫入磁碟 `data/uploads/{file_id}.bin` + `{file_id}.meta.json`（跨重啟可讀）
 - `meta.json` 結構：`{file_id, filename, mime_type, size, ...extra_meta}`
 - 回傳：`{file_id: "upl_<hex>", filename, size, mime_type}`
@@ -617,6 +617,9 @@ class WorkingMemory:
         │       ├── .txt / .md → decode utf-8
         │       ├── .pdf       → pdfplumber（保留段落）
         │       ├── .docx      → python-docx（保留 heading）
+        │       ├── .pptx      → python-pptx（每張投影片標題 + 內文）
+        │       ├── .html/.htm → BeautifulSoup（清掉 script/style/nav/footer）
+        │       ├── .epub      → ebooklib + BeautifulSoup（逐章取 body 文字，標題前置 #）
         │       └── 其他       → utf-8 fallback
         │   chunker.build_source_chunks(text)
         │       ├── 優先按結構切（Wittgenstein 命題編號、Markdown 標題、Word heading）

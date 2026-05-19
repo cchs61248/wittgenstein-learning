@@ -22,6 +22,8 @@ def extract_text(filename: str, raw_bytes: bytes) -> str:
             return _extract_pptx(raw_bytes)
         elif suffix in (".html", ".htm"):
             return _extract_html(raw_bytes)
+        elif suffix == ".epub":
+            return _extract_epub(raw_bytes)
         else:
             return _fallback_decode(raw_bytes)
     except Exception:
@@ -109,6 +111,44 @@ def _extract_html(raw: bytes) -> str:
     for tag in soup(["script", "style", "head", "nav", "footer"]):
         tag.decompose()
     return soup.get_text(separator="\n", strip=True)
+
+
+def _extract_epub(raw: bytes) -> str:
+    import io
+    import tempfile
+    from pathlib import Path as _Path
+    from bs4 import BeautifulSoup
+    from ebooklib import epub, ITEM_DOCUMENT
+
+    # ebooklib 只接受路徑（不接受 BytesIO），用臨時檔承接
+    with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
+        tmp.write(raw)
+        tmp_path = tmp.name
+    try:
+        book = epub.read_epub(tmp_path)
+        parts: list[str] = []
+        title = book.get_metadata("DC", "title")
+        if title:
+            parts.append(f"# {title[0][0]}")
+
+        for item in book.get_items_of_type(ITEM_DOCUMENT):
+            # 用 get_body_content() 只取 body 內容片段（HTML fragment），
+            # 避免完整 XHTML 文件的 XML 宣告觸發 XMLParsedAsHTMLWarning
+            body = item.get_body_content()
+            if not body:
+                continue
+            soup = BeautifulSoup(body, "lxml")
+            for tag in soup(["script", "style", "nav", "footer"]):
+                tag.decompose()
+            text = soup.get_text(separator="\n", strip=True)
+            if text:
+                parts.append(text)
+        return "\n\n".join(parts)
+    finally:
+        try:
+            _Path(tmp_path).unlink()
+        except OSError:
+            pass
 
 
 def _fallback_decode(raw: bytes) -> str:
