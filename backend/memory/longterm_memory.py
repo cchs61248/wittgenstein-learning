@@ -41,7 +41,16 @@ async def get_weak_concepts(user_id: str, limit: int = 5) -> str:
 
 
 async def get_misconceptions(user_id: str, concepts: list[str]) -> list[dict]:
-    """取得指定概念的混淆模式（供 ContextBuilder 使用）。"""
+    """取得指定概念的混淆模式（供 ContextBuilder 使用）。
+
+    confusion_patterns 欄位可能混入兩種格式：
+    - dict：結構化 misconception_pattern（concept + pattern + severity 等完整資訊）
+    - str：早期格式或從 confused_concepts 累積進來的「跨概念干擾」名稱
+           （學生在這題混淆到另一個 concept），不適合當 pattern 文字輸出。
+
+    本函式優先回傳結構化條目，並依 (concept, pattern) 去重，避免 teacher
+    prompt 出現「『X』：Y、『X』：Y」這種重複或語意不明的條目。
+    """
     if not concepts:
         return []
     db = await get_db()
@@ -55,14 +64,23 @@ async def get_misconceptions(user_id: str, concepts: list[str]) -> list[dict]:
         rows = await cur.fetchall()
 
     result: list[dict] = []
+    seen: set[tuple[str, str]] = set()
     for row in rows:
         concept = row["concept_name"]
         patterns = json.loads(row["confusion_patterns"] or "[]")
         for p in patterns:
-            if isinstance(p, str):
-                result.append({"concept": concept, "pattern": p, "severity": "medium"})
-            elif isinstance(p, dict):
-                result.append({**p, "concept": p.get("concept", concept)})
+            if isinstance(p, dict) and p.get("pattern"):
+                # 結構化 misconception：保留 concept/pattern/severity/student_evidence 等完整欄位
+                norm_concept = p.get("concept", concept) or concept
+                pattern_text = p["pattern"]
+                key = (norm_concept, pattern_text)
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append({**p, "concept": norm_concept})
+            # str 條目（跨概念干擾、舊格式）跳過：這些不是真正的 misconception pattern，
+            # 累積到「容易混淆的概念」欄位反而會造成「『X』：Y」式的怪格式條目。
+            # 真正有診斷價值的細節都應該在 dict 條目的 pattern 文字裡。
     return result
 
 

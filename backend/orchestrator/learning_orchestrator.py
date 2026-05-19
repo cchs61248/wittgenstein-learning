@@ -756,6 +756,9 @@ class LearningOrchestrator:
 
         # 4. 生成問題
         mastery_map_for_qg = (adaptive_ctx.get("learner_state") or {}).get("mastery_map") or {}
+        must_reinforce_for_qg = (
+            (adaptive_ctx.get("next_lesson_requirements") or {}).get("must_reinforce", [])
+        )
         q_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -765,6 +768,7 @@ class LearningOrchestrator:
                 "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
                 "full_explanation": full_explanation,
                 "mastery_map": mastery_map_for_qg,
+                "must_reinforce": must_reinforce_for_qg,
                 "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                 if question_mode == "multiple_choice"
                 else stage.get("estimated_questions", 2),
@@ -795,6 +799,7 @@ class LearningOrchestrator:
                     },
                     "full_explanation": full_explanation,
                     "mastery_map": mastery_map_for_qg,
+                    "must_reinforce": must_reinforce_for_qg,
                     "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                     if question_mode == "multiple_choice"
                     else stage.get("estimated_questions", 2),
@@ -1069,7 +1074,7 @@ class LearningOrchestrator:
             session_id=session_id,
             stage_id=stage["stage_id"],
             status="completed" if d == "advance" else "in_progress",
-            attempts=len(wm.stage_turns),
+            attempts=wm.current_attempt,
             best_score=decision["best_score"],
             understanding_notes={"confused": decision.get("remediation_focus") or []},
         )
@@ -1766,6 +1771,9 @@ class LearningOrchestrator:
             teaching_intent = await self.teacher.extract_teaching_intent(teacher_only, stage)
             wm.current_teaching_intent = teaching_intent
             mastery_map_for_qg = (adaptive_ctx.get("learner_state") or {}).get("mastery_map") or {}
+            must_reinforce_for_qg = (
+                (adaptive_ctx.get("next_lesson_requirements") or {}).get("must_reinforce", [])
+            )
             q_ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
@@ -1775,6 +1783,7 @@ class LearningOrchestrator:
                     "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
                     "full_explanation": teacher_only,
                     "mastery_map": mastery_map_for_qg,
+                    "must_reinforce": must_reinforce_for_qg,
                     "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                     if wm.question_mode == "multiple_choice"
                     else stage.get("estimated_questions", 2),
@@ -1805,6 +1814,7 @@ class LearningOrchestrator:
                         },
                         "full_explanation": teacher_only,
                         "mastery_map": mastery_map_for_qg,
+                        "must_reinforce": must_reinforce_for_qg,
                         "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                         if wm.question_mode == "multiple_choice"
                         else stage.get("estimated_questions", 2),

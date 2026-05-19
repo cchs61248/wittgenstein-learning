@@ -79,15 +79,23 @@ class QuestionGeneratorAgent(BaseAgent):
         )
 
     def _format_mastered_concepts(
-        self, mastery_map: dict, key_concepts: list[str], threshold: float = 0.8
+        self, mastery_map: dict, key_concepts: list[str],
+        must_reinforce: list[str] | None = None, threshold: float = 0.8,
     ) -> str:
         """從 mastery_map 過濾出已掌握概念清單（mastery>=threshold），
-        format 成 prompt 訊息段落。沒有已掌握概念時回傳空字串。"""
+        format 成 prompt 訊息段落。沒有已掌握概念時回傳空字串。
+
+        補強情境訊號衝突修正：若某概念雖 mastery>=threshold 但同時被列入
+        must_reinforce（補強對象），代表「答對但有 misconception」需要再教，
+        不應該被「禁止出題」——從 mastered 清單中扣除。
+        """
         if not mastery_map:
             return ""
+        reinforce_set = set(must_reinforce or [])
         mastered = [
             c for c, m in mastery_map.items()
             if isinstance(m, (int, float)) and m >= threshold
+            and c not in reinforce_set
         ]
         if not mastered:
             return ""
@@ -143,6 +151,7 @@ class QuestionGeneratorAgent(BaseAgent):
         allowed_evidence: list[dict] = payload.get("allowed_evidence") or []
         full_explanation: str = payload.get("full_explanation") or ""
         mastery_map: dict = payload.get("mastery_map") or {}
+        must_reinforce: list[str] = payload.get("must_reinforce") or []
 
         system = SYSTEM_PROMPTS["question_generator"].format(
             num_questions=num_questions,
@@ -160,7 +169,7 @@ class QuestionGeneratorAgent(BaseAgent):
         teaching_intent_text = self._format_teaching_intent(teaching_intent)
         full_explanation_text = self._format_full_explanation(full_explanation)
         mastered_text = self._format_mastered_concepts(
-            mastery_map, stage.get("key_concepts", [])
+            mastery_map, stage.get("key_concepts", []), must_reinforce=must_reinforce,
         )
 
         self._add_message(
