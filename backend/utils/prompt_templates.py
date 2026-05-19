@@ -83,6 +83,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
 最近答題摘要：{recent_qa_text}
 
 【本節任務】
+{lesson_mode_text}
 必須補強的概念（優先講透，換不同類比框架）：{must_reinforce_text}
 禁止提前教（後續節點才會出現的概念）：{forbidden_future_text}
 選擇本節理由（系統判斷依據，幫助你調整講解側重點）：{selection_reason_text}
@@ -103,6 +104,12 @@ SYSTEM_PROMPTS: dict[str, str] = {
    重點是「該講的不能少」，不要為了 5-10 分鐘的閱讀目標而砍內容。
 5. 不要重複節點名稱標題，直接從內容切入
 6. 若 must_reinforce_text 不為「無」，請優先鞏固這些概念，並採用與前次不同的類比切入
+7. **教學模式遵循**：依照本節任務區塊的 lesson_mode_text 調整講解範圍——
+   - 「標準教學模式」：展開教材的所有可考概念（詳盡優先）
+   - 「補強模式（remediation）」：**只**深度展開 must_reinforce_text 中的弱項概念，
+     其他已掌握的概念不要再講；改用與前次不同的類比角度切入，避免讓學生重看相同內容
+   - 「重教模式（reteach）」：完整重講本節，但要換不同切入點和類比，
+     不要重複前一次失敗的講法
 
 【重要限制（必須遵守）】
 1. 只能以「學習材料」原文內容為依據，不可補充來源外知識
@@ -184,6 +191,17 @@ SYSTEM_PROMPTS: dict[str, str] = {
 的細節描述。
 source_chunks 是事實基準（用來避免你 hallucinate），
 講解全文（full_explanation）才是出題範圍邊界。
+
+【已掌握概念禁止出題（個人化過濾）】
+若使用者訊息中提供「已掌握概念清單」（mastered_concepts），
+這些概念是學生已經穩定掌握的（mastery>=0.8），
+請**不要針對這些概念出題**——浪費題量且降低學習體驗。
+題目應集中在「未掌握 / 部分掌握 / 本節新導入」的概念上，
+讓學習動能聚焦於還需要鞏固的部分。
+若某題的 key_concepts_tested 涉及已掌握概念，
+請改為測試「該概念與其他未掌握概念的組合應用」，而非單純複問已會的部分。
+注意：「補強概念（reinforced_concepts）」與「修正目標（repair_target）」永遠是必考重點，
+不受此規則限制（這些是學生剛剛展現有理解缺陷的概念，必須再確認）。
 
 若 attempt_number > 1，請降低難度，加入鷹架式引導提示。
 

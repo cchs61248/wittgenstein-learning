@@ -52,6 +52,28 @@ class TeacherAgent(BaseAgent):
         must_reinforce: list = requirements.get("must_reinforce", [])
         forbidden_future: list = requirements.get("forbidden_future_concepts", [])
 
+        stage = payload.get("stage") or {}
+        stage_kind = (stage.get("kind") or "").strip()
+        if stage_kind == "remediation":
+            lesson_mode_text = (
+                "本節教學模式：**補強模式（remediation）**\n"
+                "→ 學生在前一節有特定概念未掌握，本節是針對弱項的補強講解。\n"
+                "→ **只**深入展開 must_reinforce_text 中列出的弱項概念，"
+                "其他已掌握的概念請不要重講（學生已會了，重講會浪費時間且降低學習動機）。\n"
+                "→ 採用與前次不同的類比框架切入，避免讓學生看到一模一樣的講法。"
+            )
+        elif stage_kind == "reteach":
+            lesson_mode_text = (
+                "本節教學模式：**重教模式（reteach）**\n"
+                "→ 整節教學內容完整重講，但**換不同切入點與類比角度**，"
+                "不要重複前一次失敗的講法。"
+            )
+        else:
+            lesson_mode_text = (
+                "本節教學模式：**標準教學模式**\n"
+                "→ 詳盡展開教材原文出現的所有可考概念（不要為了精簡而省略）。"
+            )
+
         if mastery_map:
             mastery_summary = "、".join(f"{c}={v:.0%}" for c, v in mastery_map.items())
         else:
@@ -98,6 +120,7 @@ class TeacherAgent(BaseAgent):
             "must_reinforce_text": must_reinforce_text,
             "forbidden_future_text": forbidden_future_text,
             "selection_reason_text": selection_reason_text,
+            "lesson_mode_text": lesson_mode_text,
         }
 
     async def stream_explanation(

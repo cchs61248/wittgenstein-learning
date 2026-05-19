@@ -46,8 +46,18 @@ async def build_adaptive_context(
         if c not in key_concepts
     ]))[:10]
 
-    # 7. 計算本節必須補強的概念（掌握度 < 0.75 或本次嘗試 > 1）
-    must_reinforce = [c for c in key_concepts if mastery_map.get(c, 0.5) < 0.75]
+    # 7. 計算本節必須補強的概念。觸發條件（任一即可）：
+    #    a) 掌握度 < 0.75（基準閾值，初學或答錯多次）
+    #    b) 有未消除的 confusion pattern（即使 mastery>=0.75 也要補，
+    #       因為 misconception 累積在 DB 表示學生對該概念仍有理解錯誤）
+    #    c) 上一輪 remediation_focus 中的概念（current_attempt > 1）
+    must_reinforce: list[str] = []
+    misconception_concepts = {m.get("concept") for m in misconceptions if m.get("concept")}
+    for c in key_concepts:
+        if mastery_map.get(c, 0.5) < 0.75:
+            must_reinforce.append(c)
+        elif c in misconception_concepts:
+            must_reinforce.append(c)
     if current_attempt > 1 and last_decision:
         focus = (last_decision.get("strategy_snapshot") or {}).get("remediation_focus") or []
         for c in focus:

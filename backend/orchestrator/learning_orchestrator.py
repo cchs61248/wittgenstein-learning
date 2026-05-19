@@ -755,6 +755,7 @@ class LearningOrchestrator:
         wm.current_teaching_intent = teaching_intent
 
         # 4. 生成問題
+        mastery_map_for_qg = (adaptive_ctx.get("learner_state") or {}).get("mastery_map") or {}
         q_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -763,6 +764,7 @@ class LearningOrchestrator:
                 "teaching_intent": teaching_intent,
                 "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
                 "full_explanation": full_explanation,
+                "mastery_map": mastery_map_for_qg,
                 "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                 if question_mode == "multiple_choice"
                 else stage.get("estimated_questions", 2),
@@ -792,6 +794,7 @@ class LearningOrchestrator:
                         + "\n\n" + self._build_question_retry_guidance(questions_verify),
                     },
                     "full_explanation": full_explanation,
+                    "mastery_map": mastery_map_for_qg,
                     "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                     if question_mode == "multiple_choice"
                     else stage.get("estimated_questions", 2),
@@ -1240,6 +1243,7 @@ class LearningOrchestrator:
                 task_payload={
                     "stage": stage,
                     "full_explanation": wm.current_explanation,
+                    "mastery_map": mastery_map,
                     "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                     "attempt_number": wm.current_attempt,
                     "previous_question_ids": prev_q_ids,
@@ -1268,6 +1272,7 @@ class LearningOrchestrator:
                             + "\n\n" + self._build_question_retry_guidance(questions_verify),
                         },
                         "full_explanation": wm.current_explanation,
+                        "mastery_map": mastery_map,
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                         "attempt_number": wm.current_attempt,
                         "previous_question_ids": prev_q_ids,
@@ -1758,6 +1763,7 @@ class LearningOrchestrator:
             )
             teaching_intent = await self.teacher.extract_teaching_intent(teacher_only, stage)
             wm.current_teaching_intent = teaching_intent
+            mastery_map_for_qg = (adaptive_ctx.get("learner_state") or {}).get("mastery_map") or {}
             q_ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
@@ -1766,6 +1772,7 @@ class LearningOrchestrator:
                     "teaching_intent": teaching_intent,
                     "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
                     "full_explanation": teacher_only,
+                    "mastery_map": mastery_map_for_qg,
                     "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                     if wm.question_mode == "multiple_choice"
                     else stage.get("estimated_questions", 2),
@@ -1795,6 +1802,7 @@ class LearningOrchestrator:
                             + "\n\n" + self._build_question_retry_guidance(questions_verify),
                         },
                         "full_explanation": teacher_only,
+                        "mastery_map": mastery_map_for_qg,
                         "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
                         if wm.question_mode == "multiple_choice"
                         else stage.get("estimated_questions", 2),
@@ -1945,12 +1953,16 @@ class LearningOrchestrator:
                 # retry 題目尚未生成完畢就被 resume 打斷 → 重新產出當輪題目
                 prev_q_ids = [t.question_id for t in wm.stage_turns]
                 prev_q_texts = [t.question_text for t in wm.stage_turns]
+                mastery_map_for_qg = await longterm_memory.get_concept_mastery_map(
+                    user_id, stage.get("key_concepts", [])
+                )
                 q_ctx = AgentContext(
                     session_id=session_id,
                     user_id=user_id,
                     task_payload={
                         "stage": stage,
                         "full_explanation": wm.current_explanation,
+                        "mastery_map": mastery_map_for_qg,
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
                         "attempt_number": wm.current_attempt,
                         "previous_question_ids": prev_q_ids,

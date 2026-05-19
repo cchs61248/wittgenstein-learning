@@ -78,6 +78,27 @@ class QuestionGeneratorAgent(BaseAgent):
             + full_explanation
         )
 
+    def _format_mastered_concepts(
+        self, mastery_map: dict, key_concepts: list[str], threshold: float = 0.8
+    ) -> str:
+        """從 mastery_map 過濾出已掌握概念清單（mastery>=threshold），
+        format 成 prompt 訊息段落。沒有已掌握概念時回傳空字串。"""
+        if not mastery_map:
+            return ""
+        mastered = [
+            c for c, m in mastery_map.items()
+            if isinstance(m, (int, float)) and m >= threshold
+        ]
+        if not mastered:
+            return ""
+        return (
+            "\n\n【已掌握概念清單（請避免針對這些出題）】\n"
+            f"以下概念學生 mastery>={threshold:.1f}，已穩定掌握，"
+            "不要單純複問這些概念；可作為干擾項素材或與未掌握概念組合應用，"
+            "但**不要把這些概念當作主要 key_concepts_tested**：\n"
+            + "、".join(mastered)
+        )
+
     def _format_teaching_intent(self, teaching_intent: dict) -> str:
         if not teaching_intent:
             return ""
@@ -121,6 +142,7 @@ class QuestionGeneratorAgent(BaseAgent):
         teaching_intent: dict = payload.get("teaching_intent") or {}
         allowed_evidence: list[dict] = payload.get("allowed_evidence") or []
         full_explanation: str = payload.get("full_explanation") or ""
+        mastery_map: dict = payload.get("mastery_map") or {}
 
         system = SYSTEM_PROMPTS["question_generator"].format(
             num_questions=num_questions,
@@ -137,6 +159,9 @@ class QuestionGeneratorAgent(BaseAgent):
         evidence_text = self._format_evidence(stage, allowed_evidence)
         teaching_intent_text = self._format_teaching_intent(teaching_intent)
         full_explanation_text = self._format_full_explanation(full_explanation)
+        mastered_text = self._format_mastered_concepts(
+            mastery_map, stage.get("key_concepts", [])
+        )
 
         self._add_message(
             MessageRole.USER,
@@ -146,6 +171,7 @@ class QuestionGeneratorAgent(BaseAgent):
             f"source_chunks（每題要附 evidence_chunk_ids）：\n{evidence_text}"
             f"{teaching_intent_text}"
             f"{full_explanation_text}"
+            f"{mastered_text}"
             f"{avoid_note}",
         )
 
