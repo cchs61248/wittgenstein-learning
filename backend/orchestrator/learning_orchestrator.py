@@ -1483,6 +1483,12 @@ class LearningOrchestrator:
                 # 向後相容舊 schema
                 scope = "current_chapter" if judge_data.get("in_scope", True) else "out_of_scope"
         except Exception:
+            _log.warning(
+                "scope_judge parse failed → fallback current_chapter  "
+                "session=%s  raw_response=%r",
+                session_id, judge_resp.content[:300],
+                exc_info=True,
+            )
             scope = "current_chapter"
         in_scope = scope != "out_of_scope"
 
@@ -1496,6 +1502,12 @@ class LearningOrchestrator:
                         for r in results
                     )
             except Exception:
+                _log.warning(
+                    "search_web failed → empty web_context  "
+                    "session=%s  question=%r",
+                    session_id, question[:100],
+                    exc_info=True,
+                )
                 web_context = ""
 
         # 決定回答用的教材來源
@@ -1559,7 +1571,13 @@ class LearningOrchestrator:
                 session_id, effective_stage_id, question, answer, in_scope, scope=scope
             )
         except Exception as e:
-            _log.warning("insert_tutor_record failed: %s", e)
+            _log.warning(
+                "insert_tutor_record failed  session=%s  stage_id=%s  "
+                "scope=%s  question=%r  answer_len=%d  error=%s",
+                session_id, effective_stage_id, scope,
+                question[:100], len(answer), e,
+                exc_info=True,
+            )
         payload: dict = {
             "question": question,
             "answer": answer,
@@ -1619,7 +1637,12 @@ class LearningOrchestrator:
         try:
             raw_tutor = await session_memory.get_all_tutor_records(session_id)
         except Exception as e:
-            _log.warning("get_all_tutor_records failed: %s", e)
+            _log.warning(
+                "get_all_tutor_records failed → empty tutor history on resume  "
+                "session=%s  error=%s",
+                session_id, e,
+                exc_info=True,
+            )
             raw_tutor = {}
 
         await emit({

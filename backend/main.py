@@ -3,8 +3,10 @@ import json
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
+from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
@@ -70,6 +72,49 @@ app.include_router(upload_router)
 app.include_router(session_router)
 app.include_router(learner_router)
 app.include_router(user_ui_router)
+
+
+def _peek_user_id(request: Request) -> str | None:
+    """從 Authorization: Bearer ... 解出 sub 給 log 用；失敗回 None。
+    不驗 session_version（純 best-effort，給審計追蹤用）。"""
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return None
+    from .auth.utils import decode_token
+    payload = decode_token(auth.split(" ", 1)[1].strip())
+    return payload.get("sub") if payload else None
+
+
+@app.exception_handler(HTTPException)
+async def _log_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
+    log = ws_logger()
+    user_id = _peek_user_id(request)
+    log_fn = log.warning if exc.status_code >= 500 else log.info
+    log_fn(
+        "HTTP %s  %s %s  user=%s  detail=%r",
+        exc.status_code, request.method, request.url.path,
+        user_id, exc.detail,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(Exception)
+async def _log_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+    log = ws_logger()
+    user_id = _peek_user_id(request)
+    log.error(
+        "UNHANDLED  %s %s  user=%s",
+        request.method, request.url.path, user_id,
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error"},
+    )
 
 
 ws_manager = WebSocketManager()

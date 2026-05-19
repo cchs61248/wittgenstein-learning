@@ -223,6 +223,12 @@ class TeacherAgent(BaseAgent):
                         try:
                             self.last_intent = json.loads(intent_buffer.strip())
                         except Exception:
+                            self._log.warning(
+                                "TeacherAgent inline intent parse failed → fallback to extract_teaching_intent  "
+                                "intent_buffer=%r",
+                                intent_buffer[:300],
+                                exc_info=True,
+                            )
                             self.last_intent = None
                         in_intent_block = False
                         intent_buffer = ""
@@ -270,8 +276,10 @@ class TeacherAgent(BaseAgent):
             }
         except Exception as e:
             self._log.warning(
-                "TeacherAgent extract_teaching_intent parse error  stage_id=%s  error=%s",
-                stage.get("stage_id", "?"), e,
+                "TeacherAgent extract_teaching_intent parse error → using key_concepts[:2] fallback  "
+                "stage_id=%s  error=%s  explanation_head=%r",
+                stage.get("stage_id", "?"), e, explanation_text[:200],
+                exc_info=True,
             )
             return {
                 "reinforced_concepts": key_concepts[:2],
