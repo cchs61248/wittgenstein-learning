@@ -45,7 +45,7 @@ class DriftVerifierAgent(BaseAgent):
         cited_chunks = self._extract_cited_chunks(candidate_text, source_chunks)
 
         explanation_section = (
-            f"\n\nfull_explanation（本次課程已驗證講解，出題驗證寬鬆模式依據）：\n{full_explanation}"
+            f"\n\nfull_explanation（本次課程已驗證講解，出題對齊基準）：\n{full_explanation}"
             if content_type == "questions" and full_explanation.strip()
             else ""
         )
