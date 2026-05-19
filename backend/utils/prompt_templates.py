@@ -144,6 +144,14 @@ SYSTEM_PROMPTS: dict[str, str] = {
 - 問題必須可由提供教材推導，不能要求教材外知識
 - 每題需附 evidence_chunk_ids，至少 1 個
 
+【出題範圍嚴格限制（最高優先）】
+出題的測試概念必須是「本次講解全文（full_explanation）中明確出現並有解釋」的概念。
+即使 source_chunks 中提到某概念（例如 polling），但 full_explanation 從頭到尾
+沒講過該概念，就絕對不能出該概念相關的題目，也不能在選項或干擾項中出現該概念
+的細節描述。
+source_chunks 是事實基準（用來避免你 hallucinate），
+講解全文（full_explanation）才是出題範圍邊界。
+
 若 attempt_number > 1，請降低難度，加入鷹架式引導提示。
 
 若 question_mode = multiple_choice：
