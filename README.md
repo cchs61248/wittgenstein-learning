@@ -31,6 +31,7 @@
 - **Teacher 串流講解**：Markdown 即時渲染，依學生掌握度 / 混淆模式 / 選課理由（Phase 4）自適應，每個概念至少 2 個生活化類比，類比明確標記為「說明工具」不可作為題目素材
 - **Citation Accuracy 驗證**：DriftVerifier 逐條 claim 比對原文，同時支援 Markdown `[chunk_id]` 與 JSON 陣列兩種格式；不通過自動重生（附 revision_hint）
 - **出題嚴格對齊講解**（2026-05-19）：QuestionGenerator 題目必須測試 `full_explanation` 中明確展開過的概念（chunks 提到但講解略過的概念禁止出題）；DriftVerifier questions 模式以 full_explanation 為唯一對齊基準，漂移時把 `unsupported_claims` 注入 retry prompt 重生一次；retry 後仍漂移的題目以 `[註：本題未對齊講解]` 軟性標記持久化，不阻斷流程
+- **「字面提及 vs 有展開」雙管把關**（2026-05-19 A+B）：DriftVerifier 升級為三態判定（沒提 / 字面提及 / 有展開），即便 chunks 有完整說明，只要 explanation 只把名詞當道具引用沒展開運作，題目考運作特性仍視為漂移；Teacher prompt 同時規定「提及的專有名詞必須至少一句解釋運作/特性/意義」，否則應改用淺白詞彙描述、不提名詞，避免後續出題誤把未教概念當已教概念
 - **教學意圖對齊**：TeacherAgent 講解串流結尾共生 `<<INTENT_JSON>>{key_concepts, expected_misunderstandings, evidence_chunk_ids}<<END_INTENT>>` 區塊（`stream_explanation_with_intent` 內聯抽取、不外送給前端、不進 DB），QuestionGenerator 至少一題對齊；LLM 偶發未輸出區塊時 fallback 走獨立 `extract_teaching_intent` LLM call（罕見）
 - **結構化錯誤診斷**：Evaluator 輸出 `misconception_patterns`（concept / pattern / severity / repair_strategy），存入長期記憶供跨會話追蹤
 - **智能進度決策**（純規則，純程式邏輯，不呼叫 LLM）：高嚴重度根本誤解或同一錯誤重複 ≥ 2 次立即觸發換框架重教；詳細 10 條優先序見 [BACKEND_FLOW §7.6](./BACKEND_FLOW.md#76-進度決策_make_progress_decision)

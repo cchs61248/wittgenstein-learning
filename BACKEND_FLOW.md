@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-19，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica／DeepSeek Provider、上傳磁碟持久化、多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合、URL 擷取品質強化（WebFetch 風格結構化輸出 + strict_main 主文截斷 + YouTube ASR fallback）、Migration 011–015 補完（單裝置登入 session_version、跨裝置 UI 狀態、tutor_records 與 scope 三態、upload blob GC 追蹤）、ask_tutor 三態邊界判定、Enrichment 機制移除、DriftVerifier aligned 強制條件、QuestionGenerator JSON repair、Files API adapter 廢棄、A/B 批死代碼與邏輯漏洞清理、**出題對齊講解強化（2026-05-19）：QuestionGenerator prompt 加「出題範圍嚴格限制」（題目必須在 full_explanation 中明確出現）、DriftVerifier questions 模式改嚴格對齊（full_explanation 為唯一基準，chunks 提到但講解未涵蓋的概念視為漂移）、retry 提示注入 `unsupported_claims`、retry 後仍漂移的題目以 `[註：本題未對齊講解]` 軟性標記持久化**）
+> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-19，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica／DeepSeek Provider、上傳磁碟持久化、多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合、URL 擷取品質強化（WebFetch 風格結構化輸出 + strict_main 主文截斷 + YouTube ASR fallback）、Migration 011–015 補完（單裝置登入 session_version、跨裝置 UI 狀態、tutor_records 與 scope 三態、upload blob GC 追蹤）、ask_tutor 三態邊界判定、Enrichment 機制移除、DriftVerifier aligned 強制條件、QuestionGenerator JSON repair、Files API adapter 廢棄、A/B 批死代碼與邏輯漏洞清理、**出題對齊講解強化（2026-05-19）：QuestionGenerator prompt 加「出題範圍嚴格限制」（題目必須在 full_explanation 中明確出現）、DriftVerifier questions 模式改嚴格對齊（full_explanation 為唯一基準，chunks 提到但講解未涵蓋的概念視為漂移）、retry 提示注入 `unsupported_claims`、retry 後仍漂移的題目以 `[註：本題未對齊講解]` 軟性標記持久化、A/B 雙管把關「字面提及 vs 有展開」漏網（A：DriftVerifier 規則升級三態判定 + 「理財型房貸」few-shot；B：Teacher prompt 加「展開義務」第 7 條，提及的專有名詞必須至少一句解釋運作/特性/意義，否則不應在講解中提及）**）
 
 ---
 
@@ -1142,6 +1142,10 @@ stage["source_chunks"] = [{"chunk_id": cid, "quote": db_chunks[cid]["text"]}
 
 **重要限制（Prompt）**：每個核心敘述後標記 `[chunk_id]`，類比標示「（類比說明，非原文）」，禁止提及 forbidden_future 概念。
 
+**展開義務（grounding，2026-05-19 新增）**：teacher prompt 重要限制第 7 條規定，講解中提及的「專有名詞、術語、工具名、機制名、命名概念」（如「理財型房貸」「斷路器」「polling」）都必須至少一句解釋運作 / 特性 / 意義，不可只當道具引用。若教材未涵蓋運作細節，改用淺白詞彙描述其作用、**不在講解中提及該名詞**（避免後續 QuestionGenerator 誤把該名詞當教過的概念出題）。類比場景的虛構名稱（如「圖書館」「保險絲」）不受此限。
+
+> 這條規則與 DriftVerifier questions 模式的「字面提及 vs 有展開」雙管把關（§8.7）：Teacher 從源頭預防漏展開、DriftVerifier 兜底抓 Teacher 偶爾偷懶的情況。
+
 **串流方法**：
 
 - **`stream_explanation_with_intent(ctx)`**（主路徑、最新）：包裝 LLM stream，偵測尾段的 `<<INTENT_JSON>>{...}<<END_INTENT>>` 標記區塊：
@@ -1340,7 +1344,11 @@ def _extract_cited_chunks(candidate_text, source_chunks):
 - prompt 由舊版「寬鬆模式（chunks 或 explanation 任一支撐即可）」改為「嚴格對齊講解模式」
 - LLM 收到的 USER message 多一段 `full_explanation（本次課程已驗證講解，出題對齊基準）`（drift_verifier.py:47–51）
 - 判定規則：題目測試的概念**僅以 full_explanation 為基準**；即使 source_chunks 中提及，只要 full_explanation 沒明確展開，視為漂移
-- prompt 內附 few-shot：polling drift 反例（chunks 有但講解沒）、circuit breaker 對齊正例
+- **字面提及 ≠ 有展開說明**（2026-05-19 追加 A）：判定一個概念「在 explanation 中有講解」必須對該概念至少一句「運作 / 特性 / 機制 / 原因 / 例子」展開說明，不能只把名詞當道具引用。三態判定：（1）沒提 → 漂移（2）字面提及但未展開 → 漂移（3）有展開 → 對齊
+- prompt 內附 3 個 few-shot：
+  - 範例 A（漂移：字面也沒出現）— polling drift
+  - 範例 B（對齊：有展開）— circuit breaker
+  - 範例 C（漂移：字面提及但未展開）— 理財型房貸 mentioned-but-not-explained 案
 - runtime label：`出題對齊基準`（drift_verifier.py:48，已從舊「出題驗證寬鬆模式依據」改名）
 
 **Retry 與軟性標記（2026-05-19，三處 retry 點共用）**：
