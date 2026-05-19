@@ -206,6 +206,22 @@ class LearningOrchestrator:
         )
         return await self.drift_verifier.run(verify_ctx)
 
+    def _build_question_retry_guidance(self, verify_result: dict) -> str:
+        """組裝給 questioner 的 retry hint，把 drift_verifier 的 unsupported_claims 注入。
+
+        無 unsupported_claims 時退回預設 hint（避免 prompt 變空）。
+        最多帶 5 條 claim，避免 retry prompt 過長。
+        """
+        unsupported = verify_result.get("unsupported_claims") or []
+        if not unsupported:
+            return "（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）"
+        bullets = "\n".join(f"- {claim}" for claim in unsupported[:5])
+        return (
+            "（對齊修正要求：上一輪以下題目漂移到未在講解中提及的範圍，請完全避免：\n"
+            f"{bullets}\n"
+            "出題只能測試講解全文中明確出現並有解釋的概念。）"
+        )
+
     def _rank_next_stage_candidates(
         self,
         stages: list[dict],
@@ -747,7 +763,7 @@ class LearningOrchestrator:
                     "stage": {
                         **stage,
                         "content": stage.get("content", "")
-                        + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                        + "\n\n" + self._build_question_retry_guidance(questions_verify),
                     },
                     "full_explanation": full_explanation,
                     "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
@@ -1209,7 +1225,7 @@ class LearningOrchestrator:
                         "stage": {
                             **stage,
                             "content": stage.get("content", "")
-                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                            + "\n\n" + self._build_question_retry_guidance(questions_verify),
                         },
                         "full_explanation": wm.current_explanation,
                         "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
@@ -1699,7 +1715,7 @@ class LearningOrchestrator:
                         "stage": {
                             **stage,
                             "content": stage.get("content", "")
-                            + "\n\n（對齊修正要求：請每題僅依 source_chunks 設計，並補 evidence_chunk_ids）",
+                            + "\n\n" + self._build_question_retry_guidance(questions_verify),
                         },
                         "full_explanation": teacher_only,
                         "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
