@@ -1,9 +1,52 @@
 import json
+import math
 from typing import Any
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import LLMMessage, MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
+
+
+def _format_distribution_quota(
+    key_concepts: list[str], num_questions: int
+) -> str:
+    """為 stage 有 ≥ 2 個概念時生成「每概念配額」訊息段。
+
+    單一概念上限 = ceil(num_questions / len(key_concepts)) + 1（避免過度集中）。
+    補強節點（key_concepts 只 1 個）不注入，避免 noise。
+    """
+    if len(key_concepts) < 2:
+        return ""
+    per_max = math.ceil(num_questions / len(key_concepts)) + 1
+    base = num_questions // len(key_concepts)
+    remainder = num_questions - base * len(key_concepts)
+    suggested = [base + 1 if i < remainder else base for i in range(len(key_concepts))]
+    suggestion = "/".join(str(n) for n in suggested)
+    quota_lines = [f"- {c}：至少 1 題、最多 {per_max} 題" for c in key_concepts]
+    return (
+        "\n\n【本階段關鍵概念與配額】\n"
+        + "\n".join(quota_lines)
+        + f"\n\n總題數 {num_questions} → 請盡量均勻分配（建議 {suggestion}）。"
+        "\nQG 仍自由決定題目內容、難度、選項，但每概念至少 1 題、不可超過上限。"
+    )
+
+
+def _check_distribution_violations(
+    questions: list[dict], key_concepts: list[str], num_questions: int
+) -> list[tuple[str, int, int]]:
+    """檢查 QG 回傳的題目分布是否違反 quota。
+
+    回傳違規清單 [(concept, actual_count, max_allowed)]。
+    補強節點（key_concepts < 2）不檢查。
+    """
+    if len(key_concepts) < 2:
+        return []
+    per_max = math.ceil(num_questions / len(key_concepts)) + 1
+    counter: dict[str, int] = {}
+    for q in questions:
+        for kc in q.get("key_concepts_tested") or []:
+            counter[kc] = counter.get(kc, 0) + 1
+    return [(c, n, per_max) for c, n in counter.items() if n > per_max]
 
 
 class QuestionGeneratorAgent(BaseAgent):
@@ -171,6 +214,9 @@ class QuestionGeneratorAgent(BaseAgent):
         mastered_text = self._format_mastered_concepts(
             mastery_map, stage.get("key_concepts", []), must_reinforce=must_reinforce,
         )
+        quota_text = _format_distribution_quota(
+            stage.get("key_concepts", []), num_questions
+        )
 
         self._add_message(
             MessageRole.USER,
@@ -181,6 +227,7 @@ class QuestionGeneratorAgent(BaseAgent):
             f"{teaching_intent_text}"
             f"{full_explanation_text}"
             f"{mastered_text}"
+            f"{quota_text}"
             f"{avoid_note}",
         )
 
@@ -195,6 +242,16 @@ class QuestionGeneratorAgent(BaseAgent):
             if q["answer_mode"] != "multiple_choice":
                 q["options"] = []
                 q["correct_option_id"] = None
+
+        violations = _check_distribution_violations(
+            data.get("questions", []), stage.get("key_concepts", []), num_questions
+        )
+        if violations:
+            self._log.warning(
+                "QG distribution violation  session=%s  stage_id=%s  violations=%s",
+                ctx.session_id, stage.get("stage_id"),
+                [f"{c}={n}>max{m}" for c, n, m in violations],
+            )
 
         self._log_end(ctx, t0, {"questions_count": len(data.get("questions", []))})
         return data
