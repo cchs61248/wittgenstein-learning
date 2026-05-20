@@ -198,6 +198,19 @@ async def init_db(db_path: str) -> None:
     )
     await _connection.commit()
 
+    # Migration 017：concept_mastery 加 source_signature（教材出處標記）
+    # 目的：跨教材 mastery 隔離。同一 user 跑多本書時，QG 個人化過濾的
+    # 「已掌握概念清單」只取「與當前 session 同 source」的概念，
+    # 避免上本書的高 mastery 概念污染下本書的 prompt。
+    # signature = sorted(source_file_ids) join '|'；舊 record 保持 NULL（legacy）。
+    try:
+        await _connection.execute(
+            "ALTER TABLE concept_mastery ADD COLUMN source_signature TEXT DEFAULT NULL"
+        )
+        await _connection.commit()
+    except Exception:
+        pass
+
 
 async def close_db() -> None:
     global _connection

@@ -100,7 +100,9 @@ async def get_concept_mastery_map(user_id: str, concepts: list[str]) -> dict[str
 
 
 async def get_user_mastery_map(
-    user_id: str, threshold: float = 0.8
+    user_id: str,
+    threshold: float = 0.8,
+    source_signature: str | None = None,
 ) -> dict[str, float]:
     """撈整個 user 的高 mastery 概念（跨 stage 已掌握），用於 QG 個人化過濾。
 
@@ -109,14 +111,26 @@ async def get_user_mastery_map(
     避免在新 stage 出題時把這些概念當作主要 key_concepts_tested。
 
     threshold 預設 0.8 對齊 QuestionGenerator._format_mastered_concepts 的判定標準。
+
+    source_signature 行為（跨教材隔離）：
+      - 非 None：只回傳「source_signature 相同」的概念，跨教材污染被切斷。
+      - None：保留 legacy 行為（不過濾出處），舊資料 / 測試 path 仍能運作。
     """
     db = await get_db()
-    async with db.execute(
-        """SELECT concept_name, mastery_score FROM concept_mastery
-           WHERE user_id = ? AND mastery_score >= ?""",
-        (user_id, threshold),
-    ) as cur:
-        rows = await cur.fetchall()
+    if source_signature is not None:
+        async with db.execute(
+            """SELECT concept_name, mastery_score FROM concept_mastery
+               WHERE user_id = ? AND mastery_score >= ? AND source_signature = ?""",
+            (user_id, threshold, source_signature),
+        ) as cur:
+            rows = await cur.fetchall()
+    else:
+        async with db.execute(
+            """SELECT concept_name, mastery_score FROM concept_mastery
+               WHERE user_id = ? AND mastery_score >= ?""",
+            (user_id, threshold),
+        ) as cur:
+            rows = await cur.fetchall()
     return {row["concept_name"]: float(row["mastery_score"]) for row in rows}
 
 
@@ -129,6 +143,7 @@ async def update_concept_mastery(
     misconception_pattern: dict | None = None,
     analogy_used: str | None = None,
     lesson_was_effective: bool = False,
+    source_signature: str | None = None,
 ) -> None:
     db = await get_db()
     async with db.execute(
@@ -169,28 +184,45 @@ async def update_concept_mastery(
     if row:
         ema_score = 0.7 * float(row["mastery_score"]) + 0.3 * new_score
         exposures = row["total_exposures"] + 1
-        await db.execute(
-            """UPDATE concept_mastery
-               SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?,
-                   successful_analogies = ?, last_tested = ?
-               WHERE user_id = ? AND concept_name = ?""",
-            (
-                ema_score, exposures,
-                json.dumps(existing_confusion, ensure_ascii=False),
-                json.dumps(existing_analogies, ensure_ascii=False),
-                _utcnow(), user_id, concept_name,
-            ),
-        )
+        # source_signature 策略：非空才覆蓋，否則保留舊值
+        # （避免 caller 忘記傳 signature 時把已標記出處的 record 改成 NULL）
+        if source_signature:
+            await db.execute(
+                """UPDATE concept_mastery
+                   SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?,
+                       successful_analogies = ?, last_tested = ?, source_signature = ?
+                   WHERE user_id = ? AND concept_name = ?""",
+                (
+                    ema_score, exposures,
+                    json.dumps(existing_confusion, ensure_ascii=False),
+                    json.dumps(existing_analogies, ensure_ascii=False),
+                    _utcnow(), source_signature, user_id, concept_name,
+                ),
+            )
+        else:
+            await db.execute(
+                """UPDATE concept_mastery
+                   SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?,
+                       successful_analogies = ?, last_tested = ?
+                   WHERE user_id = ? AND concept_name = ?""",
+                (
+                    ema_score, exposures,
+                    json.dumps(existing_confusion, ensure_ascii=False),
+                    json.dumps(existing_analogies, ensure_ascii=False),
+                    _utcnow(), user_id, concept_name,
+                ),
+            )
     else:
         await db.execute(
             """INSERT INTO concept_mastery
-               (user_id, concept_name, mastery_score, total_exposures, confusion_patterns, successful_analogies, last_tested)
-               VALUES (?, ?, ?, 1, ?, ?, ?)""",
+               (user_id, concept_name, mastery_score, total_exposures, confusion_patterns,
+                successful_analogies, last_tested, source_signature)
+               VALUES (?, ?, ?, 1, ?, ?, ?, ?)""",
             (
                 user_id, concept_name, new_score,
                 json.dumps(existing_confusion, ensure_ascii=False),
                 json.dumps(existing_analogies, ensure_ascii=False),
-                _utcnow(),
+                _utcnow(), source_signature,
             ),
         )
     await db.commit()

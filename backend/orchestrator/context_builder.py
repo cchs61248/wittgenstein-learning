@@ -29,8 +29,15 @@ async def build_adaptive_context(
     #   (b) 整個 user 跨 stage 已掌握的高 mastery 概念（≥0.8）
     #       供 QG 個人化過濾使用，避免重出已掌握概念當主要考點
     # stage_mastery 覆蓋 user_mastery 中同名 concept（兩者撈到同個 concept 時數值相同，安全）
+    #
+    # user_mastery 用 source_signature 過濾：跨教材污染防護。
+    # 若 session 沒有 source_file_ids（legacy session），signature=None
+    # → get_user_mastery_map 退回 legacy 不過濾行為（保留向後相容）。
     key_concepts: list[str] = stage.get("key_concepts", [])
-    user_mastery_map = await longterm_memory.get_user_mastery_map(user_id, threshold=0.8)
+    source_signature = await session_memory.get_source_signature(session_id)
+    user_mastery_map = await longterm_memory.get_user_mastery_map(
+        user_id, threshold=0.8, source_signature=source_signature
+    )
     stage_mastery_map = await longterm_memory.get_concept_mastery_map(user_id, key_concepts)
     mastery_map = {**user_mastery_map, **stage_mastery_map}
 

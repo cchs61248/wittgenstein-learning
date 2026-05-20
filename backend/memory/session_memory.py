@@ -28,6 +28,31 @@ async def get_session(session_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+async def get_source_signature(session_id: str) -> str | None:
+    """回傳 session 的教材出處 signature，用於跨教材 mastery 隔離。
+
+    signature = sorted(source_file_ids) join '|'；空 list / 找不到 session → None。
+    舊資料（migration 015 前建立的 session）source_file_ids_json 可能不存在或為空，
+    回傳 None 表示「未知出處」，QG 端會 fallback 到不過濾的舊行為。
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT source_file_ids_json FROM sessions WHERE session_id = ?",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        file_ids = json.loads(row[0])
+    except Exception:
+        return None
+    if not isinstance(file_ids, list) or not file_ids:
+        return None
+    cleaned = sorted(str(fid) for fid in file_ids if fid)
+    return "|".join(cleaned) if cleaned else None
+
+
 async def create_generating_stub(
     session_id: str, user_id: str, content_hash: str
 ) -> None:

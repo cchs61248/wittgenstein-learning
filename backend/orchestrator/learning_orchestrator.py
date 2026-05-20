@@ -961,6 +961,8 @@ class LearningOrchestrator:
             if wm.current_teaching_intent and mastery_score >= 0.8
             else []
         )
+        # 取 source_signature 標記出處，後續 QG 過濾時用於跨教材隔離
+        source_signature = await session_memory.get_source_signature(session_id)
         for concept in stage.get("key_concepts", []):
             mp = next(
                 (p for p in misconception_patterns_all if p.get("concept") == concept), None
@@ -974,6 +976,7 @@ class LearningOrchestrator:
                 misconception_pattern=mp,
                 analogy_used=analogies_to_record[0] if effective and analogies_to_record else None,
                 lesson_was_effective=effective,
+                source_signature=source_signature,
             )
 
         remaining_qs = [
