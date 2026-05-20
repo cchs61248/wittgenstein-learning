@@ -51,6 +51,7 @@ class TeacherAgent(BaseAgent):
         recent_qa: list = learner_state.get("recent_qa_summary", [])
         must_reinforce: list = requirements.get("must_reinforce", [])
         forbidden_future: list = requirements.get("forbidden_future_concepts", [])
+        next_stage_concepts: list = requirements.get("next_stage_concepts", [])
 
         stage = payload.get("stage") or {}
         stage_kind = (stage.get("kind") or "").strip()
@@ -101,6 +102,9 @@ class TeacherAgent(BaseAgent):
 
         must_reinforce_text = "、".join(must_reinforce) if must_reinforce else "無"
         forbidden_future_text = "、".join(forbidden_future[:5]) if forbidden_future else "無"
+        next_stage_concepts_text = (
+            "、".join(next_stage_concepts) if next_stage_concepts else "無"
+        )
 
         selection_reason = requirements.get("selection_reason") or {}
         if selection_reason:
@@ -119,6 +123,7 @@ class TeacherAgent(BaseAgent):
             "recent_qa_text": recent_qa_text,
             "must_reinforce_text": must_reinforce_text,
             "forbidden_future_text": forbidden_future_text,
+            "next_stage_concepts_text": next_stage_concepts_text,
             "selection_reason_text": selection_reason_text,
             "lesson_mode_text": lesson_mode_text,
         }

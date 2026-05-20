@@ -193,7 +193,22 @@ class LearningOrchestrator:
         content_type: str,
         candidate_text: str,
         full_explanation: str = "",
+        stages: list[dict] | None = None,
     ) -> dict:
+        # 若 caller 傳了 stages，算當前 stage 的 next_stage_concepts 給 DriftVerifier
+        # 作為反向 coverage 豁免清單（避免 chunker 切到一半的跨章節 chunk 觸發精簡漂移誤判）
+        next_stage_concepts: list[str] = []
+        if stages:
+            key_concepts_here = set(stage.get("key_concepts") or [])
+            current_idx = next(
+                (i for i, s in enumerate(stages) if s.get("stage_id") == stage.get("stage_id")),
+                -1,
+            )
+            if 0 <= current_idx < len(stages) - 1:
+                next_stage_concepts = [
+                    c for c in (stages[current_idx + 1].get("key_concepts") or [])
+                    if c not in key_concepts_here
+                ]
         verify_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -202,6 +217,7 @@ class LearningOrchestrator:
                 "source_chunks": self._normalize_stage_source_chunks(stage),
                 "candidate_text": candidate_text,
                 "full_explanation": full_explanation,
+                "next_stage_concepts": next_stage_concepts,
             },
         )
         return await self.drift_verifier.run(verify_ctx)
@@ -719,6 +735,7 @@ class LearningOrchestrator:
                 stage=stage,
                 content_type="explanation",
                 candidate_text=full_explanation,
+                stages=stages,
             )
             if not explain_verify.get("aligned", False):
                 guidance = explain_verify.get("revision_hint") or "請僅依據 source_chunks 重寫，避免教材外推。"
@@ -786,6 +803,7 @@ class LearningOrchestrator:
             content_type="questions",
             candidate_text=json.dumps(questions, ensure_ascii=False),
             full_explanation=full_explanation,
+            stages=stages,
         )
         if not questions_verify.get("aligned", False):
             retry_q_ctx = AgentContext(
@@ -815,6 +833,7 @@ class LearningOrchestrator:
                 content_type="questions",
                 candidate_text=json.dumps(questions, ensure_ascii=False),
                 full_explanation=full_explanation,
+                stages=stages,
             )
             if not post_retry_verify.get("aligned", False):
                 unsupported = post_retry_verify.get("unsupported_claims") or []
@@ -1270,6 +1289,7 @@ class LearningOrchestrator:
                 content_type="questions",
                 candidate_text=json.dumps(questions, ensure_ascii=False),
                 full_explanation=wm.current_explanation,
+                stages=stages,
             )
             if not questions_verify.get("aligned", False):
                 retry_q_ctx = AgentContext(
@@ -1297,6 +1317,7 @@ class LearningOrchestrator:
                     content_type="questions",
                     candidate_text=json.dumps(questions, ensure_ascii=False),
                     full_explanation=wm.current_explanation,
+                    stages=stages,
                 )
                 if not post_retry_verify.get("aligned", False):
                     unsupported = post_retry_verify.get("unsupported_claims") or []
@@ -1804,6 +1825,7 @@ class LearningOrchestrator:
                 content_type="questions",
                 candidate_text=json.dumps(questions, ensure_ascii=False),
                 full_explanation=teacher_only,
+                stages=stages,
             )
             if not questions_verify.get("aligned", False):
                 retry_q_ctx = AgentContext(
@@ -1833,6 +1855,7 @@ class LearningOrchestrator:
                     content_type="questions",
                     candidate_text=json.dumps(questions, ensure_ascii=False),
                     full_explanation=teacher_only,
+                    stages=stages,
                 )
                 if not post_retry_verify.get("aligned", False):
                     unsupported = post_retry_verify.get("unsupported_claims") or []

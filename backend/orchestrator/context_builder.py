@@ -61,6 +61,18 @@ async def build_adaptive_context(
         if c not in key_concepts
     ]))[:10]
 
+    # 6b. 下一節即將教的概念（next_stage_concepts）—— 給 Teacher 跨章節邊界
+    #     感知用：source_chunks 可能跨主題（chunker 切到一半含當前 + 下節內容），
+    #     Teacher 看到屬於 next_stage_concepts 的段落只能一句帶過、禁止完整展開，
+    #     把詳細留給下一節，避免相鄰章節 50%+ 重疊。
+    #     DriftVerifier 也吃這個欄位，作為反向 coverage 檢查的豁免清單。
+    next_stage_concepts: list[str] = []
+    if current_idx + 1 < len(stages):
+        next_stage_concepts = [
+            c for c in (stages[current_idx + 1].get("key_concepts") or [])
+            if c not in key_concepts
+        ]
+
     # 7. 計算本節必須補強的概念。觸發條件（任一即可）：
     #    a) 掌握度 < 0.75（基準閾值，初學或答錯多次）
     #    b) 有未消除的 confusion pattern（即使 mastery>=0.75 也要補，
@@ -94,6 +106,7 @@ async def build_adaptive_context(
         "next_lesson_requirements": {
             "must_reinforce": must_reinforce,
             "forbidden_future_concepts": future_concepts,
+            "next_stage_concepts": next_stage_concepts,
             "selection_reason": selection_reason,
         },
         "source_constraints": {

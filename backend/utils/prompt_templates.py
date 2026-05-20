@@ -86,6 +86,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
 {lesson_mode_text}
 必須補強的概念（優先講透，換不同類比框架）：{must_reinforce_text}
 禁止提前教（後續節點才會出現的概念）：{forbidden_future_text}
+下一節即將教的概念（next_stage_concepts，僅一句帶過、禁止展開）：{next_stage_concepts_text}
 選擇本節理由（系統判斷依據，幫助你調整講解側重點）：{selection_reason_text}
 
 【你的角色】
@@ -140,6 +141,18 @@ SYSTEM_PROMPTS: dict[str, str] = {
    範例（正確）：介紹完三種工具後，加一段「如何選擇」：
                 「若你謹慎、怕斷頭風險 → 房貸（無斷頭、安全性高）[chunk_0025]；
                   若你勇猛、想滾雪球 → 股票質押（可越借越大、無期限）[chunk_0025]」
+10. **跨章節 chunk 邊界（cross-stage chunk awareness）**：
+   source_chunks 中可能有 chunk 跨越主題邊界（chunker 切到一半時包含本節 + 下節內容）。
+   當講解遇到「屬於 next_stage_concepts 範圍的內容」（下一節才會教），**禁止完整展開**——
+   只能用一句話帶過（如「教材會在下一節介紹 X 來解這個問題」），把該主題完整版留給下一節，
+   避免相鄰 stage 內容重複講解。
+   範例（禁止）：本節 key_concepts=[Hash Modulo、Cache Miss]，next_stage_concepts=[Hash Ring、順時針尋找]。
+                source_chunks 中有 chunk 後半提到 Hash Ring 三步驟，但本節**完整列出 ring 機制
+                三步驟 + 環狀公路類比**，搶了下一節的教學內容。
+   範例（正確）：「教材在下一節會介紹一種叫 Hash Ring 的方案來解這個問題 [chunk_0001]。」
+                （一句帶過，把詳細展開留給下一節）
+   若 next_stage_concepts 為「無」（已是最後一節），此規則不適用，照常展開。
+
 9. **並列方案完整性宣告（enumeration completeness）**：
    若教材原文中明確列舉了 N 種並列方案 / 工具 / 步驟 / 風險 / 分類
    （如「借錢的主要方法分為 3 種」、「兩種快取策略」、「四個階段」），
@@ -365,6 +378,12 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
       讓 Teacher 在 retry 時知道要展開哪些段落。
       豁免：類比說明（「非原文」標記）的細節不在 coverage 檢查內；
       順帶提及的脈絡資料（如教材中的故事案例若非教學主軸）也可豁免。
+      **跨章節 chunk 豁免（next_stage_concepts，重要）**：
+      若 user message 提供 `next_stage_concepts` 清單（下一節即將教的概念），
+      source_chunks 中對應這些概念的段落**不計入**本節「教學必要元素」coverage 檢查——
+      這些內容應該留給下一節展開、本節只一句帶過。
+      換言之：若 Teacher 在本節只用一句話提到 next_stage_concepts 範圍的內容、沒完整展開，
+      **不應該判 aligned=false**（因為按設計就該由下一節展開）。
 
 • content_type=questions（出題驗證）：嚴格對齊講解模式。
   對齊基準：full_explanation（教學文章全文）為唯一範圍。
