@@ -27,6 +27,9 @@ def build_source_chunks(text: str) -> list[dict]:
         raw_chunks = _chunk_by_headers(text)
     else:
         raw_chunks = _chunk_by_paragraphs(text)
+        # 純散文走 paragraph 切分時，把 inline heading（短行、無句尾標點）
+        # 黏到後一段，避免標題與其段落被切到不同 chunk
+        raw_chunks = _glue_inline_headings_to_next(raw_chunks)
 
     # 合併過短 chunk、切分過長 chunk
     raw_chunks = _normalize_chunk_sizes(raw_chunks, target=600, max_chars=1000)
@@ -115,6 +118,64 @@ def _chunk_by_paragraphs(text: str) -> list[str]:
     """按段落（連續換行）切分。"""
     paragraphs = re.split(r"\n{2,}", text)
     return [p.strip() for p in paragraphs if p.strip()]
+
+
+_HEADING_MAX_CHARS = 30  # inline heading 字數上限
+_SENTENCE_END_RE = re.compile(r"[。！？.!?:：]\s*$")
+
+
+def _looks_like_inline_heading(paragraph: str) -> bool:
+    """判斷一個段落是否像 inline heading：短、無句尾標點、單行。"""
+    stripped = paragraph.strip()
+    if not stripped or "\n" in stripped:
+        return False
+    if len(stripped) > _HEADING_MAX_CHARS:
+        return False
+    return not _SENTENCE_END_RE.search(stripped)
+
+
+def _glue_inline_headings_to_next(paragraphs: list[str]) -> list[str]:
+    """把 inline heading（短、無句尾標點的單行段落）黏到後一段，
+    確保 heading 與其後續段落留在同一個 chunk。
+
+    若 heading 是最後一段（無後續），維持獨立段落。
+    """
+    if not paragraphs:
+        return paragraphs
+    result: list[str] = []
+    i = 0
+    while i < len(paragraphs):
+        cur = paragraphs[i]
+        if _looks_like_inline_heading(cur) and i + 1 < len(paragraphs):
+            result.append(cur + "\n\n" + paragraphs[i + 1])
+            i += 2
+        else:
+            result.append(cur)
+            i += 1
+    return result
+
+
+def _detect_inline_headings(text: str) -> set[int]:
+    """回傳 text 中所有 inline heading 的起始 char offset。
+
+    判定條件：以 \\n\\n 隔開、短、無句尾標點、後續有段落內容。
+    """
+    paragraphs = re.split(r"\n{2,}", text)
+    offsets: set[int] = set()
+    cursor = 0
+    for i, para in enumerate(paragraphs):
+        # 找出該段落實際在 text 中的位置（跳過 leading whitespace）
+        idx = text.find(para, cursor)
+        if idx < 0:
+            cursor += len(para)
+            continue
+        if _looks_like_inline_heading(para) and i + 1 < len(paragraphs):
+            # 確認後續還有段落內容
+            nxt = paragraphs[i + 1].strip()
+            if nxt:
+                offsets.add(idx)
+        cursor = idx + len(para)
+    return offsets
 
 
 # ── 大小正規化 ────────────────────────────────────────────────
