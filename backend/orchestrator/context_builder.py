@@ -54,14 +54,8 @@ async def build_adaptive_context(
     current_idx = next(
         (i for i, s in enumerate(stages) if s["stage_id"] == stage["stage_id"]), 0
     )
-    future_concepts = list(dict.fromkeys([
-        c
-        for s in stages[current_idx + 1:]
-        for c in s.get("key_concepts", [])
-        if c not in key_concepts
-    ]))[:10]
 
-    # 6b. 下一節即將教的概念（next_stage_concepts）—— 給 Teacher 跨章節邊界
+    # 6a. 下一節即將教的概念（next_stage_concepts）—— 給 Teacher 跨章節邊界
     #     感知用：source_chunks 可能跨主題（chunker 切到一半含當前 + 下節內容），
     #     Teacher 看到屬於 next_stage_concepts 的段落只能一句帶過、禁止完整展開，
     #     把詳細留給下一節，避免相鄰章節 50%+ 重疊。
@@ -72,6 +66,16 @@ async def build_adaptive_context(
             c for c in (stages[current_idx + 1].get("key_concepts") or [])
             if c not in key_concepts
         ]
+
+    # 6b. forbidden_future_concepts（完全禁提清單）排除 next_stage_concepts，
+    #     避免下一節概念同時落入「禁提」（規則 6）與「可一句帶過」（規則 10）兩個清單，
+    #     給 Teacher 互相衝突的指令。本清單只管「下下節以後」的概念。
+    future_concepts = list(dict.fromkeys([
+        c
+        for s in stages[current_idx + 1:]
+        for c in s.get("key_concepts", [])
+        if c not in key_concepts and c not in next_stage_concepts
+    ]))[:10]
 
     # 7. 計算本節必須補強的概念。觸發條件（任一即可）：
     #    a) 掌握度 < 0.75（基準閾值，初學或答錯多次）

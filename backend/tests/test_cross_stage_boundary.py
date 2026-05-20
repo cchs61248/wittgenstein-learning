@@ -90,6 +90,25 @@ class TestContextBuilderInjectsNextStageConcepts(unittest.IsolatedAsyncioTestCas
         ctx = await self._run_ctx(1, stages)
         self.assertEqual(ctx["next_lesson_requirements"]["next_stage_concepts"], [])
 
+    async def test_forbidden_future_excludes_next_stage_concepts(self):
+        """B1 衝突修法：forbidden_future_concepts 不應包含 next_stage_concepts 中的概念，
+        避免下一節概念同時落入「禁提」與「可一句帶過」兩個清單給 Teacher 衝突指令。"""
+        stages = [
+            {"stage_id": 1, "key_concepts": ["Hash Modulo"], "source_chunk_ids": []},
+            {"stage_id": 2, "key_concepts": ["Hash Ring", "順時針尋找"], "source_chunk_ids": []},
+            {"stage_id": 3, "key_concepts": ["Ownership Map", "Virtual Node"], "source_chunk_ids": []},
+        ]
+        ctx = await self._run_ctx(0, stages)
+        forbidden = ctx["next_lesson_requirements"]["forbidden_future_concepts"]
+        next_stage = ctx["next_lesson_requirements"]["next_stage_concepts"]
+        self.assertEqual(next_stage, ["Hash Ring", "順時針尋找"])
+        # next_stage 概念不該出現在 forbidden_future
+        self.assertNotIn("Hash Ring", forbidden)
+        self.assertNotIn("順時針尋找", forbidden)
+        # 下下節概念仍應在 forbidden_future
+        self.assertIn("Ownership Map", forbidden)
+        self.assertIn("Virtual Node", forbidden)
+
 
 class TestTeacherBuildPromptParams(unittest.TestCase):
     def test_teacher_prompt_params_include_next_stage_concepts_text(self):
