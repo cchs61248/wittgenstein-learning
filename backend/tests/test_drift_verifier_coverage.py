@@ -152,5 +152,32 @@ class TestExplanationCoverage(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["aligned"])
 
 
+class TestAnalogyWhitelistPrompt(unittest.TestCase):
+    """驗證 DriftVerifier prompt 已加入「類比作情境包裝可 aligned」的規則與範例 G。
+
+    這是 prompt-level regression：實際 LLM 行為驗證在實戰中，但 prompt 內容
+    必須包含明確的白名單規則與範例，否則 LLM 仍會把類比情境題誤判 false。
+    """
+
+    def test_prompt_includes_analogy_whitelist_rule(self):
+        from backend.utils.prompt_templates import SYSTEM_PROMPTS
+        prompt = SYSTEM_PROMPTS["drift_verifier"]
+        self.assertIn("情境包裝", prompt)
+        self.assertIn("不要因為", prompt)
+
+    def test_prompt_includes_example_g(self):
+        from backend.utils.prompt_templates import SYSTEM_PROMPTS
+        prompt = SYSTEM_PROMPTS["drift_verifier"]
+        # 「範例 G（」帶括弧才會精確命中範例段落本身，
+        # 避免命中規則段中「詳見範例 G」的反向引用
+        self.assertIn("範例 G（", prompt)
+        g_idx = prompt.find("範例 G（")
+        self.assertGreater(g_idx, 0)
+        g_section = prompt[g_idx:g_idx + 1000]
+        self.assertIn("aligned=true", g_section)
+        # 範例 G 必須示範「類比作情境包裝、答案對應教材」的核心論點
+        self.assertIn("情境包裝", g_section)
+
+
 if __name__ == "__main__":
     unittest.main()

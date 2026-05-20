@@ -99,6 +99,27 @@ async def get_concept_mastery_map(user_id: str, concepts: list[str]) -> dict[str
     return {row["concept_name"]: float(row["mastery_score"]) for row in rows}
 
 
+async def get_user_mastery_map(
+    user_id: str, threshold: float = 0.8
+) -> dict[str, float]:
+    """撈整個 user 的高 mastery 概念（跨 stage 已掌握），用於 QG 個人化過濾。
+
+    與 get_concept_mastery_map 不同：不限定 concepts 列表，回傳所有 mastery_score
+    >= threshold 的概念，讓 QG 知道學生已穩定掌握哪些（含過去 stage 學過的），
+    避免在新 stage 出題時把這些概念當作主要 key_concepts_tested。
+
+    threshold 預設 0.8 對齊 QuestionGenerator._format_mastered_concepts 的判定標準。
+    """
+    db = await get_db()
+    async with db.execute(
+        """SELECT concept_name, mastery_score FROM concept_mastery
+           WHERE user_id = ? AND mastery_score >= ?""",
+        (user_id, threshold),
+    ) as cur:
+        rows = await cur.fetchall()
+    return {row["concept_name"]: float(row["mastery_score"]) for row in rows}
+
+
 async def update_concept_mastery(
     user_id: str,
     concept_name: str,

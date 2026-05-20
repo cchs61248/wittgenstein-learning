@@ -360,6 +360,12 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
   - source_chunks 仍用於確認題目沒要求教材外知識；題目若引用了不存在的 chunk_id、
     或要求 source_chunks 與 explanation 都沒提的常識，同樣標 supported=false。
   - 比喻、舉例、類比若明確標示「類比說明，非原文」，豁免驗證。
+  - **類比作情境包裝是允許的（重要，新增）**：題目可以使用 explanation 中
+    標示「類比說明，非原文」的內容作為「情境包裝」或「題幹外殼」
+    （例如：「課程把 X 比喻為 Y，這個類比說明…」）。判定標準看 correct_option：
+    若正解的核心概念（不是類比本身的細節）能回溯到 source_chunks / explanation 中
+    的教材主軸，視為 aligned=true。**不要因為「題目提到非原文類比」就直接判 false**。
+    詳見範例 G。
   full_explanation 缺席時，回退嚴格模式（以 source_chunks 為準）。
 
   few-shot 範例：
@@ -413,6 +419,23 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
        但「謹慎者選哪個」這個對比決策框架 explanation 完全沒講；
        正解出自 chunk_025 而非 explanation，學生看完講解仍不知道怎麼選 → 漂移）
 
+  範例 G（對齊：類比作情境包裝，答案對應教材，本規則新重點）：
+    full_explanation：
+      "金融股具有避險屬性，因為金融業受政府高度監管且『大到不能倒』 [chunk_002]。\n"
+      "> 類比 1（賽車與捷運）：電子股像賽車，速度快但容易出事；
+       金融股像捷運，穩定但速度慢（類比說明，非原文）。"
+    source_chunks：[chunk_002: 「金融股之所以安全，是因為政府監管嚴密、
+                   有金管會撐腰，而且銀行大到不能倒，獲利穩定，
+                   雖然短期投報率低於電子股，但長期可靠領取現金股利賺回來。」]
+    題目：「課程中將電子股比喻為賽車、金融股比喻為捷運，這個類比主要在說明？」
+    選項 B：「電子股的獲利潛力高但風險大，金融股則穩定但速度慢」← 正解
+    → aligned=true / supported=true
+       理由：題目用類比作為「情境包裝」，但 correct_option 的核心概念
+       （電子股風險高、金融股穩定）可直接回溯 chunk_002 的原文內容
+       （政府監管 / 大到不能倒 / 短期投報率低 / 長期穩定）。
+       類比本身是教學工具，只要學生看完講解+題目後學到的是教材中的核心概念，
+       就應該判 aligned。**不要因為「題目提到非原文類比」就直接判 false**。
+
 驗證規則（通用）：
 1. 以 source_chunks（及 full_explanation，若有）為判定依據，不可用外部常識或推論補完
 2. 對候選輸出中每一個帶 [chunk_id] 標記的主張：
@@ -421,6 +444,9 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
    c. 若 found=false，直接標記 supported=false
 3. 候選輸出中沒有 [chunk_id] 標記的事實性陳述，也需評估是否需要來源
 4. 比喻、類比、舉例若明確標示「類比說明，非原文」則豁免驗證
+4c. 題目可使用「類比說明，非原文」標記的內容作為情境包裝（題幹外殼），
+    判定標準看 correct_option 的核心概念能否回溯教材；類比細節本身不需追溯來源。
+    詳見範例 G。**不要因為題目提到類比就直接判 false**。
 4b. explanation 模式下，額外執行「反向 coverage」：
     若 source_chunks 中有並列方案 / 關鍵數據 / 作者命名核心概念 / 決策框架
     這四類「教學必要元素」未被 full_explanation 涵蓋，判 aligned=false。

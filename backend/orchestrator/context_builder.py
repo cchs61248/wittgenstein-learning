@@ -23,8 +23,16 @@ async def build_adaptive_context(
     allowed_chunks = await session_memory.get_source_chunks(session_id, chunk_ids) if chunk_ids else []
 
     # 2. 取掌握度
+    # 合併兩部分：
+    #   (a) 當前 stage.key_concepts 的 mastery（即使低於 threshold 也要，
+    #       供 must_reinforce 判斷使用）
+    #   (b) 整個 user 跨 stage 已掌握的高 mastery 概念（≥0.8）
+    #       供 QG 個人化過濾使用，避免重出已掌握概念當主要考點
+    # stage_mastery 覆蓋 user_mastery 中同名 concept（兩者撈到同個 concept 時數值相同，安全）
     key_concepts: list[str] = stage.get("key_concepts", [])
-    mastery_map = await longterm_memory.get_concept_mastery_map(user_id, key_concepts)
+    user_mastery_map = await longterm_memory.get_user_mastery_map(user_id, threshold=0.8)
+    stage_mastery_map = await longterm_memory.get_concept_mastery_map(user_id, key_concepts)
+    mastery_map = {**user_mastery_map, **stage_mastery_map}
 
     # 3. 取結構化混淆模式
     misconceptions = await longterm_memory.get_misconceptions(user_id, key_concepts)
