@@ -93,6 +93,7 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
   ],
   gemini: [
     { id: 'gemini-3-flash-preview',        label: 'Gemini 3 Flash Preview — 預設' },
+    { id: 'gemini-3.5-flash',              label: 'gemini-3.5-flash' },
     { id: 'gemini-3.1-pro-preview',        label: 'Gemini 3.1 Pro Preview — 品質優先' },
     { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite Preview — 輕量快速' },
   ],
@@ -111,6 +112,7 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
     { id: 'gpt-4o',                label: 'GPT-4o' },
     { id: 'gpt-4o-mini',           label: 'GPT-4o mini — 輕量' },
     { id: 'gemini-3-1-pro',        label: 'Gemini 3.1 Pro' },
+    { id: 'gemini-3.5-flash',      label: 'gemini-3.5-flash' },
     { id: 'gemini-3-pro',          label: 'Gemini 3 Pro' },
     { id: 'gemini-3-flash',        label: 'Gemini 3 Flash — 快速' },
     { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash' },
