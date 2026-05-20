@@ -143,18 +143,6 @@ SYSTEM_PROMPTS: dict[str, str] = {
    範例（正確）：介紹完三種工具後，加一段「如何選擇」：
                 「若你謹慎、怕斷頭風險 → 房貸（無斷頭、安全性高）[chunk_0025]；
                   若你勇猛、想滾雪球 → 股票質押（可越借越大、無期限）[chunk_0025]」
-10. **跨章節 chunk 邊界（cross-stage chunk awareness）**：
-   source_chunks 中可能有 chunk 跨越主題邊界（chunker 切到一半時包含本節 + 下節內容）。
-   當講解遇到「屬於 next_stage_concepts 範圍的內容」（下一節才會教），**禁止完整展開**——
-   只能用一句話帶過（如「教材會在下一節介紹 X 來解這個問題」），把該主題完整版留給下一節，
-   避免相鄰 stage 內容重複講解。
-   範例（禁止）：本節 key_concepts=[Hash Modulo、Cache Miss]，next_stage_concepts=[Hash Ring、順時針尋找]。
-                source_chunks 中有 chunk 後半提到 Hash Ring 三步驟，但本節**完整列出 ring 機制
-                三步驟 + 環狀公路類比**，搶了下一節的教學內容。
-   範例（正確）：「教材在下一節會介紹一種叫 Hash Ring 的方案來解這個問題 [chunk_0001]。」
-                （一句帶過，把詳細展開留給下一節）
-   若 next_stage_concepts 為「無」（已是最後一節），此規則不適用，照常展開。
-
 9. **並列方案完整性宣告（enumeration completeness）**：
    若教材原文中明確列舉了 N 種並列方案 / 工具 / 步驟 / 風險 / 分類
    （如「借錢的主要方法分為 3 種」、「兩種快取策略」、「四個階段」），
@@ -166,6 +154,18 @@ SYSTEM_PROMPTS: dict[str, str] = {
    範例（正確）：「借錢炒股教材列了 3 種主要方法 [chunk_0021]：信貸、房貸、股票質押。
                   第一種，信貸……（運作 1 段）。第二種，房貸……（運作 1 段）。
                   第三種，股票質押……（運作 1 段）。」
+
+10. **跨章節 chunk 邊界（cross-stage chunk awareness）**：
+   source_chunks 中可能有 chunk 跨越主題邊界（chunker 切到一半時包含本節 + 下節內容）。
+   當講解遇到「屬於 next_stage_concepts 範圍的內容」（下一節才會教），**禁止完整展開**——
+   只能用一句話帶過（如「教材會在下一節介紹 X 來解這個問題」），把該主題完整版留給下一節，
+   避免相鄰 stage 內容重複講解。
+   範例（禁止）：本節 key_concepts=[Hash Modulo、Cache Miss]，next_stage_concepts=[Hash Ring、順時針尋找]。
+                source_chunks 中有 chunk 後半提到 Hash Ring 三步驟，但本節**完整列出 ring 機制
+                三步驟 + 環狀公路類比**，搶了下一節的教學內容。
+   範例（正確）：「教材在下一節會介紹一種叫 Hash Ring 的方案來解這個問題 [chunk_0001]。」
+                （一句帶過，把詳細展開留給下一節）
+   若 next_stage_concepts 為「無」（已是最後一節），此規則不適用，照常展開。
 
 請嚴格按照以下 Markdown 格式輸出，不要有任何前綴，直接從 ### 開始：
 
@@ -498,14 +498,14 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
    c. 若 found=false，直接標記 supported=false
 3. 候選輸出中沒有 [chunk_id] 標記的事實性陳述，也需評估是否需要來源
 4. 比喻、類比、舉例若明確標示「類比說明，非原文」則豁免驗證
-4c. 題目可使用「類比說明，非原文」標記的內容作為情境包裝（題幹外殼），
-    判定標準看 correct_option 的核心概念能否回溯教材；類比細節本身不需追溯來源。
-    詳見範例 G。**不要因為題目提到類比就直接判 false**。
 4b. explanation 模式下，額外執行「反向 coverage」：
     若 source_chunks 中有並列方案 / 關鍵數據 / 作者命名核心概念 / 決策框架
     這四類「教學必要元素」未被 full_explanation 涵蓋，判 aligned=false。
     這類「應寫未寫」的精簡漂移與「無中生有」的編造漂移同等嚴重——
     精簡會讓學生看不到教材的關鍵內容，無法達成教學目標。
+4c. 題目可使用「類比說明，非原文」標記的內容作為情境包裝（題幹外殼），
+    判定標準看 correct_option 的核心概念能否回溯教材；類比細節本身不需追溯來源。
+    詳見範例 G。**不要因為題目提到類比就直接判 false**。
 5. 題目驗證嚴格對齊講解模式下：題目測試的概念必須在 full_explanation 中
    **有展開說明**（運作/特性/機制/原因/例子至少一句），不能只是字面出現當道具用。
    即使 source_chunks 內有但 explanation 沒展開（含「沒提」「只字面提及」、
