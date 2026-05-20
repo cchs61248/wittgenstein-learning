@@ -107,6 +107,12 @@ class ProgressManagerAgent(BaseAgent):
                 decision = "advance"
                 next_stage = None
                 message = f"很好！你已掌握這個補充章節（校正得分：{best_score:.0%}），讓我們繼續。"
+            elif best_score >= pass_threshold:
+                # 補強 stage 已通關（best ≥ threshold）即視為 advance，
+                # 不因 evaluator MC wrong path 殘留的 confused 再對同 focus 重複補強。
+                decision = "advance"
+                next_stage = None
+                message = f"很好！補強之後你已通過此節（校正得分：{best_score:.0%}），讓我們繼續。"
             elif high_severity and source_reteach_count < max_reteach:
                 # 子章節中仍出現根本性誤解，且重教預算未耗盡 → 升級為重教
                 decision = "reteach"

@@ -20,11 +20,12 @@ def run(coro):
 
 
 def test_remediation_child_partially_mastered_repeats_remediation_when_under_limit():
+    """補強 stage 仍未過 threshold 且有 confused → 再補強一次。"""
     agent = make_agent()
     result = run(agent.run(ctx({
         "evaluations": [
-            {"score": 0.72, "confused_concepts": ["家族相似性"], "misconception_patterns": []},
-            {"score": 0.78, "confused_concepts": [], "misconception_patterns": []},
+            {"score": 0.5, "confused_concepts": ["家族相似性"], "misconception_patterns": []},
+            {"score": 0.6, "confused_concepts": ["家族相似性"], "misconception_patterns": []},
         ],
         "pass_threshold": 0.75,
         "current_stage_id": 11,
@@ -39,6 +40,39 @@ def test_remediation_child_partially_mastered_repeats_remediation_when_under_lim
 
     assert result["decision"] == "remediate"
     assert result["remediation_focus"] == ["家族相似性"]
+
+
+def test_child_stage_advances_when_passed_with_residual_confused():
+    """補強 stage best_score 已過 threshold 但仍有殘留 confused（如 MC wrong path 副作用）→
+    應 advance，不再連續對同個 focus 補強（修補 stage 9 → stage 10 重複補強 bug）。"""
+    agent = make_agent()
+    result = run(agent.run(ctx({
+        "evaluations": [
+            # 6 題 MC：1 題對（1.0）、5 題錯（evaluator MC wrong 給 0.3 + 塞 confused）
+            {"score": 1.0, "confused_concepts": [], "misconception_patterns": []},
+            {"score": 0.3, "confused_concepts": ["資料搬遷"], "misconception_patterns": []},
+            {"score": 0.3, "confused_concepts": ["資料搬遷"], "misconception_patterns": []},
+            {"score": 0.3, "confused_concepts": ["資料搬遷"], "misconception_patterns": []},
+            {"score": 0.3, "confused_concepts": ["資料搬遷"], "misconception_patterns": []},
+            {"score": 0.3, "confused_concepts": ["資料搬遷"], "misconception_patterns": []},
+        ],
+        "pass_threshold": 0.75,
+        "question_mode": "multiple_choice",
+        "current_stage_id": 9,
+        "total_stages": 8,
+        "current_attempt": 1,
+        "is_dynamic": True,
+        "stage_kind": "remediation",
+        "source_stage_id": 1,
+        "source_reteach_count": 0,
+        "source_remediation_count": 1,
+        "max_remediation": 2,
+    })))
+
+    # best_score 校正後 = (1.0 - 0.25) / 0.75 = 1.0；雖然其他題殘留 confused，補強已通關
+    assert result["decision"] == "advance", \
+        f"child stage best=1.0 ≥ threshold 應該 advance，不該因 confused 殘留再補一次；實際={result['decision']}"
+    assert result["best_score"] == 1.0
 
 
 def test_reteach_child_unmastered_reteaches_again_when_under_limit():
