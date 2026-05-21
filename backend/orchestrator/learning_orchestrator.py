@@ -838,7 +838,7 @@ class LearningOrchestrator:
             if not post_retry_verify.get("aligned", False):
                 unsupported = post_retry_verify.get("unsupported_claims") or []
                 tagged = self._tag_drifting_questions(questions, unsupported)
-                self._log.warning(
+                _log.warning(
                     "Questions still drifting after retry  session=%s  stage_id=%s  "
                     "tagged=%d  unsupported_sample=%s",
                     session_id, stage["stage_id"], tagged, unsupported[:3],
@@ -1322,7 +1322,7 @@ class LearningOrchestrator:
                 if not post_retry_verify.get("aligned", False):
                     unsupported = post_retry_verify.get("unsupported_claims") or []
                     tagged = self._tag_drifting_questions(questions, unsupported)
-                    self._log.warning(
+                    _log.warning(
                         "Questions still drifting after retry (reattempt)  session=%s  "
                         "stage_id=%s  tagged=%d  unsupported_sample=%s",
                         session_id, stage["stage_id"], tagged, unsupported[:3],
@@ -1860,7 +1860,7 @@ class LearningOrchestrator:
                 if not post_retry_verify.get("aligned", False):
                     unsupported = post_retry_verify.get("unsupported_claims") or []
                     tagged = self._tag_drifting_questions(questions, unsupported)
-                    self._log.warning(
+                    _log.warning(
                         "Questions still drifting after retry (dynamic stage)  session=%s  "
                         "stage_id=%s  tagged=%d  unsupported_sample=%s",
                         session_id, stage["stage_id"], tagged, unsupported[:3],
