@@ -438,9 +438,10 @@ D. 章節小標：教材原文以小標題並列展開 N 個並列項目
 
 <<INTENT_JSON>>
 {{
-  "key_concepts": ["...本節要傳達的核心概念，依重要性排序"],
-  "expected_misunderstandings": ["...學生可能會搞錯的點"],
-  "evidence_chunk_ids": ["chunk_0001", "..."]
+  "reinforced_concepts": ["...本節重點強調的概念，依重要性排序"],
+  "analogies_used": ["...使用的類比（一句話，可空陣列）"],
+  "repair_target": "若有針對特定錯誤修正則描述；否則 null",
+  "main_chunk_ids": ["chunk_0001", "..."]
 }}
 <<END_INTENT>>
 

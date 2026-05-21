@@ -24,6 +24,7 @@ from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..tools.web_search import search_web
 from .context_builder import build_adaptive_context
 from .debounced_writer import DebouncedExplanationWriter
+from ..utils.teaching_intent import normalize_teaching_intent
 
 WSEmitter = Callable[[dict], Awaitable[None]]
 
@@ -919,7 +920,10 @@ class LearningOrchestrator:
 
         # 3. 提取教學意圖：優先用 stream_explanation_with_intent 內聯抽出的 last_intent；
         # 若 LLM 未輸出 INTENT 區塊（某 provider 不穩定）才 fallback 至獨立 extract LLM 呼叫。
-        teaching_intent = self.teacher.last_intent or await self.teacher.extract_teaching_intent(full_explanation, stage)
+        raw_intent = self.teacher.last_intent or await self.teacher.extract_teaching_intent(
+            full_explanation, stage
+        )
+        teaching_intent = normalize_teaching_intent(raw_intent, stage)
         wm.current_teaching_intent = teaching_intent
 
         # 4. 生成問題
@@ -1943,7 +1947,9 @@ class LearningOrchestrator:
                 current_attempt=wm.current_attempt,
                 stages=stages,
             )
-            teaching_intent = await self.teacher.extract_teaching_intent(teacher_only, stage)
+            teaching_intent = normalize_teaching_intent(
+                await self.teacher.extract_teaching_intent(teacher_only, stage), stage
+            )
             wm.current_teaching_intent = teaching_intent
             mastery_map_for_qg = (adaptive_ctx.get("learner_state") or {}).get("mastery_map") or {}
             must_reinforce_for_qg = (
