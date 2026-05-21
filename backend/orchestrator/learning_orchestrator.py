@@ -13,6 +13,7 @@ from ..agents.evaluator import EvaluatorAgent
 from ..agents.progress_manager import ProgressManagerAgent, correct_mc_score
 from ..agents.drift_verifier import DriftVerifierAgent
 from ..agents.splitter_verifier import SplitterVerifierAgent
+from ..agents.concept_canonicalize import ConceptCanonicalizeAgent
 from ..memory.working_memory import get_working_memory, TurnContext
 from ..memory import session_memory, longterm_memory
 from ..llm.base_provider import BaseLLMProvider
@@ -29,6 +30,37 @@ WSEmitter = Callable[[dict], Awaitable[None]]
 _log = logging.getLogger("wl.orchestrator")
 
 MAX_SPLITTER_VERIFY_RETRIES = 1
+
+
+def _apply_canonical_mappings(
+    stages: list[dict],
+    mappings: list[dict],
+) -> list[dict]:
+    """根據 canonicalize agent 的判定結果、改寫 stages[].key_concepts。
+
+    - decision="mapped"：key_concepts 內的 new_name 替換為 canonical
+    - decision="new" / "unsure"：保留原名
+    - mappings 漏掉的 concept：保留原名（向後相容）
+
+    回傳新的 stages list（原 stages 不修改、深拷貝 key_concepts）。
+    """
+    mapping_by_name: dict[str, str | None] = {}
+    for m in mappings:
+        new_name = m.get("new_name")
+        if not new_name:
+            continue
+        if m.get("decision") == "mapped" and m.get("canonical"):
+            mapping_by_name[new_name] = m["canonical"]
+
+    result: list[dict] = []
+    for stage in stages:
+        new_stage = dict(stage)
+        original_concepts = stage.get("key_concepts") or []
+        new_stage["key_concepts"] = [
+            mapping_by_name.get(c, c) for c in original_concepts
+        ]
+        result.append(new_stage)
+    return result
 
 # 持久化用分隔符：僅存於 DB，不應出現在 WS／前端顯示字串中
 _EXPL_PERSIST_SEP = "\n<<WL_EXPL_BODY>>\n"
@@ -117,6 +149,7 @@ class LearningOrchestrator:
         tc = TokenCounter()
         self.splitter = ContentSplitterAgent(llm, tc)
         self.splitter_verifier = SplitterVerifierAgent(llm, tc)
+        self.canonicalizer = ConceptCanonicalizeAgent(llm, tc)
         self.teacher = TeacherAgent(llm, tc)
         self.questioner = QuestionGeneratorAgent(llm, tc)
         self.evaluator = EvaluatorAgent(llm, tc)
@@ -632,6 +665,42 @@ class LearningOrchestrator:
                         session_id, e,
                     )
                     break
+
+        # ── 2.5 ConceptCanonicalize（splitter 後立即跑、寫回 stages）
+        source_signature = "|".join(sorted(source_file_ids or []))
+        new_concepts = sorted({
+            c for s in stages for c in s.get("key_concepts", [])
+        })
+        if source_signature and new_concepts:
+            try:
+                historical_pool = await longterm_memory.get_concept_canonical_pool(
+                    user_id=user_id,
+                    source_signature=source_signature,
+                    limit=80,
+                )
+                canon_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={
+                        "new_concepts": new_concepts,
+                        "historical_pool": historical_pool,
+                    },
+                )
+                canon_result = await self.canonicalizer.run(canon_ctx)
+                stages = _apply_canonical_mappings(stages, canon_result["mappings"])
+                stats = {"mapped": 0, "new": 0, "unsure": 0}
+                for m in canon_result["mappings"]:
+                    stats[m["decision"]] = stats.get(m["decision"], 0) + 1
+                _log.info(
+                    "canonicalize done  session=%s  mapped=%d  new=%d  unsure=%d",
+                    session_id, stats["mapped"], stats["new"], stats["unsure"],
+                )
+            except Exception as e:
+                _log.warning(
+                    "canonicalize failed (fail-safe, using splitter stages)  "
+                    "session=%s  err=%s",
+                    session_id, e,
+                )
 
         # 品質檢查（記錄 issues，不中斷流程）
         quality_issues = self._check_stage_quality(stages, source_chunks)

@@ -801,6 +801,95 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
   "revision_hint": "若未對齊，提供簡短修正建議"
 }}""",
 
+    "concept_canonicalize": """你是教材概念命名標準化器（concept canonicalization）。
+
+【任務】
+給定本次新切分的概念清單（new_concepts）+ 該教材歷史已用概念清單（historical_pool），
+判定每個新概念是否語意對應到任一歷史名。對應則映射、不對應則保留原名、
+不確定則明示不映射。
+
+【背景】
+- 同教材跨 session 由 splitter 獨立命名，字面常漂移
+  （如：「巴菲特神話」/「巴菲特家世背景」/「巴菲特流派的家世背景」）
+- concept_mastery 表按 concept_name 字面相符做個人化過濾、字面漂移即實質失效
+- 本 agent 在 splitter 後跑、寫回 stages[].key_concepts 為 canonical 命名
+
+【三類判定】
+A. mapped — 高信心、有對應歷史名
+   condition：與某 historical_pool 內某 concept_name 「語意相同或基本同義」、
+              即使字面不同
+   canonical 欄填該歷史名
+
+B. new — 高信心、確定為新概念
+   condition：與所有 historical_pool concept_name 比對後無語意對應
+   canonical 欄為 null
+
+C. unsure — 低信心、不映射
+   condition：部分相似但不確定（細節層次不同、子概念差異）
+   canonical 欄為 null
+   寧保守不誤判：誤映射比命名漂移更糟
+
+【判定要點（避免誤判）】
+
+1. 字面包含 ≠ 語意相同：
+   - 「巴菲特家世背景」vs「巴菲特流派的家世背景」→ mapped（前綴贅字）
+   - 「滾雪球效應」vs「信用滾雪球效應」→ mapped（修飾語）
+   - 「利差交易」vs「利差交易邏輯」→ 通常 mapped、保守時 unsure
+
+2. 抽象層次必須匹配（重要）：
+   - 「股票質押」(機制泛稱) vs「元大證金質押」(具名實作)
+     → 不同層次、不可硬 map → 判 unsure 或 new
+   - 「房屋貸款」vs「中信融資型房貸」→ 同上
+   - 教學系統靠抽象層次區分 stage、強制 map 會破壞 stage 隔離
+
+3. 對象 / 主體不同 → new：
+   - 歷史「巴菲特神話」+ 新名「肥羊神話」→ 不同主體 → new
+   - 歷史「醫師年薪天花板」+ 新名「工程師年薪天花板」→ 同上
+
+4. 寧保守不誤判：
+   - 任何「邊界模糊」一律 unsure、不要強行 mapped
+
+5. 多歷史名衝突時優先選 total_exposures 高者：
+   - 若有多個 historical_pool 條目可能對應同一 new_name，
+     優先選 total_exposures 高的歷史名（自然向 canonical 收斂）
+
+【Few-shot 範例】
+
+範例 A（mapped：命名風格差異）：
+  new=「巴菲特家世背景」
+  historical=[...,「巴菲特神話」(exp=6),...]
+  → {{"decision": "mapped", "canonical": "巴菲特神話", "reason": "語意相同、命名風格差異"}}
+
+範例 B（new：歷史無相關）：
+  new=「永豐軍公教信貸」  historical=[「巴菲特神話」,「滾雪球效應」]
+  → {{"decision": "new", "canonical": null, "reason": "歷史名清單無相關項目"}}
+
+範例 C（unsure：抽象層次不確定）：
+  new=「股票質押」  historical=[...,「元大證金質押」(exp=3),...]
+  → {{"decision": "unsure", "canonical": null,
+       "reason": "歷史名為具名實作、新名為機制泛稱、抽象層次不同"}}
+
+範例 D（unsure：角度不同）：
+  new=「醫師年薪天花板」  historical=[...,「醫師執照的保障」(exp=4),...]
+  → {{"decision": "unsure", "canonical": null,
+       "reason": "歷史名強調制度面、新名強調收入面、雖屬同領域但角度不同"}}
+
+【輸出格式】
+請只輸出 JSON：
+{{
+  "mappings": [
+    {{
+      "new_name": "原 splitter 輸出的概念名",
+      "decision": "mapped" | "new" | "unsure",
+      "canonical": "對應歷史名 或 null",
+      "reason": "簡短判定原因（給 log 用）"
+    }}
+  ]
+}}
+
+強約束：mappings 長度必須 = new_concepts 長度，**每個** new_concept 都要對應一筆判定、不可漏。
+""",
+
     "scope_judge": """你是教材邊界判定器。
 任務：判斷學生提問屬於以下哪種範圍，請只輸出 JSON：
 {{

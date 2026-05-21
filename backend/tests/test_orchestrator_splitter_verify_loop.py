@@ -16,6 +16,12 @@ def _mk_orch():
     orch = LearningOrchestrator.__new__(LearningOrchestrator)
     orch.splitter = MagicMock()
     orch.splitter_verifier = MagicMock()
+    orch.splitter_verifier.run = AsyncMock(return_value={
+        "aligned": True, "missing_options": [],
+        "issue_chunk_ids": [], "reason": "ok",
+    })
+    orch.canonicalizer = MagicMock()
+    orch.canonicalizer.run = AsyncMock(return_value={"mappings": []})
     orch.drift_verifier = MagicMock()
     orch._pending_stages = None
     orch._pending_start_args = None

@@ -99,6 +99,39 @@ async def get_concept_mastery_map(user_id: str, concepts: list[str]) -> dict[str
     return {row["concept_name"]: float(row["mastery_score"]) for row in rows}
 
 
+async def get_concept_canonical_pool(
+    user_id: str,
+    source_signature: str,
+    limit: int | None = None,
+) -> list[dict]:
+    """canonicalize agent 專用：回傳同 source_signature 的概念名與排序所需欄位。
+
+    回傳 [{"concept_name": str, "total_exposures": int, "last_tested": str}, ...]
+    按 total_exposures DESC, last_tested DESC 排序。
+    跨 source_signature 隔離（migration 017 延續行為）：NULL signature 與其他
+    signature 一律排除，避免 canonicalize 把不同教材的概念視為候選 canonical。
+    """
+    db = await get_db()
+    sql = """SELECT concept_name, total_exposures, last_tested
+             FROM concept_mastery
+             WHERE user_id = ? AND source_signature = ?
+             ORDER BY total_exposures DESC, last_tested DESC"""
+    params: list = [user_id, source_signature]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    async with db.execute(sql, params) as cur:
+        rows = await cur.fetchall()
+    return [
+        {
+            "concept_name": row["concept_name"],
+            "total_exposures": int(row["total_exposures"] or 0),
+            "last_tested": str(row["last_tested"] or ""),
+        }
+        for row in rows
+    ]
+
+
 async def get_user_mastery_map(
     user_id: str,
     threshold: float = 0.8,
