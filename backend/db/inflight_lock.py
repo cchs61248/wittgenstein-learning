@@ -69,6 +69,26 @@ async def is_active(key: str) -> bool:
     return row is not None
 
 
+async def has_session_inflight(session_id: str) -> bool:
+    """此 session 是否有任一 inflight 任務（含 submit_answer → run_stage 等子 key）。"""
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT 1 FROM inflight_locks WHERE session_id = ? LIMIT 1",
+        (session_id,),
+    )
+    return (await cur.fetchone()) is not None
+
+
+async def active_keys_for_session(session_id: str) -> list[str]:
+    db = await get_db()
+    cur = await db.execute(
+        "SELECT key FROM inflight_locks WHERE session_id = ?",
+        (session_id,),
+    )
+    rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
 async def cleanup_stale(max_age_s: float = 600) -> int:
     """清掉 started_at 過老的孤兒（worker 強制關閉時殘留）。回傳清掉的數量。"""
     log = ws_logger()

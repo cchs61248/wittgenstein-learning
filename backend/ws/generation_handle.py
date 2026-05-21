@@ -9,6 +9,7 @@ Phase 3 Task B3 加 async 版本 (register_async / finish_async / cancel_async)
 unit tests 使用。
 """
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -47,6 +48,51 @@ def register(key: str, task: asyncio.Task) -> _GenerationHandle:
 
 def get_active(key: str) -> Optional[_GenerationHandle]:
     return _registry.get(key)
+
+
+def _local_handles_for_session(session_id: str) -> list[_GenerationHandle]:
+    prefix = f"{session_id}:"
+    out: list[_GenerationHandle] = []
+    for key, handle in _registry.items():
+        if key == session_id or key.startswith(prefix):
+            out.append(handle)
+    return out
+
+
+async def wait_for_session_idle(session_id: str, timeout_s: float = 300) -> bool:
+    """
+    等待此 session 所有 inflight 任務結束（含 :answer:、:start 等子 key）。
+    同 worker 等本地 Task event；跨 worker 輪詢 DB inflight_locks。
+    回傳 True 表示已 idle，False 表示 timeout 時仍有 lock。
+    """
+    log = ws_logger()
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        local = _local_handles_for_session(session_id)
+        if local:
+            remaining = max(0.05, deadline - time.monotonic())
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(h.event.wait() for h in local)),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                log.debug(
+                    "wait_for_session_idle local timeout  session=%s  keys=%s",
+                    session_id,
+                    [h.key for h in local],
+                )
+        if not local and not await inflight_lock.has_session_inflight(session_id):
+            return True
+        await asyncio.sleep(0.2)
+    still = await inflight_lock.has_session_inflight(session_id)
+    log.warning(
+        "wait_for_session_idle timeout  session=%s  db_inflight=%s  local_keys=%s",
+        session_id,
+        still,
+        [h.key for h in _local_handles_for_session(session_id)],
+    )
+    return not still and not _local_handles_for_session(session_id)
 
 
 def finish(key: str) -> None:

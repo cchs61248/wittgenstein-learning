@@ -36,6 +36,7 @@ from .ws.generation_handle import (
     register_async as _gen_register_async,
     finish_async as _gen_finish_async,
     cancel_async as _gen_cancel_async,
+    wait_for_session_idle as _wait_for_session_idle,
 )
 
 
@@ -495,13 +496,8 @@ async def websocket_endpoint(
 
             elif msg_type == "resume_session":
                 session_id_to_resume: str = p.get("session_id", session_id)
-                # 若此 session 有上一輪未完成的生成，先等它結束再 resume
-                _prev = _gen_get(session_id_to_resume)
-                if _prev:
-                    try:
-                        await asyncio.wait_for(_prev.event.wait(), timeout=300)
-                    except asyncio.TimeoutError:
-                        pass
+                # 等待此 session 任一 inflight（含 submit_answer 內嵌的 run_stage）
+                await _wait_for_session_idle(session_id_to_resume, timeout_s=300)
 
                 session_row = await session_memory.get_session(session_id_to_resume)
                 provider_name: str = (

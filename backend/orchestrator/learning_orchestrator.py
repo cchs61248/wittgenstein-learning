@@ -17,6 +17,7 @@ from ..agents.splitter_verifier import SplitterVerifierAgent
 from ..agents.concept_canonicalize import ConceptCanonicalizeAgent
 from ..memory.working_memory import get_working_memory, TurnContext
 from ..memory import session_memory, longterm_memory
+from ..db.inflight_lock import has_session_inflight
 from ..llm.base_provider import BaseLLMProvider
 from ..llm.base_provider import MessageRole, LLMMessage
 from ..utils import extract_json
@@ -2004,6 +2005,18 @@ class LearningOrchestrator:
                 skip_progress_emit=True,
             )
             return
+
+        if not questions and teacher_only.strip() and existing_status == "in_progress":
+            if await has_session_inflight(session_id):
+                _log.info(
+                    "resume_from_stored skip replay while generating  session=%s  stage_id=%s",
+                    session_id, stage["stage_id"],
+                )
+                await emit({
+                    "type": "session_generating",
+                    "payload": {"session_id": session_id},
+                })
+                return
 
         await emit({"type": "explanation_chunk", "payload": {"chunk": display_md, "is_final": False}})
         wm.current_explanation = teacher_only
