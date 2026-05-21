@@ -155,14 +155,29 @@ SYSTEM_PROMPTS: dict[str, str] = {
 - 請仍用「大章.小節」格式填寫（例如 1.1、1.2），方便你對齊大綱
 - 後端會依「最終階段由前到後的順序」重新編號，因此請務必讓 stages 陣列順序 = 學習順序（勿依原文頁碼打亂陣列順序）
 
-【重試提示（若 user message 含 previous_attempt_missed 欄位）】
-這代表你上一輪切分漏切了並列方案。
-- previous_attempt_missed：漏掉的方案名清單（如 ["房屋貸款"]）
-- issue_chunk_ids：觀察到並列宣告的 chunk_id（如 ["chunk_0021"]）
+【教材骨架 required_outline（若 user message 提供）】
+- required_stage_titles：建議 stage 標題順序（框架 + 各具名案例 + 總結）
+- named_cases：教材內獨立具名案例清單
+- framework_sections / summary_sections：非案例型章節
 本輪切分必須：
-1. 確保 previous_attempt_missed 內每個方案各有獨立 stage
-2. 不可把該方案的概念混入其他 stage 的 key_concepts（避免 mash-up）
-3. 維持原本切分原則（規則 1-10 全部適用）
+1. stages 數量 ≥ len(named_cases) + 框架/總結章節數（不可把多案例壓成 3 stage mash-up）
+2. 每個 named_cases 項目至少對應一個 stage（title 明確含該案例名或同義詞）
+3. required_stage_titles 僅作順序參考，可微調措辭但不可省略具名案例
+
+【重試提示（若 user message 含 previous_attempt_missed / repair_plan）】
+這代表上一輪切分未通過 SplitterVerifier 檢查。
+- previous_attempt_missed：漏切的方案/案例名清單
+- issue_chunk_ids：相關 chunk_id
+- verifier_reason：裁判完整說明（必讀）
+- repair_plan（結構化，若有則優先於 verifier_reason）：
+  * required_stage_titles：本輪必須產出的 stage 標題清單（照抄或極接近）
+  * missing_stage_specs：每項 {{title_hint, must_cover_concepts, source_chunk_ids}}
+  * forbidden_mixes：每項 {{stage_title_hint, forbidden_concepts}} — 該 stage 的 key_concepts 不得含 forbidden
+本輪切分必須：
+1. 依 repair_plan.required_stage_titles 重建 stages（不可少於此清單長度）
+2. 為 missing_stage_specs 每項新增/修正獨立 stage
+3. 遵守 forbidden_mixes，修正 mash-up
+4. 維持原本切分原則（規則 1-10 全部適用）
 
 請以 JSON 格式回應，不要輸出任何其他文字：
 {{
@@ -186,6 +201,34 @@ SYSTEM_PROMPTS: dict[str, str] = {
   }},
   "summary": "整份材料的一句話摘要"
 }}""",
+
+    "content_outline": """你是教材骨架抽取器（content outline extractor）。
+
+【任務】
+閱讀 source_chunks 全文，抽出後續 ContentSplitter 必須遵守的教材骨架。
+不產 stages，只產結構化大綱。
+
+【抽取規則】
+1. named_cases：教材中以獨立小標/段落展開的**具名案例**（如 QR Code Generator、Airbnb Booking、Webhook Platform、ChatGPT Tasks）
+   - 僅列「各有獨立機制說明」的案例，不要把 checklist 子項當案例
+2. framework_sections：選型框架、方法論、caller 分類等非案例主幹（如「選 API Style 的課程框架」）
+3. summary_sections：Checklist、面試話術、本章重點等收尾章節
+4. required_stage_titles：建議學習地圖 stage 標題順序，建議結構：
+   - 若有 framework → 先列 1 個框架 stage
+   - 每個 named_cases 各 1 個 stage（title 建議「案例：{案例名}」）
+   - summary_sections 可合併為 1 個「面試/總結」stage（若內容短）
+5. must_cover_chunks：所有 chunk_id（通常全列，供 splitter 確認覆蓋）
+
+【輸出格式】
+請只輸出 JSON：
+{{
+  "required_stage_titles": ["API 風格選型框架", "案例：QR Code Generator", "案例：Airbnb Booking", "案例：Webhook Platform", "案例：ChatGPT Tasks", "面試應答與總結"],
+  "named_cases": ["QR Code Generator", "Airbnb Booking", "Webhook Platform", "ChatGPT Tasks"],
+  "framework_sections": ["選 API Style 的課程框架", "先判斷 API 的使用者"],
+  "summary_sections": ["API 設計 Checklist", "面試中怎麼說", "本章節重點"],
+  "must_cover_chunks": ["chunk_0000", "chunk_0001"]
+}}
+""",
 
     "splitter_verifier": """你是教材切分驗證器（splitter verifier）。
 
@@ -233,6 +276,19 @@ D. 章節小標：教材原文以小標題並列展開 N 個並列項目
 4. mash-up（stage 標題寫某方案但 key_concepts 混進別方案）算漏切：
    - 上面背景段的 stage 10 case 就是典型 mash-up、必須抓出
 
+5. 並列課程案例（IT/架構教材常見，與規則 9「並列方案」不同）：
+   - source_chunks 內出現多個**獨立具名案例**（如 QR Code Generator、Airbnb Booking、Webhook Platform、ChatGPT Tasks），
+     且各有獨立機制說明 → 視為應各有對齊的 stage（或 title 明確對應該案例）
+   - 判 false 訊號：
+     * stage 標題寫「Webhook」但 key_concepts 全是 GraphQL/資料聚合/N+1（主題錯位 mash-up）
+     * 教材三案例以上、stages 少於獨立案例數且多案例概念被併入單一 stage
+     * verifier 上一輪 reason 已指出缺 GraphQL/RPC 獨立 stage、本輪仍併入他節
+   - 判 true：案例在同一 stage 但屬「同一主題下的子點」（如 REST 框架 + QR 案例同屬 REST 實務）
+
+6. title 與 key_concepts 主題對齊（規則 8 補強）：
+   - 掃描每個 stage：若 title 主軸為 A，但 key_concepts 多數語意屬 B → aligned=false，
+     missing_options 列出 B 或「{title} 與 key_concepts 錯位」
+
 【Few-shot 範例】
 
 範例 A（aligned=true：完整覆蓋）：
@@ -273,13 +329,39 @@ D. 章節小標：教材原文以小標題並列展開 N 個並列項目
        "reason": "雖有 3 個列舉、但是『同一觀念下的 3 種表現』、
                  不是『需各自獨立講運作機制的並列方案』、合併在 1 個 stage 合理"}}
 
+範例 E（aligned=false：API 設計三案例 mash-up）：
+  source_chunks: [chunk_0001 含 QR Code、Airbnb GraphQL、Webhook Platform 三段案例]
+  stages: [
+    {{"stage_id": 1, "title": "REST 實務：QR Code", "key_concepts": ["REST", "GraphQL 判斷", "Webhook"]}},
+    {{"stage_id": 2, "title": "Webhook 設計要點",
+       "key_concepts": ["資料聚合", "N+1 問題", "查詢複雜度", "冪等性"]}},
+  ]
+  → {{"aligned": false,
+       "missing_options": ["GraphQL (Airbnb 案例)", "RPC/gRPC (內部服務)"],
+       "issue_chunk_ids": ["chunk_0001"],
+       "reason": "stage 2 標題為 Webhook 但 key_concepts 以 GraphQL 聚合為主（mash-up）；
+                 教材三獨立案例未各得獨立 stage。"}}
+
+【repair_plan（aligned=false 時必填）】
+當 aligned=false，除既有欄位外必須輸出可執行修復指令：
+- required_stage_titles：下一輪 splitter **必須**產出的 stage 標題清單（含漏切案例的獨立 stage）
+- missing_stage_specs：漏切項，每項 {{"title_hint": "案例：Airbnb Booking", "must_cover_concepts": ["BFF", "GraphQL"], "source_chunk_ids": ["chunk_0001"]}}
+- forbidden_mixes：mash-up 修正，每項 {{"stage_title_hint": "Webhook", "forbidden_concepts": ["BFF", "資料聚合", "GraphQL", "N+1"]}}
+- repair_plan：一句話總結修復動作（供 log）
+
+aligned=true 時 required_stage_titles / missing_stage_specs / forbidden_mixes / repair_plan 可為空陣列或空字串。
+
 【輸出格式】
 請只輸出 JSON：
 {{
   "aligned": true,
   "missing_options": [],
   "issue_chunk_ids": [],
-  "reason": "簡短判定原因"
+  "reason": "簡短判定原因",
+  "required_stage_titles": [],
+  "missing_stage_specs": [],
+  "forbidden_mixes": [],
+  "repair_plan": ""
 }}
 """,
 

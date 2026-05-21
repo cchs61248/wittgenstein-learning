@@ -7,6 +7,7 @@ from typing import Callable, Awaitable
 
 from ..agents.base_agent import AgentContext
 from ..agents.content_splitter import ContentSplitterAgent
+from ..agents.content_outline import ContentOutlineAgent
 from ..agents.teacher import TeacherAgent
 from ..agents.question_generator import QuestionGeneratorAgent
 from ..agents.evaluator import EvaluatorAgent
@@ -32,7 +33,11 @@ WSEmitter = Callable[[dict], Awaitable[None]]
 
 _log = logging.getLogger("wl.orchestrator")
 
-MAX_SPLITTER_VERIFY_RETRIES = 1
+MAX_SPLITTER_VERIFY_RETRIES = 2
+
+
+class SplitterVerificationRejected(Exception):
+    """SplitterVerifier 在重試用盡後仍不通過，拒絕進入 pending_confirmation。"""
 
 
 def _apply_canonical_mappings(
@@ -151,6 +156,7 @@ class LearningOrchestrator:
     def __init__(self, llm: BaseLLMProvider):
         tc = TokenCounter()
         self.splitter = ContentSplitterAgent(llm, tc)
+        self.content_outliner = ContentOutlineAgent(llm, tc)
         self.splitter_verifier = SplitterVerifierAgent(llm, tc)
         self.canonicalizer = ConceptCanonicalizeAgent(llm, tc)
         self.teacher = TeacherAgent(llm, tc)
@@ -567,15 +573,41 @@ class LearningOrchestrator:
         await session_memory.insert_source_chunks(session_id, source_chunks)
         await emit({"type": "session_generating", "payload": {"session_id": session_id}})
 
+        # ── 2.0 ContentOutline（方案 C：先抽教材骨架，引導 splitter）
+        required_outline: dict | None = None
+        if source_chunks:
+            outline_ctx = AgentContext(
+                session_id=session_id,
+                user_id=user_id,
+                task_payload={"source_chunks": source_chunks},
+            )
+            try:
+                required_outline = await self.content_outliner.run(outline_ctx)
+                _log.info(
+                    "start_session outline done  session=%s  cases=%d  titles=%d",
+                    session_id,
+                    len(required_outline.get("named_cases") or []),
+                    len(required_outline.get("required_stage_titles") or []),
+                )
+            except Exception as e:
+                _log.warning(
+                    "content_outline failed (proceeding without outline)  session=%s  err=%s",
+                    session_id, e,
+                )
+
         # ── 2. ContentSplitter（LLM 呼叫，可能耗時 10–60s）
+        splitter_ctx_payload: dict = {
+            "source_chunks": source_chunks,
+            "max_stages": 30,
+            "target_depth": target_depth,
+        }
+        if required_outline:
+            splitter_ctx_payload["required_outline"] = required_outline
+
         ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
-            task_payload={
-                "source_chunks": source_chunks,
-                "max_stages": 30,
-                "target_depth": target_depth,
-            },
+            task_payload=dict(splitter_ctx_payload),
         )
         try:
             split_result = await self.splitter.run(ctx)
@@ -590,14 +622,11 @@ class LearningOrchestrator:
             session_id, len(stages),
         )
 
-        # ── 2.4 SplitterVerifier（並列方案完整性檢查 + bounded reroll）
+        # ── 2.4 SplitterVerifier（方案 C：outline 引導 + repair_plan reroll + 失敗拒絕）
         splitter_attempts = 0  # 已跑的 splitter 次數（first run 算 1）
-        splitter_ctx_payload = {
-            "source_chunks": source_chunks,
-            "max_stages": 30,
-            "target_depth": target_depth,
-        }
-        if source_chunks:  # 空 source_chunks 跳過 verifier
+        verifier_passed = not source_chunks
+        last_vresult: dict | None = None
+        if source_chunks:
             while True:
                 verify_ctx = AgentContext(
                     session_id=session_id, user_id=user_id,
@@ -616,13 +645,12 @@ class LearningOrchestrator:
                         "missing_options": [],
                         "issue_chunk_ids": [],
                         "reason": f"verifier_exception: {e}",
+                        "repair_plan_struct": {},
                     }
-                    if splitter_attempts >= MAX_SPLITTER_VERIFY_RETRIES:
-                        break
-                    splitter_attempts += 1
-                    continue
 
+                last_vresult = vresult
                 if vresult["aligned"]:
+                    verifier_passed = True
                     _log.info(
                         "splitter_verifier OK  session=%s  splitter_runs=%d",
                         session_id, splitter_attempts + 1,
@@ -644,12 +672,22 @@ class LearningOrchestrator:
                     "retry=%d  missing=%s",
                     session_id, splitter_attempts, vresult["missing_options"],
                 )
+                repair_struct = vresult.get("repair_plan_struct") or {}
+                if not repair_struct.get("required_stage_titles") and required_outline:
+                    repair_struct = {
+                        **repair_struct,
+                        "required_stage_titles": (
+                            required_outline.get("required_stage_titles") or []
+                        ),
+                    }
                 reroll_ctx = AgentContext(
                     session_id=session_id, user_id=user_id,
                     task_payload={
                         **splitter_ctx_payload,
                         "previous_attempt_missed": vresult["missing_options"],
                         "issue_chunk_ids": vresult["issue_chunk_ids"],
+                        "verifier_reason": vresult.get("reason", ""),
+                        "repair_plan_struct": repair_struct,
                     },
                 )
                 try:
@@ -663,6 +701,21 @@ class LearningOrchestrator:
                         session_id, e,
                     )
                     break
+
+            if not verifier_passed:
+                missing = (last_vresult or {}).get("missing_options") or []
+                reason = (last_vresult or {}).get("reason") or ""
+                await session_memory.abandon_generating_stub(session_id)
+                _log.error(
+                    "splitter_verifier rejected  session=%s  splitter_runs=%d  "
+                    "missing=%s  reason=%s",
+                    session_id, splitter_attempts + 1, missing, reason,
+                )
+                detail = reason or "、".join(missing) or "切分結果未通過品質檢查"
+                raise SplitterVerificationRejected(
+                    f"教材切分未通過品質檢查（已自動修復 {MAX_SPLITTER_VERIFY_RETRIES} 次仍失敗），"
+                    f"請稍後重試。詳情：{detail}"
+                )
 
         # ── 2.5 ConceptCanonicalize（splitter 後立即跑、寫回 stages）
         source_signature = content_hash

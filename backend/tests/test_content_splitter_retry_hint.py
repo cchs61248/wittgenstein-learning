@@ -21,6 +21,16 @@ class TestContentSplitterPromptHasRetryHintRule(unittest.TestCase):
         self.assertIn("獨立 stage", prompt)
         self.assertIn("mash-up", prompt)
 
+    def test_prompt_has_required_outline_rule(self):
+        prompt = SYSTEM_PROMPTS["content_splitter"]
+        self.assertIn("required_outline", prompt)
+        self.assertIn("named_cases", prompt)
+
+    def test_prompt_has_repair_plan_struct_rule(self):
+        prompt = SYSTEM_PROMPTS["content_splitter"]
+        self.assertIn("repair_plan", prompt)
+        self.assertIn("forbidden_mixes", prompt)
+
 
 # ── L2: user message 注入 ──────────────────────────────────────
 
@@ -70,6 +80,65 @@ class TestContentSplitterRetryHintInjection(unittest.IsolatedAsyncioTestCase):
         self.assertIn("previous_attempt_missed", user_msg)
         self.assertIn("房屋貸款", user_msg)
         self.assertIn("chunk_0021", user_msg)
+
+    async def test_injects_retry_hint_when_only_verifier_reason(self):
+        llm, captured = _capture_llm()
+        agent = _make_agent(llm)
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "source_chunks": [{"chunk_id": "c1", "text": "...", "order_index": 0}],
+                "max_stages": 5,
+                "target_depth": "standard",
+                "verifier_reason": "stage 2 標題 Webhook 但 key_concepts 為 GraphQL",
+            },
+        )
+        await agent.run(ctx)
+        user_msg = "\n".join(m.content for m in captured["messages"])
+        self.assertIn("重試提示", user_msg)
+        self.assertIn("verifier_reason", user_msg)
+        self.assertIn("GraphQL", user_msg)
+
+    async def test_injects_required_outline_when_provided(self):
+        llm, captured = _capture_llm()
+        agent = _make_agent(llm)
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "source_chunks": [{"chunk_id": "c1", "text": "...", "order_index": 0}],
+                "required_outline": {
+                    "named_cases": ["QR Code Generator"],
+                    "required_stage_titles": ["案例：QR Code Generator"],
+                },
+            },
+        )
+        await agent.run(ctx)
+        user_msg = "\n".join(m.content for m in captured["messages"])
+        self.assertIn("教材骨架", user_msg)
+        self.assertIn("QR Code Generator", user_msg)
+        self.assertNotIn("重試提示", user_msg)
+
+    async def test_injects_repair_plan_struct_on_reroll(self):
+        llm, captured = _capture_llm()
+        agent = _make_agent(llm)
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "source_chunks": [{"chunk_id": "c1", "text": "...", "order_index": 0}],
+                "repair_plan_struct": {
+                    "required_stage_titles": ["案例：Airbnb Booking"],
+                    "forbidden_mixes": [{
+                        "stage_title_hint": "Webhook",
+                        "forbidden_concepts": ["GraphQL"],
+                    }],
+                },
+            },
+        )
+        await agent.run(ctx)
+        user_msg = "\n".join(m.content for m in captured["messages"])
+        self.assertIn("repair_plan_struct", user_msg)
+        self.assertIn("Airbnb Booking", user_msg)
+        self.assertIn("forbidden_mixes", user_msg)
 
     async def test_skips_retry_hint_when_not_provided(self):
         """既有 caller 不傳 previous_attempt_missed、不應注入該段（向後相容）。"""

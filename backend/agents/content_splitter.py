@@ -227,6 +227,9 @@ class ContentSplitterAgent(BaseAgent):
         target_depth: str = payload.get("target_depth", "intermediate")
         previous_attempt_missed: list[str] = payload.get("previous_attempt_missed") or []
         issue_chunk_ids: list[str] = payload.get("issue_chunk_ids") or []
+        verifier_reason: str = (payload.get("verifier_reason") or "").strip()
+        required_outline: dict | None = payload.get("required_outline")
+        repair_plan_struct: dict | None = payload.get("repair_plan_struct")
 
         db_chunks: dict[str, dict] = {c["chunk_id"]: c for c in source_chunks}
 
@@ -234,18 +237,37 @@ class ContentSplitterAgent(BaseAgent):
 
         system = SYSTEM_PROMPTS["content_splitter"].format(max_stages=max_stages)
 
-        retry_hint_section = ""
-        if previous_attempt_missed:
-            retry_hint_section = (
-                f"\n\n【重試提示】上一輪切分漏切以下並列方案、本輪必須各自獨立 stage："
-                f"\n  previous_attempt_missed={json.dumps(previous_attempt_missed, ensure_ascii=False)}"
-                f"\n  issue_chunk_ids={json.dumps(issue_chunk_ids, ensure_ascii=False)}"
+        outline_section = ""
+        if required_outline:
+            outline_section = (
+                "\n\n【教材骨架 required_outline】本輪切分必須遵守："
+                f"\n{json.dumps(required_outline, ensure_ascii=False)}"
             )
+
+        retry_hint_section = ""
+        if repair_plan_struct or previous_attempt_missed or verifier_reason:
+            parts = ["\n\n【重試提示】上一輪切分未通過 SplitterVerifier，本輪必須修正："]
+            if repair_plan_struct:
+                parts.append(
+                    f"\n  repair_plan_struct={json.dumps(repair_plan_struct, ensure_ascii=False)}"
+                )
+            if previous_attempt_missed:
+                parts.append(
+                    f"\n  previous_attempt_missed={json.dumps(previous_attempt_missed, ensure_ascii=False)}"
+                )
+            if issue_chunk_ids:
+                parts.append(
+                    f"\n  issue_chunk_ids={json.dumps(issue_chunk_ids, ensure_ascii=False)}"
+                )
+            if verifier_reason:
+                parts.append(f"\n  verifier_reason={verifier_reason}")
+            retry_hint_section = "".join(parts)
 
         user_msg = (
             f"目標難度：{target_depth}\n\n"
             f"以下是教材的分段內容，請根據語義關係組合成學習階段：\n\n"
             f"{chunks_text}"
+            f"{outline_section}"
             f"{retry_hint_section}"
         )
         self._messages.append(LLMMessage(role=MessageRole.USER, content=user_msg))

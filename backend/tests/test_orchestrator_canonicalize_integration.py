@@ -68,6 +68,12 @@ class TestApplyCanonicalMappings(unittest.TestCase):
 
 def _mk_orch():
     orch = LearningOrchestrator.__new__(LearningOrchestrator)
+    orch.content_outliner = MagicMock()
+    orch.content_outliner.run = AsyncMock(return_value={
+        "required_stage_titles": [], "named_cases": [],
+        "framework_sections": [], "summary_sections": [],
+        "must_cover_chunks": [],
+    })
     orch.splitter = MagicMock()
     orch.splitter_verifier = MagicMock()
     orch.splitter_verifier.run = AsyncMock(return_value={

@@ -6,7 +6,7 @@ import json
 import unittest
 
 from backend.agents.base_agent import AgentContext
-from backend.agents.splitter_verifier import SplitterVerifierAgent
+from backend.agents.splitter_verifier import SplitterVerifierAgent, normalize_verifier_result
 
 
 def _capture_llm():
@@ -72,12 +72,23 @@ class TestVerifierAgentPayloadShape(unittest.IsolatedAsyncioTestCase):
 
 
 class TestVerifierAgentOutputShape(unittest.IsolatedAsyncioTestCase):
-    async def test_output_has_four_fields(self):
+    async def test_output_has_repair_plan_fields(self):
         llm = _fake_llm({
             "aligned": False,
             "missing_options": ["房屋貸款"],
             "issue_chunk_ids": ["chunk_0021"],
             "reason": "test reason",
+            "required_stage_titles": ["案例：房屋貸款"],
+            "missing_stage_specs": [{
+                "title_hint": "案例：房屋貸款",
+                "must_cover_concepts": ["融資型房貸"],
+                "source_chunk_ids": ["chunk_0021"],
+            }],
+            "forbidden_mixes": [{
+                "stage_title_hint": "股票質押",
+                "forbidden_concepts": ["融資型房貸"],
+            }],
+            "repair_plan": "拆出房貸 stage",
         })
         agent = _make_agent(llm)
         ctx = AgentContext(
@@ -90,8 +101,21 @@ class TestVerifierAgentOutputShape(unittest.IsolatedAsyncioTestCase):
         result = await agent.run(ctx)
         self.assertFalse(result["aligned"])
         self.assertEqual(result["missing_options"], ["房屋貸款"])
-        self.assertEqual(result["issue_chunk_ids"], ["chunk_0021"])
-        self.assertEqual(result["reason"], "test reason")
+        self.assertEqual(result["repair_plan_struct"]["required_stage_titles"],
+                         ["案例：房屋貸款"])
+        self.assertEqual(len(result["missing_stage_specs"]), 1)
+        self.assertEqual(len(result["forbidden_mixes"]), 1)
+
+
+class TestNormalizeVerifierResult(unittest.TestCase):
+    def test_normalize_builds_repair_plan_struct(self):
+        out = normalize_verifier_result({
+            "aligned": False,
+            "missing_options": ["X"],
+            "required_stage_titles": ["案例：A"],
+            "repair_plan": "fix",
+        })
+        self.assertIn("案例：A", out["repair_plan_struct"]["required_stage_titles"])
 
 
 # ── L3: 行為驗證 ──────────────────────────────────────────────

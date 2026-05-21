@@ -49,6 +49,21 @@ class TestSplitterVerifierPromptSanity(unittest.TestCase):
         # 規則 3：多切是 false negative
         self.assertIn("false negative", prompt)
 
+    def test_prompt_has_repair_plan_fields(self):
+        prompt = SYSTEM_PROMPTS["splitter_verifier"]
+        self.assertIn("required_stage_titles", prompt)
+        self.assertIn("missing_stage_specs", prompt)
+        self.assertIn("forbidden_mixes", prompt)
+        self.assertIn("repair_plan", prompt)
+
+    def test_prompt_plan_b_parallel_course_cases(self):
+        """方案 B：並列課程案例 + API mash-up 範例 E。"""
+        prompt = SYSTEM_PROMPTS["splitter_verifier"]
+        self.assertIn("並列課程案例", prompt)
+        self.assertIn("範例 E", prompt)
+        self.assertIn("Webhook 設計要點", prompt)
+        self.assertIn("title 與 key_concepts 主題對齊", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

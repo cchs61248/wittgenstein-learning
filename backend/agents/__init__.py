@@ -1,2 +1,3 @@
 from .splitter_verifier import SplitterVerifierAgent
+from .content_outline import ContentOutlineAgent
 from .concept_canonicalize import ConceptCanonicalizeAgent

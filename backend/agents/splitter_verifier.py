@@ -15,6 +15,48 @@ from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
 
 
+def normalize_verifier_result(data: dict) -> dict[str, Any]:
+    """將 LLM 回傳正規化為 verifier + repair_plan 結構。"""
+    missing_specs: list[dict] = []
+    for item in data.get("missing_stage_specs") or []:
+        if isinstance(item, dict):
+            missing_specs.append({
+                "title_hint": str(item.get("title_hint", "")).strip(),
+                "must_cover_concepts": list(item.get("must_cover_concepts") or []),
+                "source_chunk_ids": list(item.get("source_chunk_ids") or []),
+            })
+
+    forbidden: list[dict] = []
+    for item in data.get("forbidden_mixes") or []:
+        if isinstance(item, dict):
+            forbidden.append({
+                "stage_title_hint": str(
+                    item.get("stage_title_hint") or item.get("stage_title_pattern") or ""
+                ).strip(),
+                "forbidden_concepts": list(item.get("forbidden_concepts") or []),
+            })
+
+    repair_text = str(data.get("repair_plan") or "").strip()
+    required_titles = list(data.get("required_stage_titles") or [])
+
+    return {
+        "aligned": bool(data.get("aligned", False)),
+        "missing_options": list(data.get("missing_options") or []),
+        "issue_chunk_ids": list(data.get("issue_chunk_ids") or []),
+        "reason": str(data.get("reason", "")).strip(),
+        "required_stage_titles": required_titles,
+        "missing_stage_specs": missing_specs,
+        "forbidden_mixes": forbidden,
+        "repair_plan": repair_text,
+        "repair_plan_struct": {
+            "required_stage_titles": required_titles,
+            "missing_stage_specs": missing_specs,
+            "forbidden_mixes": forbidden,
+            "summary": repair_text,
+        },
+    }
+
+
 class SplitterVerifierAgent(BaseAgent):
     """驗證 splitter 是否漏切教材原文宣告的並列方案。"""
 
@@ -41,15 +83,10 @@ class SplitterVerifierAgent(BaseAgent):
         self._reset()
 
         data = json.loads(extract_json(response.content))
-
-        result = {
-            "aligned": bool(data.get("aligned", False)),
-            "missing_options": list(data.get("missing_options") or []),
-            "issue_chunk_ids": list(data.get("issue_chunk_ids") or []),
-            "reason": str(data.get("reason", "")).strip(),
-        }
+        result = normalize_verifier_result(data)
         self._log_end(ctx, t0, {
             "aligned": result["aligned"],
             "missing_count": len(result["missing_options"]),
+            "repair_titles_count": len(result["required_stage_titles"]),
         })
         return result
