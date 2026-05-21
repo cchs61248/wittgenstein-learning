@@ -1,4 +1,5 @@
 from ..memory import session_memory, longterm_memory
+from .stage_boundary import compute_stage_boundary_lists
 
 
 async def build_adaptive_context(
@@ -38,7 +39,9 @@ async def build_adaptive_context(
     user_mastery_map = await longterm_memory.get_user_mastery_map(
         user_id, threshold=0.8, source_signature=source_signature
     )
-    stage_mastery_map = await longterm_memory.get_concept_mastery_map(user_id, key_concepts)
+    stage_mastery_map = await longterm_memory.get_concept_mastery_map(
+        user_id, key_concepts, source_signature=source_signature
+    )
     mastery_map = {**user_mastery_map, **stage_mastery_map}
 
     # 3. 取結構化混淆模式
@@ -50,32 +53,7 @@ async def build_adaptive_context(
     # 5. 取最後決策記錄（含選課理由）
     last_decision = await session_memory.get_last_decision_record(session_id)
 
-    # 6. 計算禁止提前教的概念（後續節點的概念，排除本節已有）
-    current_idx = next(
-        (i for i, s in enumerate(stages) if s["stage_id"] == stage["stage_id"]), 0
-    )
-
-    # 6a. 下一節即將教的概念（next_stage_concepts）—— 給 Teacher 跨章節邊界
-    #     感知用：source_chunks 可能跨主題（chunker 切到一半含當前 + 下節內容），
-    #     Teacher 看到屬於 next_stage_concepts 的段落只能一句帶過、禁止完整展開，
-    #     把詳細留給下一節，避免相鄰章節 50%+ 重疊。
-    #     DriftVerifier 也吃這個欄位，作為反向 coverage 檢查的豁免清單。
-    next_stage_concepts: list[str] = []
-    if current_idx + 1 < len(stages):
-        next_stage_concepts = [
-            c for c in (stages[current_idx + 1].get("key_concepts") or [])
-            if c not in key_concepts
-        ]
-
-    # 6b. forbidden_future_concepts（完全禁提清單）排除 next_stage_concepts，
-    #     避免下一節概念同時落入「禁提」（規則 6）與「可一句帶過」（規則 10）兩個清單，
-    #     給 Teacher 互相衝突的指令。本清單只管「下下節以後」的概念。
-    future_concepts = list(dict.fromkeys([
-        c
-        for s in stages[current_idx + 1:]
-        for c in s.get("key_concepts", [])
-        if c not in key_concepts and c not in next_stage_concepts
-    ]))[:10]
+    next_stage_concepts, future_concepts = compute_stage_boundary_lists(stage, stages)
 
     # 7. 計算本節必須補強的概念。觸發條件（任一即可）：
     #    a) 掌握度 < 0.75（基準閾值，初學或答錯多次）

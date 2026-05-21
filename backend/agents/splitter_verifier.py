@@ -43,7 +43,7 @@ class SplitterVerifierAgent(BaseAgent):
         data = json.loads(extract_json(response.content))
 
         result = {
-            "aligned": bool(data.get("aligned", True)),
+            "aligned": bool(data.get("aligned", False)),
             "missing_options": list(data.get("missing_options") or []),
             "issue_chunk_ids": list(data.get("issue_chunk_ids") or []),
             "reason": str(data.get("reason", "")).strip(),

@@ -101,7 +101,7 @@ class TeacherAgent(BaseAgent):
             recent_qa_text = "無"
 
         must_reinforce_text = "、".join(must_reinforce) if must_reinforce else "無"
-        forbidden_future_text = "、".join(forbidden_future[:5]) if forbidden_future else "無"
+        forbidden_future_text = "、".join(forbidden_future[:10]) if forbidden_future else "無"
         next_stage_concepts_text = (
             "、".join(next_stage_concepts) if next_stage_concepts else "無"
         )
