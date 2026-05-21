@@ -159,5 +159,98 @@ class TestContentSplitterRetryHintInjection(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("previous_attempt_missed", user_msg)
 
 
+class TestContentSplitterPlanCParsingAndMerge(unittest.IsolatedAsyncioTestCase):
+    async def test_artifact_json_preserves_outline_thin_stages(self):
+        content = """````artifact
+id: api-design-learning-stages
+name: API 設計學習階段規劃
+type: json
+content: |-
+  {
+    "stages": [
+      {"stage_id": 1, "node_id": "1.1", "title": "API 風格選型框架", "source_chunk_ids": ["c1"], "key_concepts": ["框架"], "prerequisites": [], "estimated_questions": 2, "teaching_goal": "g1"},
+      {"stage_id": 2, "node_id": "2.1", "title": "案例：QR Code Generator", "source_chunk_ids": ["c2"], "key_concepts": ["REST"], "prerequisites": [], "estimated_questions": 2, "teaching_goal": "g2"},
+      {"stage_id": 3, "node_id": "2.2", "title": "案例：Airbnb Booking", "source_chunk_ids": ["c2"], "key_concepts": ["GraphQL"], "prerequisites": [], "estimated_questions": 2, "teaching_goal": "g3"},
+      {"stage_id": 4, "node_id": "2.3", "title": "案例：Webhook Platform", "source_chunk_ids": ["c3"], "key_concepts": ["Webhook"], "prerequisites": [], "estimated_questions": 2, "teaching_goal": "g4"},
+      {"stage_id": 5, "node_id": "2.4", "title": "案例：ChatGPT Tasks", "source_chunk_ids": ["c3"], "key_concepts": ["RPC"], "prerequisites": [], "estimated_questions": 2, "teaching_goal": "g5"},
+      {"stage_id": 6, "node_id": "3.1", "title": "面試應答與總結", "source_chunk_ids": ["c4"], "key_concepts": ["面試"], "prerequisites": [], "estimated_questions": 2, "teaching_goal": "g6"}
+    ],
+    "chunk_roles": {"c1": "core", "c2": "core", "c3": "core", "c4": "core"},
+    "summary": "s"
+  }
+````"""
+
+        class _Resp:
+            def __init__(self, content):
+                self.content = content
+
+        class _LLM:
+            async def chat(self, messages, system_prompt=None):
+                return _Resp(content)
+
+        agent = _make_agent(_LLM())
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "source_chunks": [
+                    {"chunk_id": "c1", "text": "t1", "order_index": 0},
+                    {"chunk_id": "c2", "text": "t2", "order_index": 1},
+                    {"chunk_id": "c3", "text": "t3", "order_index": 2},
+                    {"chunk_id": "c4", "text": "t4", "order_index": 3},
+                ],
+                "required_outline": {
+                    "required_stage_titles": [
+                        "API 風格選型框架", "案例：QR Code Generator",
+                        "案例：Airbnb Booking", "案例：Webhook Platform",
+                        "案例：ChatGPT Tasks", "面試應答與總結",
+                    ],
+                    "named_cases": [
+                        "QR Code Generator", "Airbnb Booking",
+                        "Webhook Platform", "ChatGPT Tasks",
+                    ],
+                },
+            },
+        )
+        result = await agent.run(ctx)
+        titles = [s["title"] for s in result["stages"]]
+        self.assertEqual(len(titles), 6)
+        self.assertIn("案例：Airbnb Booking", titles)
+        self.assertIn("案例：ChatGPT Tasks", titles)
+
+    async def test_outline_mode_still_merges_duplicate_topic_stages(self):
+        content = """{
+          "stages": [
+            {"stage_id": 1, "node_id": "1.1", "title": "REST 基礎", "source_chunk_ids": ["a1"], "key_concepts": ["REST"], "prerequisites": [], "estimated_questions": 2, "teaching_goal": "g1"},
+            {"stage_id": 2, "node_id": "1.2", "title": "REST 基礎", "source_chunk_ids": ["b1"], "key_concepts": ["REST", "HTTP"], "prerequisites": [], "estimated_questions": 2, "teaching_goal": "g2"}
+          ],
+          "chunk_roles": {"a1": "core", "b1": "core"},
+          "summary": "s"
+        }"""
+
+        class _Resp:
+            def __init__(self, content):
+                self.content = content
+
+        class _LLM:
+            async def chat(self, messages, system_prompt=None):
+                return _Resp(content)
+
+        agent = _make_agent(_LLM())
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "source_chunks": [
+                    {"chunk_id": "a1", "text": "source A", "order_index": 0, "source_label": "A", "source_index": 0},
+                    {"chunk_id": "b1", "text": "source B", "order_index": 1, "source_label": "B", "source_index": 1},
+                ],
+                "required_outline": {"required_stage_titles": ["REST 基礎"]},
+            },
+        )
+        result = await agent.run(ctx)
+        self.assertEqual(len(result["stages"]), 1)
+        self.assertEqual(result["stages"][0]["source_chunk_ids"], ["a1", "b1"])
+        self.assertEqual(result["stages"][0]["key_concepts"], ["REST", "HTTP"])
+
+
 if __name__ == "__main__":
     unittest.main()

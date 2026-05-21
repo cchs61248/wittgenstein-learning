@@ -44,6 +44,7 @@ class ContentSplitterAgent(BaseAgent):
         data: dict[str, Any],
         max_stages: int,
         db_chunks: dict[str, dict],
+        preserve_thin_stages: bool = False,
     ) -> dict[str, Any]:
         """
         正規化 LLM 輸出：
@@ -117,7 +118,12 @@ class ContentSplitterAgent(BaseAgent):
         if not normalized_stages:
             raise ValueError("內容切割結果缺少有效 stages")
 
-        normalized_stages = self._merge_thin_stages(normalized_stages)
+        if preserve_thin_stages:
+            # 方案 C：outline / repair_plan 已明確要求具名案例拆開。
+            # 這時單一 chunk 支撐多個案例 stage 是合理的；只合併多來源產生的同主題重複 stage。
+            normalized_stages = self._merge_duplicate_topic_stages(normalized_stages)
+        else:
+            normalized_stages = self._merge_thin_stages(normalized_stages)
 
         return {
             "stages": normalized_stages,
@@ -125,18 +131,67 @@ class ContentSplitterAgent(BaseAgent):
             "summary": str(data.get("summary", "")),
         }
 
-    def _merge_thin_stages(self, stages: list[dict]) -> list[dict]:
-        """將 source_chunk_ids < 2 的小型 stage 合併至後繼 stage（最後一個合往前）。"""
-        if len(stages) <= 1:
-            result = stages
-        else:
-            result = self._merge_thin_stages_body(stages)
+    def _renumber_stages(self, stages: list[dict]) -> list[dict]:
+        result = stages
         for j, s in enumerate(result):
             s["stage_id"] = j + 1
             chapter = (j // 3) + 1
             section = (j % 3) + 1
             s["node_id"] = f"{chapter}.{section}"
         return result
+
+    def _merge_thin_stages(self, stages: list[dict]) -> list[dict]:
+        """將 source_chunk_ids < 2 的小型 stage 合併至後繼 stage（最後一個合往前）。"""
+        if len(stages) <= 1:
+            result = stages
+        else:
+            result = self._merge_thin_stages_body(stages)
+        return self._renumber_stages(result)
+
+    def _stage_merge_key(self, stage: dict) -> str:
+        return " ".join(str(stage.get("title", "")).lower().split())
+
+    def _merge_stage_into(self, target: dict, incoming: dict) -> None:
+        existing_ids = set(target.get("source_chunk_ids") or [])
+        new_ids = [
+            cid for cid in (incoming.get("source_chunk_ids") or [])
+            if cid not in existing_ids
+        ]
+        target["source_chunk_ids"] = list(target.get("source_chunk_ids") or []) + new_ids
+
+        existing_chunk_ids = {
+            sc.get("chunk_id") for sc in (target.get("source_chunks") or [])
+        }
+        target["source_chunks"] = list(target.get("source_chunks") or []) + [
+            sc for sc in (incoming.get("source_chunks") or [])
+            if sc.get("chunk_id") not in existing_chunk_ids
+        ]
+        target["key_concepts"] = list(dict.fromkeys(
+            list(target.get("key_concepts") or []) +
+            list(incoming.get("key_concepts") or [])
+        ))
+        target["prerequisites"] = list(dict.fromkeys(
+            list(target.get("prerequisites") or []) +
+            list(incoming.get("prerequisites") or [])
+        ))
+        target["estimated_questions"] = max(
+            int(target.get("estimated_questions", 2) or 2),
+            int(incoming.get("estimated_questions", 2) or 2),
+        )
+
+    def _merge_duplicate_topic_stages(self, stages: list[dict]) -> list[dict]:
+        """合併同標題重複 stage；保留不同具名案例的單 chunk stage。"""
+        result: list[dict] = []
+        by_key: dict[str, dict] = {}
+        for stage in stages:
+            key = self._stage_merge_key(stage)
+            if key and key in by_key:
+                self._merge_stage_into(by_key[key], stage)
+                continue
+            result.append(stage)
+            if key:
+                by_key[key] = stage
+        return self._renumber_stages(result)
 
     def _merge_thin_stages_body(self, stages: list[dict]) -> list[dict]:
         result: list[dict] = []
@@ -180,6 +235,7 @@ class ContentSplitterAgent(BaseAgent):
         raw_text: str,
         max_stages: int,
         db_chunks: dict[str, dict],
+        preserve_thin_stages: bool = False,
     ) -> dict[str, Any]:
         candidate = self._extract_json_candidate(raw_text)
 
@@ -188,7 +244,12 @@ class ContentSplitterAgent(BaseAgent):
                 parsed = json.loads(candidate)
                 if not isinstance(parsed, dict):
                     raise ValueError("回傳 JSON 不是物件")
-                return self._normalize_splitter_output(parsed, max_stages=max_stages, db_chunks=db_chunks)
+                return self._normalize_splitter_output(
+                    parsed,
+                    max_stages=max_stages,
+                    db_chunks=db_chunks,
+                    preserve_thin_stages=preserve_thin_stages,
+                )
             except Exception as e:
                 if attempt == 2:
                     raise
@@ -274,7 +335,12 @@ class ContentSplitterAgent(BaseAgent):
 
         response = await self.llm.chat(self._messages, system_prompt=system)
         self._reset()
-        result = await self._parse_or_repair_json(response.content, max_stages=max_stages, db_chunks=db_chunks)
+        result = await self._parse_or_repair_json(
+            response.content,
+            max_stages=max_stages,
+            db_chunks=db_chunks,
+            preserve_thin_stages=bool(required_outline or repair_plan_struct),
+        )
 
         self._log_end(ctx, t0, {"stages_count": len(result.get("stages", []))})
         return result
