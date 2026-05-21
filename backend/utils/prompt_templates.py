@@ -649,6 +649,12 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
         - next_stage：下一節即將教、explanation 必須「一句帶過、不可詳述」
         - forbidden_future：再下下節以後才教、explanation 可以「完全不提或一句帶過」皆可
 
+      **補強模式（remediation）反向 coverage 縮小範圍**：
+      若 user message 提供 `stage_kind=remediation` 與 `must_reinforce_concepts` 清單，
+      explanation 模式的反向 coverage **只**檢查 must_reinforce_concepts 對應的教學必要元素；
+      source_chunks 中與其他已掌握概念相關的並列方案 / 數據 / 決策框架 **一律豁免**，
+      不因「未展開非弱項概念」判 aligned=false（與 Teacher 補強模式一致）。
+
 • content_type=questions（出題驗證）：嚴格對齊講解模式。
   對齊基準：full_explanation（教學文章全文）為唯一範圍。
   - 每題的測試概念（key_concepts_tested）、題幹文字（text）、選項或干擾項中的關鍵詞，

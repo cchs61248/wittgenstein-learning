@@ -43,6 +43,8 @@ class DriftVerifierAgent(BaseAgent):
         full_explanation: str = payload.get("full_explanation") or ""
         next_stage_concepts: list[str] = payload.get("next_stage_concepts") or []
         forbidden_future_concepts: list[str] = payload.get("forbidden_future_concepts") or []
+        stage_kind: str = (payload.get("stage_kind") or "").strip()
+        must_reinforce_concepts: list[str] = payload.get("must_reinforce_concepts") or []
 
         cited_chunks = self._extract_cited_chunks(candidate_text, source_chunks)
 
@@ -67,6 +69,14 @@ class DriftVerifierAgent(BaseAgent):
             else ""
         )
 
+        remediation_section = ""
+        if content_type == "explanation" and stage_kind == "remediation" and must_reinforce_concepts:
+            remediation_section = (
+                f"\n\nstage_kind=remediation；must_reinforce_concepts（補強模式反向 coverage "
+                f"僅檢查以下弱項，其他 chunk 教學必要元素豁免）："
+                f"{json.dumps(must_reinforce_concepts, ensure_ascii=False)}"
+            )
+
         self._add_message(
             MessageRole.USER,
             f"content_type={content_type}\n\n"
@@ -75,7 +85,8 @@ class DriftVerifierAgent(BaseAgent):
             f"candidate_output={candidate_text}"
             f"{explanation_section}"
             f"{next_stage_section}"
-            f"{forbidden_future_section}",
+            f"{forbidden_future_section}"
+            f"{remediation_section}",
         )
         response = await self.llm.chat(self._messages, system_prompt=SYSTEM_PROMPTS["drift_verifier"])
         self._reset()

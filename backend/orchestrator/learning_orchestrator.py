@@ -24,6 +24,8 @@ from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..tools.web_search import search_web
 from .context_builder import build_adaptive_context
 from .debounced_writer import DebouncedExplanationWriter
+from .stage_boundary import compute_stage_boundary_lists
+from .qg_payload import build_qg_task_payload
 from ..utils.teaching_intent import normalize_teaching_intent
 
 WSEmitter = Callable[[dict], Awaitable[None]]
@@ -232,33 +234,17 @@ class LearningOrchestrator:
         candidate_text: str,
         full_explanation: str = "",
         stages: list[dict] | None = None,
+        adaptive_ctx: dict | None = None,
     ) -> dict:
-        # 若 caller 傳了 stages，算當前 stage 的 next_stage_concepts 與
-        # forbidden_future_concepts 給 DriftVerifier 作為反向 coverage 豁免清單：
-        #   - next_stage：下一節即將教、一句帶過豁免（既有行為）
-        #   - forbidden_future：下下節以後才教、整段豁免（新增、對應 Teacher 規則 11）
-        # forbidden_future 邏輯與 context_builder.py L73-78 一致、截前 10 筆避免 prompt 膨脹
         next_stage_concepts: list[str] = []
         forbidden_future_concepts: list[str] = []
         if stages:
-            key_concepts_here = set(stage.get("key_concepts") or [])
-            current_idx = next(
-                (i for i, s in enumerate(stages) if s.get("stage_id") == stage.get("stage_id")),
-                -1,
+            next_stage_concepts, forbidden_future_concepts = compute_stage_boundary_lists(
+                stage, stages
             )
-            if 0 <= current_idx < len(stages) - 1:
-                next_stage_concepts = [
-                    c for c in (stages[current_idx + 1].get("key_concepts") or [])
-                    if c not in key_concepts_here
-                ]
-            if 0 <= current_idx < len(stages) - 2:
-                next_stage_set = set(next_stage_concepts)
-                forbidden_future_concepts = list(dict.fromkeys([
-                    c
-                    for s in stages[current_idx + 2:]
-                    for c in s.get("key_concepts", [])
-                    if c not in key_concepts_here and c not in next_stage_set
-                ]))[:10]
+        requirements = (adaptive_ctx or {}).get("next_lesson_requirements") or {}
+        must_reinforce = requirements.get("must_reinforce") or []
+        stage_kind = (stage.get("kind") or "").strip() or None
         verify_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -269,6 +255,8 @@ class LearningOrchestrator:
                 "full_explanation": full_explanation,
                 "next_stage_concepts": next_stage_concepts,
                 "forbidden_future_concepts": forbidden_future_concepts,
+                "stage_kind": stage_kind,
+                "must_reinforce_concepts": must_reinforce,
             },
         )
         return await self.drift_verifier.run(verify_ctx)
@@ -618,12 +606,21 @@ class LearningOrchestrator:
                 try:
                     vresult = await self.splitter_verifier.run(verify_ctx)
                 except Exception as e:
-                    _log.warning(
-                        "splitter_verifier failed (fail-safe, accepting splitter stages)  "
+                    _log.error(
+                        "splitter_verifier failed (fail-closed, treating as not aligned)  "
                         "session=%s  err=%s",
                         session_id, e,
                     )
-                    break
+                    vresult = {
+                        "aligned": False,
+                        "missing_options": [],
+                        "issue_chunk_ids": [],
+                        "reason": f"verifier_exception: {e}",
+                    }
+                    if splitter_attempts >= MAX_SPLITTER_VERIFY_RETRIES:
+                        break
+                    splitter_attempts += 1
+                    continue
 
                 if vresult["aligned"]:
                     _log.info(
@@ -668,7 +665,7 @@ class LearningOrchestrator:
                     break
 
         # ── 2.5 ConceptCanonicalize（splitter 後立即跑、寫回 stages）
-        source_signature = "|".join(sorted(source_file_ids or []))
+        source_signature = content_hash
         new_concepts = sorted({
             c for s in stages for c in s.get("key_concepts", [])
         })
@@ -692,9 +689,15 @@ class LearningOrchestrator:
                 stats = {"mapped": 0, "new": 0, "unsure": 0}
                 for m in canon_result["mappings"]:
                     stats[m["decision"]] = stats.get(m["decision"], 0) + 1
+                unsure_names = [
+                    m["new_name"] for m in canon_result["mappings"]
+                    if m.get("decision") == "unsure"
+                ]
                 _log.info(
-                    "canonicalize done  session=%s  mapped=%d  new=%d  unsure=%d",
-                    session_id, stats["mapped"], stats["new"], stats["unsure"],
+                    "canonicalize done  session=%s  sig=%s  mapped=%d  new=%d  unsure=%d%s",
+                    session_id, source_signature[:12] if source_signature else "?",
+                    stats["mapped"], stats["new"], stats["unsure"],
+                    f"  unsure_sample={unsure_names[:5]}" if unsure_names else "",
                 )
             except Exception as e:
                 _log.warning(
@@ -888,6 +891,7 @@ class LearningOrchestrator:
                 content_type="explanation",
                 candidate_text=full_explanation,
                 stages=stages,
+                adaptive_ctx=adaptive_ctx,
             )
             if not explain_verify.get("aligned", False):
                 guidance = explain_verify.get("revision_hint") or "請僅依據 source_chunks 重寫，避免教材外推。"
@@ -909,6 +913,22 @@ class LearningOrchestrator:
                     full_explanation += chunk
                     await writer.update(full_explanation)
                 explanation_rewritten = True
+                post_rewrite_verify = await self._verify_grounding(
+                    session_id=session_id,
+                    user_id=user_id,
+                    stage=stage,
+                    content_type="explanation",
+                    candidate_text=full_explanation,
+                    stages=stages,
+                    adaptive_ctx=adaptive_ctx,
+                )
+                if not post_rewrite_verify.get("aligned", False):
+                    _log.warning(
+                        "Explanation still not aligned after rewrite  session=%s  "
+                        "stage_id=%s  issues=%s",
+                        session_id, stage.get("stage_id"),
+                        post_rewrite_verify.get("issues"),
+                    )
             if explanation_rewritten:
                 await emit({"type": "explanation_reset", "payload": {}})
                 await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
@@ -927,27 +947,17 @@ class LearningOrchestrator:
         wm.current_teaching_intent = teaching_intent
 
         # 4. 生成問題
-        mastery_map_for_qg = (adaptive_ctx.get("learner_state") or {}).get("mastery_map") or {}
-        must_reinforce_for_qg = (
-            (adaptive_ctx.get("next_lesson_requirements") or {}).get("must_reinforce", [])
-        )
         q_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
-            task_payload={
-                "stage": stage,
-                "teaching_intent": teaching_intent,
-                "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
-                "full_explanation": full_explanation,
-                "mastery_map": mastery_map_for_qg,
-                "must_reinforce": must_reinforce_for_qg,
-                "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
-                if question_mode == "multiple_choice"
-                else stage.get("estimated_questions", 2),
-                "attempt_number": 1,
-                "previous_question_ids": [],
-                "question_mode": question_mode,
-            },
+            task_payload=build_qg_task_payload(
+                stage=stage,
+                full_explanation=full_explanation,
+                teaching_intent=teaching_intent,
+                adaptive_ctx=adaptive_ctx,
+                question_mode=question_mode,
+                attempt_number=1,
+            ),
         )
         q_result = await self.questioner.run(q_ctx)
         questions: list[dict] = q_result.get("questions", [])
@@ -959,27 +969,23 @@ class LearningOrchestrator:
             candidate_text=json.dumps(questions, ensure_ascii=False),
             full_explanation=full_explanation,
             stages=stages,
+            adaptive_ctx=adaptive_ctx,
         )
         if not questions_verify.get("aligned", False):
             retry_q_ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
-                task_payload={
-                    "stage": {
-                        **stage,
-                        "content": stage.get("content", "")
-                        + "\n\n" + self._build_question_retry_guidance(questions_verify),
-                    },
-                    "full_explanation": full_explanation,
-                    "mastery_map": mastery_map_for_qg,
-                    "must_reinforce": must_reinforce_for_qg,
-                    "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
-                    if question_mode == "multiple_choice"
-                    else stage.get("estimated_questions", 2),
-                    "attempt_number": 1,
-                    "previous_question_ids": [],
-                    "question_mode": question_mode,
-                },
+                task_payload=build_qg_task_payload(
+                    stage=stage,
+                    full_explanation=full_explanation,
+                    teaching_intent=teaching_intent,
+                    adaptive_ctx=adaptive_ctx,
+                    question_mode=question_mode,
+                    attempt_number=1,
+                    stage_content_suffix=(
+                        "\n\n" + self._build_question_retry_guidance(questions_verify)
+                    ),
+                ),
             )
             q_result = await self.questioner.run(retry_q_ctx)
             questions = q_result.get("questions", [])
@@ -989,6 +995,7 @@ class LearningOrchestrator:
                 candidate_text=json.dumps(questions, ensure_ascii=False),
                 full_explanation=full_explanation,
                 stages=stages,
+                adaptive_ctx=adaptive_ctx,
             )
             if not post_retry_verify.get("aligned", False):
                 unsupported = post_retry_verify.get("unsupported_claims") or []
@@ -1421,19 +1428,29 @@ class LearningOrchestrator:
 
             prev_q_ids = [t.question_id for t in wm.stage_turns]
             prev_q_texts = [t.question_text for t in wm.stage_turns]
+            retry_adaptive_ctx = await build_adaptive_context(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
+                current_attempt=wm.current_attempt,
+                stages=stages,
+            )
+            retry_teaching_intent = normalize_teaching_intent(
+                wm.current_teaching_intent, stage
+            )
             q_ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
-                task_payload={
-                    "stage": stage,
-                    "full_explanation": wm.current_explanation,
-                    "mastery_map": mastery_map,
-                    "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
-                    "attempt_number": wm.current_attempt,
-                    "previous_question_ids": prev_q_ids,
-                    "previous_question_texts": prev_q_texts,
-                    "question_mode": wm.question_mode,
-                },
+                task_payload=build_qg_task_payload(
+                    stage=stage,
+                    full_explanation=wm.current_explanation,
+                    teaching_intent=retry_teaching_intent,
+                    adaptive_ctx=retry_adaptive_ctx,
+                    question_mode=wm.question_mode,
+                    attempt_number=wm.current_attempt,
+                    previous_question_ids=prev_q_ids,
+                    previous_question_texts=prev_q_texts,
+                ),
             )
             q_result = await self.questioner.run(q_ctx)
             questions: list[dict] = q_result.get("questions", [])
@@ -1445,25 +1462,25 @@ class LearningOrchestrator:
                 candidate_text=json.dumps(questions, ensure_ascii=False),
                 full_explanation=wm.current_explanation,
                 stages=stages,
+                adaptive_ctx=retry_adaptive_ctx,
             )
             if not questions_verify.get("aligned", False):
                 retry_q_ctx = AgentContext(
                     session_id=session_id,
                     user_id=user_id,
-                    task_payload={
-                        "stage": {
-                            **stage,
-                            "content": stage.get("content", "")
-                            + "\n\n" + self._build_question_retry_guidance(questions_verify),
-                        },
-                        "full_explanation": wm.current_explanation,
-                        "mastery_map": mastery_map,
-                        "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
-                        "attempt_number": wm.current_attempt,
-                        "previous_question_ids": prev_q_ids,
-                        "previous_question_texts": prev_q_texts,
-                        "question_mode": wm.question_mode,
-                    },
+                    task_payload=build_qg_task_payload(
+                        stage=stage,
+                        full_explanation=wm.current_explanation,
+                        teaching_intent=retry_teaching_intent,
+                        adaptive_ctx=retry_adaptive_ctx,
+                        question_mode=wm.question_mode,
+                        attempt_number=wm.current_attempt,
+                        previous_question_ids=prev_q_ids,
+                        previous_question_texts=prev_q_texts,
+                        stage_content_suffix=(
+                            "\n\n" + self._build_question_retry_guidance(questions_verify)
+                        ),
+                    ),
                 )
                 q_result = await self.questioner.run(retry_q_ctx)
                 questions = q_result.get("questions", [])
@@ -1473,6 +1490,7 @@ class LearningOrchestrator:
                     candidate_text=json.dumps(questions, ensure_ascii=False),
                     full_explanation=wm.current_explanation,
                     stages=stages,
+                    adaptive_ctx=retry_adaptive_ctx,
                 )
                 if not post_retry_verify.get("aligned", False):
                     unsupported = post_retry_verify.get("unsupported_claims") or []
@@ -1951,27 +1969,17 @@ class LearningOrchestrator:
                 await self.teacher.extract_teaching_intent(teacher_only, stage), stage
             )
             wm.current_teaching_intent = teaching_intent
-            mastery_map_for_qg = (adaptive_ctx.get("learner_state") or {}).get("mastery_map") or {}
-            must_reinforce_for_qg = (
-                (adaptive_ctx.get("next_lesson_requirements") or {}).get("must_reinforce", [])
-            )
             q_ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
-                task_payload={
-                    "stage": stage,
-                    "teaching_intent": teaching_intent,
-                    "allowed_evidence": adaptive_ctx.get("allowed_evidence", []),
-                    "full_explanation": teacher_only,
-                    "mastery_map": mastery_map_for_qg,
-                    "must_reinforce": must_reinforce_for_qg,
-                    "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
-                    if wm.question_mode == "multiple_choice"
-                    else stage.get("estimated_questions", 2),
-                    "attempt_number": 1,
-                    "previous_question_ids": [],
-                    "question_mode": wm.question_mode,
-                },
+                task_payload=build_qg_task_payload(
+                    stage=stage,
+                    full_explanation=teacher_only,
+                    teaching_intent=teaching_intent,
+                    adaptive_ctx=adaptive_ctx,
+                    question_mode=wm.question_mode,
+                    attempt_number=wm.current_attempt,
+                ),
             )
             q_result = await self.questioner.run(q_ctx)
             questions = q_result.get("questions", [])
@@ -1983,27 +1991,23 @@ class LearningOrchestrator:
                 candidate_text=json.dumps(questions, ensure_ascii=False),
                 full_explanation=teacher_only,
                 stages=stages,
+                adaptive_ctx=adaptive_ctx,
             )
             if not questions_verify.get("aligned", False):
                 retry_q_ctx = AgentContext(
                     session_id=session_id,
                     user_id=user_id,
-                    task_payload={
-                        "stage": {
-                            **stage,
-                            "content": stage.get("content", "")
-                            + "\n\n" + self._build_question_retry_guidance(questions_verify),
-                        },
-                        "full_explanation": teacher_only,
-                        "mastery_map": mastery_map_for_qg,
-                        "must_reinforce": must_reinforce_for_qg,
-                        "num_questions": max(4, stage.get("estimated_questions", 2) * 2)
-                        if wm.question_mode == "multiple_choice"
-                        else stage.get("estimated_questions", 2),
-                        "attempt_number": 1,
-                        "previous_question_ids": [],
-                        "question_mode": wm.question_mode,
-                    },
+                    task_payload=build_qg_task_payload(
+                        stage=stage,
+                        full_explanation=teacher_only,
+                        teaching_intent=teaching_intent,
+                        adaptive_ctx=adaptive_ctx,
+                        question_mode=wm.question_mode,
+                        attempt_number=wm.current_attempt,
+                        stage_content_suffix=(
+                            "\n\n" + self._build_question_retry_guidance(questions_verify)
+                        ),
+                    ),
                 )
                 q_result = await self.questioner.run(retry_q_ctx)
                 questions = q_result.get("questions", [])
@@ -2013,6 +2017,7 @@ class LearningOrchestrator:
                     candidate_text=json.dumps(questions, ensure_ascii=False),
                     full_explanation=teacher_only,
                     stages=stages,
+                    adaptive_ctx=adaptive_ctx,
                 )
                 if not post_retry_verify.get("aligned", False):
                     unsupported = post_retry_verify.get("unsupported_claims") or []
@@ -2148,22 +2153,29 @@ class LearningOrchestrator:
                 # retry 題目尚未生成完畢就被 resume 打斷 → 重新產出當輪題目
                 prev_q_ids = [t.question_id for t in wm.stage_turns]
                 prev_q_texts = [t.question_text for t in wm.stage_turns]
-                mastery_map_for_qg = await longterm_memory.get_concept_mastery_map(
-                    user_id, stage.get("key_concepts", [])
+                race_adaptive_ctx = await build_adaptive_context(
+                    session_id=session_id,
+                    user_id=user_id,
+                    stage=stage,
+                    current_attempt=wm.current_attempt,
+                    stages=stages,
+                )
+                race_teaching_intent = normalize_teaching_intent(
+                    wm.current_teaching_intent, stage
                 )
                 q_ctx = AgentContext(
                     session_id=session_id,
                     user_id=user_id,
-                    task_payload={
-                        "stage": stage,
-                        "full_explanation": wm.current_explanation,
-                        "mastery_map": mastery_map_for_qg,
-                        "num_questions": 4 if wm.question_mode == "multiple_choice" else 2,
-                        "attempt_number": wm.current_attempt,
-                        "previous_question_ids": prev_q_ids,
-                        "previous_question_texts": prev_q_texts,
-                        "question_mode": wm.question_mode,
-                    },
+                    task_payload=build_qg_task_payload(
+                        stage=stage,
+                        full_explanation=wm.current_explanation,
+                        teaching_intent=race_teaching_intent,
+                        adaptive_ctx=race_adaptive_ctx,
+                        question_mode=wm.question_mode,
+                        attempt_number=wm.current_attempt,
+                        previous_question_ids=prev_q_ids,
+                        previous_question_texts=prev_q_texts,
+                    ),
                 )
                 q_result = await self.questioner.run(q_ctx)
                 new_questions: list[dict] = q_result.get("questions", [])
