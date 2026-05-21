@@ -2705,6 +2705,44 @@ textarea:disabled {
   box-shadow: var(--shadow-xs);
 }
 
+/* ── 啟動會話失敗（方案 C：verifier 拒絕等） ── */
+.start-session-error-banner {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  max-width: min(560px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--red-border, #f5c2c7);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+.start-session-error-banner__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--red, #c0392b);
+}
+
+.start-session-error-banner__message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.start-session-error-banner__dismiss {
+  align-self: flex-end;
+  font-size: 13px;
+}
+
 /* 回顧舊章時：提示新章仍在背景生成（不阻擋閱讀） */
 .explanation-bg-gen-banner {
   font-size: 13px;

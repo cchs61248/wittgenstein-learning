@@ -94,6 +94,7 @@ export default function App() {
 
   const [bookshelf, setBookshelf] = useState<BookEntry[]>([]);
   const [showUpload, setShowUpload] = useState(false);
+  const [startSessionError, setStartSessionError] = useState<string | null>(null);
   const [kickedMessage, setKickedMessage] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<'learn' | 'stats'>(() => readInitialChromeFromStorage().activePage);
   const [isStageSidebarCollapsed, setIsStageSidebarCollapsed] = useState(
@@ -692,6 +693,7 @@ export default function App() {
         // resume 或啟動失敗且尚未進入任何 stage，退回上傳畫面
         if (!stagesRef.current.length) {
           setIsWaitingForCurrentGeneration(false);
+          setStartSessionError(msg.payload.message);
           setShowUpload(true);
         }
         break;
@@ -778,6 +780,8 @@ export default function App() {
             bgWsRef.current = null;
             bgSessionIdRef.current = null;
             setBgPendingMap(null);
+            setStartSessionError(msg.payload.message);
+            setShowUpload(true);
             // 移除樂觀佔位
             setBookshelf((prev) => {
               const n = prev.filter((b) => b.sessionId !== newSid);
@@ -830,6 +834,7 @@ export default function App() {
     localStorage.setItem('wl_session_id', newSid); // 讓重整後能定位到正確 session
     // 立刻進入「分析教材」loading，不等 session_generating／重整後 REST
     setIsWaitingForCurrentGeneration(true);
+    setStartSessionError(null);
 
     const ws = new LearningWebSocket(newSid, token, {
       onMessage: (msg) => handleMessageRef.current(msg),
@@ -1223,8 +1228,32 @@ export default function App() {
         </main>
       </div>
 
+      {startSessionError && showUpload && !pendingMap && (
+        <div
+          className="start-session-error-banner"
+          role="alert"
+          aria-live="assertive"
+        >
+          <p className="start-session-error-banner__title">教材分析失敗</p>
+          <p className="start-session-error-banner__message">{startSessionError}</p>
+          <button
+            type="button"
+            className="btn-ghost start-session-error-banner__dismiss"
+            onClick={() => setStartSessionError(null)}
+          >
+            關閉
+          </button>
+        </div>
+      )}
+
       {showUpload && !pendingMap && (
-        <UploadModal onStart={handleStart} onClose={() => setShowUpload(false)} />
+        <UploadModal
+          onStart={handleStart}
+          onClose={() => {
+            setShowUpload(false);
+            setStartSessionError(null);
+          }}
+        />
       )}
 
       {pendingMap && (
