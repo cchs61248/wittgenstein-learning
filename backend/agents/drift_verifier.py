@@ -42,6 +42,7 @@ class DriftVerifierAgent(BaseAgent):
         candidate_text: str = payload.get("candidate_text", "")
         full_explanation: str = payload.get("full_explanation") or ""
         next_stage_concepts: list[str] = payload.get("next_stage_concepts") or []
+        forbidden_future_concepts: list[str] = payload.get("forbidden_future_concepts") or []
 
         cited_chunks = self._extract_cited_chunks(candidate_text, source_chunks)
 
@@ -58,6 +59,14 @@ class DriftVerifierAgent(BaseAgent):
             else ""
         )
 
+        forbidden_future_section = (
+            f"\n\nforbidden_future_concepts（再下下節以後的概念，source_chunks 中"
+            f"語意對應的段落整段豁免、不計入 coverage 必要元素）："
+            f"{json.dumps(forbidden_future_concepts, ensure_ascii=False)}"
+            if forbidden_future_concepts
+            else ""
+        )
+
         self._add_message(
             MessageRole.USER,
             f"content_type={content_type}\n\n"
@@ -65,7 +74,8 @@ class DriftVerifierAgent(BaseAgent):
             f"cited_chunks_lookup={json.dumps(cited_chunks, ensure_ascii=False)}\n\n"
             f"candidate_output={candidate_text}"
             f"{explanation_section}"
-            f"{next_stage_section}",
+            f"{next_stage_section}"
+            f"{forbidden_future_section}",
         )
         response = await self.llm.chat(self._messages, system_prompt=SYSTEM_PROMPTS["drift_verifier"])
         self._reset()

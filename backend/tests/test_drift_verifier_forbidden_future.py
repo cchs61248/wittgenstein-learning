@@ -38,5 +38,96 @@ class TestDriftVerifierPromptHasForbiddenFutureExemption(unittest.TestCase):
         self.assertIn("aligned=true", prompt)
 
 
+# ── L2: user message 注入 ──────────────────────────────────────
+
+def _capture_llm():
+    """製造一個 mock LLM、記錄收到的 messages 供斷言。"""
+    captured = {"messages": None}
+
+    class _Resp:
+        content = '{"aligned": true, "claim_checks": [], "issues": []}'
+
+    class _LLM:
+        async def chat(self, messages, system_prompt=None):
+            captured["messages"] = messages
+            return _Resp()
+
+    return _LLM(), captured
+
+
+def _make_agent(llm):
+    agent = DriftVerifierAgent.__new__(DriftVerifierAgent)
+    agent.llm = llm
+    agent._messages = []
+    agent.token_counter = None
+    return agent
+
+
+class TestDriftVerifierUserMsgContainsForbiddenFuture(unittest.IsolatedAsyncioTestCase):
+    async def test_user_msg_contains_forbidden_future_when_provided(self):
+        llm, captured = _capture_llm()
+        agent = _make_agent(llm)
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "content_type": "explanation",
+                "source_chunks": [{"chunk_id": "chunk_0021", "text": "..."}],
+                "candidate_text": "test",
+                "full_explanation": "",
+                "next_stage_concepts": ["中信融資型房貸"],
+                "forbidden_future_concepts": ["元大證金質押", "維持率與斷頭線"],
+            },
+        )
+        await agent.run(ctx)
+        user_msg = "\n".join(m.content for m in captured["messages"])
+        # 必須含 forbidden_future_concepts 段
+        self.assertIn("forbidden_future_concepts", user_msg)
+        # 必須含具體清單字面（JSON 形式）
+        self.assertIn("元大證金質押", user_msg)
+        self.assertIn("維持率與斷頭線", user_msg)
+        # 既有 next_stage_concepts 段不能丟
+        self.assertIn("next_stage_concepts", user_msg)
+        self.assertIn("中信融資型房貸", user_msg)
+
+    async def test_user_msg_skips_forbidden_future_when_empty(self):
+        """forbidden_future_concepts=[] 時不應出現該段（保持 prompt 精簡）。"""
+        llm, captured = _capture_llm()
+        agent = _make_agent(llm)
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "content_type": "explanation",
+                "source_chunks": [],
+                "candidate_text": "test",
+                "full_explanation": "",
+                "next_stage_concepts": [],
+                "forbidden_future_concepts": [],
+            },
+        )
+        await agent.run(ctx)
+        user_msg = "\n".join(m.content for m in captured["messages"])
+        # 空清單不應注入該段
+        self.assertNotIn("forbidden_future_concepts（", user_msg)
+
+    async def test_user_msg_skips_forbidden_future_when_not_in_payload(self):
+        """payload 完全沒此 key（既有 caller 不傳）時、不應拋錯也不應注入該段。"""
+        llm, captured = _capture_llm()
+        agent = _make_agent(llm)
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "content_type": "explanation",
+                "source_chunks": [],
+                "candidate_text": "test",
+                "full_explanation": "",
+                # 故意不傳 forbidden_future_concepts、next_stage_concepts
+            },
+        )
+        # 不應 raise
+        await agent.run(ctx)
+        user_msg = "\n".join(m.content for m in captured["messages"])
+        self.assertNotIn("forbidden_future_concepts（", user_msg)
+
+
 if __name__ == "__main__":
     unittest.main()
