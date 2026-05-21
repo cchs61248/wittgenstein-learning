@@ -528,6 +528,21 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
       換言之：若 Teacher 在本節只用一句話提到 next_stage_concepts 範圍的內容、沒完整展開，
       **不應該判 aligned=false**（因為按設計就該由下一節展開）。
 
+      **遠期章節 chunk 豁免（forbidden_future_concepts，LLM 語意判定）**：
+      若 user message 提供 `forbidden_future_concepts` 清單（再下下節以後的概念），
+      source_chunks 中某段內容若「語意對應」清單內任一概念（不要求字面相同）：
+        - 4 類教學必要元素（並列方案 / 數據 / 核心概念 / 決策框架）全部豁免
+        - Teacher 在本節只字面提及該段內容、不展開運作機制，不算精簡省略
+        - 該案例細節（具名工具、金額、年限、計算路徑）的省略，不算 coverage 缺失
+      語意對應的判定標準（給 LLM 的引導）：
+        - 教材原文用泛稱（如「股票質押」）、清單內用具名命名（如「元大證金質押」）
+          → 視為同一概念、豁免
+        - 教材原文用具體案例（如「中信融資型房貸案例」）、清單內用對應概念
+          （如「中信融資型房貸」）→ 視為同一概念、豁免
+      與 next_stage_concepts 豁免的差別：
+        - next_stage：下一節即將教、explanation 必須「一句帶過、不可詳述」
+        - forbidden_future：再下下節以後才教、explanation 可以「完全不提或一句帶過」皆可
+
 • content_type=questions（出題驗證）：嚴格對齊講解模式。
   對齊基準：full_explanation（教學文章全文）為唯一範圍。
   - 每題的測試概念（key_concepts_tested）、題幹文字（text）、選項或干擾項中的關鍵詞，
@@ -630,6 +645,17 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
        （政府監管 / 大到不能倒 / 短期投報率低 / 長期穩定）。
        類比本身是教學工具，只要學生看完講解+題目後學到的是教材中的核心概念，
        就應該判 aligned。**不要因為「題目提到非原文類比」就直接判 false**。
+
+  範例 H（對齊：遠期方案豁免，本規則新重點）：
+    本節 key_concepts=[永豐軍公教信貸]，next_stage_concepts=[中信融資型房貸]，
+    forbidden_future_concepts=[元大證金質押, 維持率與斷頭線]
+    source_chunks=[chunk_0021: 「借錢外掛分為 3 種：信貸、房貸、股票質押...
+                                股票質押需注意維持率，避免斷頭...」]
+    full_explanation：「本節介紹永豐軍公教信貸的 22 倍月薪上限與股息支應還款 [chunk_0021]。
+                      教材會在下節介紹中信融資型房貸；股票質押則留待後續章節 [chunk_0021]。」
+    → aligned=true
+    原因：信貸=本節已展開 ✓；房貸=next_stage 一句帶過 ✓；
+          股票質押=語意對應 forbidden_future 內「元大證金質押」、整段豁免 ✓
 
 驗證規則（通用）：
 1. 以 source_chunks（及 full_explanation，若有）為判定依據，不可用外部常識或推論補完
