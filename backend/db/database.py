@@ -211,6 +211,70 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
+    # Migration 018：concept_mastery 唯一鍵改為 (user_id, source_signature, concept_name)
+    async with _connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='concept_mastery_scoped'"
+    ) as cur:
+        already = await cur.fetchone()
+    if not already:
+        await _connection.execute(
+            """CREATE TABLE concept_mastery_scoped (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(user_id),
+                concept_name TEXT NOT NULL,
+                mastery_score REAL DEFAULT 0.0,
+                total_exposures INTEGER DEFAULT 0,
+                confusion_patterns TEXT DEFAULT '[]',
+                successful_analogies TEXT DEFAULT '[]',
+                last_tested TIMESTAMP,
+                source_signature TEXT,
+                UNIQUE(user_id, source_signature, concept_name)
+            )"""
+        )
+        async with _connection.execute("SELECT * FROM concept_mastery") as cur:
+            old_rows = await cur.fetchall()
+        merged: dict[tuple, dict] = {}
+        for row in old_rows:
+            sig = row["source_signature"] if "source_signature" in row.keys() else None
+            key = (row["user_id"], sig, row["concept_name"])
+            if key not in merged:
+                merged[key] = dict(row)
+                continue
+            prev = merged[key]
+            prev_score = float(prev["mastery_score"] or 0)
+            new_score = float(row["mastery_score"] or 0)
+            prev["mastery_score"] = 0.7 * prev_score + 0.3 * new_score
+            prev["total_exposures"] = int(prev["total_exposures"] or 0) + int(
+                row["total_exposures"] or 0
+            )
+            if str(row["last_tested"] or "") > str(prev["last_tested"] or ""):
+                prev["last_tested"] = row["last_tested"]
+        for rec in merged.values():
+            await _connection.execute(
+                """INSERT INTO concept_mastery_scoped
+                   (user_id, concept_name, mastery_score, total_exposures, confusion_patterns,
+                    successful_analogies, last_tested, source_signature)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    rec["user_id"],
+                    rec["concept_name"],
+                    rec["mastery_score"],
+                    rec["total_exposures"],
+                    rec["confusion_patterns"],
+                    rec["successful_analogies"],
+                    rec["last_tested"],
+                    rec.get("source_signature"),
+                ),
+            )
+        await _connection.execute("DROP TABLE concept_mastery")
+        await _connection.execute(
+            "ALTER TABLE concept_mastery_scoped RENAME TO concept_mastery"
+        )
+        await _connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_concept_mastery_user ON concept_mastery(user_id)"
+        )
+        await _connection.commit()
+
 
 async def close_db() -> None:
     global _connection

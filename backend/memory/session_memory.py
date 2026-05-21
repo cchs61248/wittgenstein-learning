@@ -31,20 +31,26 @@ async def get_session(session_id: str) -> Optional[dict]:
 async def get_source_signature(session_id: str) -> str | None:
     """回傳 session 的教材出處 signature，用於跨教材 mastery 隔離。
 
-    signature = sorted(source_file_ids) join '|'；空 list / 找不到 session → None。
-    舊資料（migration 015 前建立的 session）source_file_ids_json 可能不存在或為空，
-    回傳 None 表示「未知出處」，QG 端會 fallback 到不過濾的舊行為。
+    優先使用 content_hash（同教材重傳 file_id 變了仍穩定）；
+    若無 content_hash 則 fallback 至 sorted(source_file_ids) join '|'（legacy）。
+    皆無 → None（QG 退回不過濾的 legacy 行為）。
     """
     db = await get_db()
     async with db.execute(
-        "SELECT source_file_ids_json FROM sessions WHERE session_id = ?",
+        "SELECT content_hash, source_file_ids_json FROM sessions WHERE session_id = ?",
         (session_id,),
     ) as cur:
         row = await cur.fetchone()
-    if not row or not row[0]:
+    if not row:
+        return None
+    content_hash = (row[0] or "").strip() if row[0] is not None else ""
+    if content_hash:
+        return content_hash
+    raw_ids = row[1] if len(row) > 1 else None
+    if not raw_ids:
         return None
     try:
-        file_ids = json.loads(row[0])
+        file_ids = json.loads(raw_ids)
     except Exception:
         return None
     if not isinstance(file_ids, list) or not file_ids:

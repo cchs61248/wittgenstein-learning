@@ -84,15 +84,23 @@ async def get_misconceptions(user_id: str, concepts: list[str]) -> list[dict]:
     return result
 
 
-async def get_concept_mastery_map(user_id: str, concepts: list[str]) -> dict[str, float]:
+async def get_concept_mastery_map(
+    user_id: str,
+    concepts: list[str],
+    source_signature: str | None = None,
+) -> dict[str, float]:
     if not concepts:
         return {}
     db = await get_db()
     placeholders = ",".join("?" for _ in concepts)
-    params = [user_id, *concepts]
+    params: list = [user_id, *concepts]
+    sig_clause = ""
+    if source_signature is not None:
+        sig_clause = " AND COALESCE(source_signature, '') = ?"
+        params.append(source_signature)
     async with db.execute(
         f"""SELECT concept_name, mastery_score FROM concept_mastery
-            WHERE user_id = ? AND concept_name IN ({placeholders})""",
+            WHERE user_id = ? AND concept_name IN ({placeholders}){sig_clause}""",
         params,
     ) as cur:
         rows = await cur.fetchall()
@@ -179,12 +187,29 @@ async def update_concept_mastery(
     source_signature: str | None = None,
 ) -> None:
     db = await get_db()
-    async with db.execute(
-        """SELECT mastery_score, total_exposures, confusion_patterns, successful_analogies
-           FROM concept_mastery WHERE user_id = ? AND concept_name = ?""",
-        (user_id, concept_name),
-    ) as cur:
+    sig_key = (source_signature or "").strip()
+    if sig_key:
+        lookup_sql = (
+            """SELECT mastery_score, total_exposures, confusion_patterns, successful_analogies,
+                      source_signature
+               FROM concept_mastery
+               WHERE user_id = ? AND concept_name = ? AND COALESCE(source_signature, '') = ?"""
+        )
+        lookup_params = (user_id, concept_name, sig_key)
+    else:
+        # Legacy caller 未傳 signature：以 (user, concept) 找第一筆，不覆蓋既有出處標記
+        lookup_sql = (
+            """SELECT mastery_score, total_exposures, confusion_patterns, successful_analogies,
+                      source_signature
+               FROM concept_mastery
+               WHERE user_id = ? AND concept_name = ?
+               ORDER BY last_tested DESC LIMIT 1"""
+        )
+        lookup_params = (user_id, concept_name)
+    async with db.execute(lookup_sql, lookup_params) as cur:
         row = await cur.fetchone()
+    if row and not sig_key:
+        sig_key = (row["source_signature"] or "").strip()
 
     # ── 組裝 confusion_patterns ──────────────────────────────────
     existing_confusion: list = json.loads((row["confusion_patterns"] if row else None) or "[]")
@@ -217,19 +242,17 @@ async def update_concept_mastery(
     if row:
         ema_score = 0.7 * float(row["mastery_score"]) + 0.3 * new_score
         exposures = row["total_exposures"] + 1
-        # source_signature 策略：非空才覆蓋，否則保留舊值
-        # （避免 caller 忘記傳 signature 時把已標記出處的 record 改成 NULL）
-        if source_signature:
+        if sig_key:
             await db.execute(
                 """UPDATE concept_mastery
                    SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?,
-                       successful_analogies = ?, last_tested = ?, source_signature = ?
-                   WHERE user_id = ? AND concept_name = ?""",
+                       successful_analogies = ?, last_tested = ?
+                   WHERE user_id = ? AND concept_name = ? AND COALESCE(source_signature, '') = ?""",
                 (
                     ema_score, exposures,
                     json.dumps(existing_confusion, ensure_ascii=False),
                     json.dumps(existing_analogies, ensure_ascii=False),
-                    _utcnow(), source_signature, user_id, concept_name,
+                    _utcnow(), user_id, concept_name, sig_key,
                 ),
             )
         else:
@@ -246,6 +269,7 @@ async def update_concept_mastery(
                 ),
             )
     else:
+        insert_sig = sig_key or (source_signature if source_signature else None)
         await db.execute(
             """INSERT INTO concept_mastery
                (user_id, concept_name, mastery_score, total_exposures, confusion_patterns,
@@ -255,7 +279,7 @@ async def update_concept_mastery(
                 user_id, concept_name, new_score,
                 json.dumps(existing_confusion, ensure_ascii=False),
                 json.dumps(existing_analogies, ensure_ascii=False),
-                _utcnow(), source_signature,
+                _utcnow(), insert_sig,
             ),
         )
     await db.commit()

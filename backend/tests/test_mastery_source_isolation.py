@@ -4,7 +4,7 @@
 - update_concept_mastery 寫入時帶 source_signature → DB 記錄該值
 - get_user_mastery_map(source_signature="book_A") 只回 book_A 寫入的概念
 - get_user_mastery_map(source_signature=None) 退回 legacy 不過濾行為
-- session_memory.get_source_signature 從 sessions.source_file_ids_json 推導
+- session_memory.get_source_signature 優先 content_hash，fallback file_ids
 """
 import json
 import os
@@ -120,19 +120,39 @@ class TestGetSourceSignature(unittest.IsolatedAsyncioTestCase):
         )
         await db.commit()
 
-    async def test_single_file_signature(self):
-        await self._make_session("s1", ["fid_book_A"])
-        sig = await session_memory.get_source_signature("s1")
-        self.assertEqual(sig, "fid_book_A")
+    async def _make_session_with_hash(
+        self, sess_id: str, content_hash: str, file_ids: list[str] | None
+    ):
+        db = await get_db()
+        await db.execute(
+            """INSERT INTO sessions (session_id, user_id, content_hash, total_stages,
+                source_file_ids_json) VALUES (?, ?, ?, ?, ?)""",
+            (
+                sess_id, "u1", content_hash, 0,
+                json.dumps(file_ids) if file_ids is not None else "[]",
+            ),
+        )
+        await db.commit()
 
-    async def test_multi_file_signature_sorted_joined(self):
-        """多檔 session → sorted(file_ids) join '|'，保證順序穩定。"""
-        await self._make_session("s2", ["fid_B", "fid_A"])
+    async def test_content_hash_preferred_over_file_ids(self):
+        await self._make_session_with_hash("s1", "abc123hash", ["fid_book_A"])
+        sig = await session_memory.get_source_signature("s1")
+        self.assertEqual(sig, "abc123hash")
+
+    async def test_multi_file_signature_sorted_joined_when_no_hash(self):
+        """無 content_hash 時 fallback：sorted(file_ids) join '|'。"""
+        db = await get_db()
+        await db.execute(
+            """INSERT INTO sessions (session_id, user_id, content_hash, total_stages,
+                source_file_ids_json) VALUES (?, ?, ?, ?, ?)""",
+            ("s2", "u1", "", 0, json.dumps(["fid_B", "fid_A"])),
+        )
+        await db.commit()
         sig = await session_memory.get_source_signature("s2")
         self.assertEqual(sig, "fid_A|fid_B")
 
     async def test_empty_file_ids_returns_none(self):
-        await self._make_session("s3", [])
+        await self._make_session_with_hash("s3", "", [])
         sig = await session_memory.get_source_signature("s3")
         self.assertIsNone(sig)
 
