@@ -12,6 +12,7 @@ from ..agents.question_generator import QuestionGeneratorAgent
 from ..agents.evaluator import EvaluatorAgent
 from ..agents.progress_manager import ProgressManagerAgent, correct_mc_score
 from ..agents.drift_verifier import DriftVerifierAgent
+from ..agents.splitter_verifier import SplitterVerifierAgent
 from ..memory.working_memory import get_working_memory, TurnContext
 from ..memory import session_memory, longterm_memory
 from ..llm.base_provider import BaseLLMProvider
@@ -26,6 +27,8 @@ from .debounced_writer import DebouncedExplanationWriter
 WSEmitter = Callable[[dict], Awaitable[None]]
 
 _log = logging.getLogger("wl.orchestrator")
+
+MAX_SPLITTER_VERIFY_RETRIES = 1
 
 # 持久化用分隔符：僅存於 DB，不應出現在 WS／前端顯示字串中
 _EXPL_PERSIST_SEP = "\n<<WL_EXPL_BODY>>\n"
@@ -113,6 +116,7 @@ class LearningOrchestrator:
     def __init__(self, llm: BaseLLMProvider):
         tc = TokenCounter()
         self.splitter = ContentSplitterAgent(llm, tc)
+        self.splitter_verifier = SplitterVerifierAgent(llm, tc)
         self.teacher = TeacherAgent(llm, tc)
         self.questioner = QuestionGeneratorAgent(llm, tc)
         self.evaluator = EvaluatorAgent(llm, tc)
@@ -563,6 +567,71 @@ class LearningOrchestrator:
             "start_session split done  session=%s  stages=%d",
             session_id, len(stages),
         )
+
+        # ── 2.4 SplitterVerifier（並列方案完整性檢查 + bounded reroll）
+        splitter_attempts = 0  # 已跑的 splitter 次數（first run 算 1）
+        splitter_ctx_payload = {
+            "source_chunks": source_chunks,
+            "max_stages": 30,
+            "target_depth": target_depth,
+        }
+        if source_chunks:  # 空 source_chunks 跳過 verifier
+            while True:
+                verify_ctx = AgentContext(
+                    session_id=session_id, user_id=user_id,
+                    task_payload={"source_chunks": source_chunks, "stages": stages},
+                )
+                try:
+                    vresult = await self.splitter_verifier.run(verify_ctx)
+                except Exception as e:
+                    _log.warning(
+                        "splitter_verifier failed (fail-safe, accepting splitter stages)  "
+                        "session=%s  err=%s",
+                        session_id, e,
+                    )
+                    break
+
+                if vresult["aligned"]:
+                    _log.info(
+                        "splitter_verifier OK  session=%s  splitter_runs=%d",
+                        session_id, splitter_attempts + 1,
+                    )
+                    break
+
+                if splitter_attempts >= MAX_SPLITTER_VERIFY_RETRIES:
+                    _log.warning(
+                        "splitter_verifier still failed after %d retries  session=%s  "
+                        "missing=%s  reason=%s",
+                        MAX_SPLITTER_VERIFY_RETRIES, session_id,
+                        vresult["missing_options"], vresult["reason"],
+                    )
+                    break
+
+                splitter_attempts += 1
+                _log.info(
+                    "splitter_verifier failed, rerolling splitter  session=%s  "
+                    "retry=%d  missing=%s",
+                    session_id, splitter_attempts, vresult["missing_options"],
+                )
+                reroll_ctx = AgentContext(
+                    session_id=session_id, user_id=user_id,
+                    task_payload={
+                        **splitter_ctx_payload,
+                        "previous_attempt_missed": vresult["missing_options"],
+                        "issue_chunk_ids": vresult["issue_chunk_ids"],
+                    },
+                )
+                try:
+                    reroll_result = await self.splitter.run(reroll_ctx)
+                    stages = reroll_result["stages"]
+                    summary = reroll_result.get("summary", summary)
+                except Exception as e:
+                    _log.warning(
+                        "splitter reroll failed (fail-safe, keeping previous stages)  "
+                        "session=%s  err=%s",
+                        session_id, e,
+                    )
+                    break
 
         # 品質檢查（記錄 issues，不中斷流程）
         quality_issues = self._check_stage_quality(stages, source_chunks)

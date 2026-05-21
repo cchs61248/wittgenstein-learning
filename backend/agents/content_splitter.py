@@ -225,16 +225,28 @@ class ContentSplitterAgent(BaseAgent):
         source_chunks: list[dict] = payload.get("source_chunks", [])
         max_stages: int = payload.get("max_stages", 30)
         target_depth: str = payload.get("target_depth", "intermediate")
+        previous_attempt_missed: list[str] = payload.get("previous_attempt_missed") or []
+        issue_chunk_ids: list[str] = payload.get("issue_chunk_ids") or []
 
         db_chunks: dict[str, dict] = {c["chunk_id"]: c for c in source_chunks}
 
         chunks_text = _format_chunks_with_sources(source_chunks)
 
         system = SYSTEM_PROMPTS["content_splitter"].format(max_stages=max_stages)
+
+        retry_hint_section = ""
+        if previous_attempt_missed:
+            retry_hint_section = (
+                f"\n\n【重試提示】上一輪切分漏切以下並列方案、本輪必須各自獨立 stage："
+                f"\n  previous_attempt_missed={json.dumps(previous_attempt_missed, ensure_ascii=False)}"
+                f"\n  issue_chunk_ids={json.dumps(issue_chunk_ids, ensure_ascii=False)}"
+            )
+
         user_msg = (
             f"目標難度：{target_depth}\n\n"
             f"以下是教材的分段內容，請根據語義關係組合成學習階段：\n\n"
             f"{chunks_text}"
+            f"{retry_hint_section}"
         )
         self._messages.append(LLMMessage(role=MessageRole.USER, content=user_msg))
 
