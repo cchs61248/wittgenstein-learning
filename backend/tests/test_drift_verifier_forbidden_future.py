@@ -231,5 +231,94 @@ class TestOrchestratorPassesForbiddenFutureToDriftVerifier(unittest.IsolatedAsyn
         self.assertEqual(payload["forbidden_future_concepts"], [f"F{i}" for i in range(10)])
 
 
+# ── L3: 行為驗證（mock LLM、驗 agent 處理） ────────────────────
+
+def _fake_llm(response_dict: dict):
+    response_json = json.dumps(response_dict, ensure_ascii=False)
+
+    class _Resp:
+        def __init__(self, content):
+            self.content = content
+
+    class _LLM:
+        async def chat(self, messages, system_prompt=None):
+            return _Resp(response_json)
+
+    return _LLM()
+
+
+class TestFarStageCaseExcerptBehavior(unittest.IsolatedAsyncioTestCase):
+    """模擬 LLM 對 stage 7 chunk_0021 場景（驗收實 log 衝突案例）的判決——
+    forbidden_future_concepts 注入後、agent 應正確 propagate aligned=true。
+    """
+
+    async def test_stage_7_chunk_0021_far_stage_aligned(self):
+        """A 方案核心目的：信貸（本節）+ 房貸（next_stage 一句帶過）+
+        股票質押（forbidden_future、整段豁免）→ aligned=true。
+        """
+        llm_response = {
+            "aligned": True,
+            "claim_checks": [],
+            "unsupported_claims": [],
+            "issues": [],
+            "missing_evidence": [],
+            "revision_hint": "",
+        }
+        agent = _make_agent(_fake_llm(llm_response))
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "content_type": "explanation",
+                "source_chunks": [
+                    {"chunk_id": "chunk_0021",
+                     "text": "借錢外掛分為 3 種：信用貸款（永豐軍公教信貸）、"
+                             "房屋貸款（中信融資型房貸）、股票質押（元大證金質押）..."},
+                ],
+                "candidate_text":
+                    "本節介紹永豐軍公教信貸的 22 倍月薪上限 [chunk_0021]。"
+                    "教材會在下節介紹中信融資型房貸；股票質押則留待後續章節 [chunk_0021]。",
+                "full_explanation":
+                    "本節介紹永豐軍公教信貸的 22 倍月薪上限 [chunk_0021]。"
+                    "教材會在下節介紹中信融資型房貸；股票質押則留待後續章節 [chunk_0021]。",
+                "next_stage_concepts": ["中信融資型房貸"],
+                "forbidden_future_concepts": ["元大證金質押", "維持率與斷頭線"],
+            },
+        )
+        result = await agent.run(ctx)
+        self.assertTrue(result["aligned"])
+        self.assertEqual(result["issues"], [])
+
+    async def test_genuine_truncation_still_misaligned_with_empty_forbidden(self):
+        """回歸：真正的精簡省略（forbidden_future 為空）仍判 aligned=false、
+        不能因為新規則放鬆既有 coverage 檢查。
+        """
+        llm_response = {
+            "aligned": False,
+            "claim_checks": [],
+            "unsupported_claims": ["精簡省略：教材的台泥虧損 92 億數據沒講解"],
+            "issues": ["精簡省略：教材在 chunk_0020 明確列出台泥 2025 前三季虧損 92 億"],
+            "missing_evidence": ["台泥 92 億數據"],
+            "revision_hint": "請補上台泥案例的具體數據",
+        }
+        agent = _make_agent(_fake_llm(llm_response))
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "content_type": "explanation",
+                "source_chunks": [
+                    {"chunk_id": "chunk_0020",
+                     "text": "台泥 2025 前三季虧損 92 億元，腦袋正常的人都該賣..."},
+                ],
+                "candidate_text": "教材提到台泥也是賠錢貨 [chunk_0020]。",
+                "full_explanation": "教材提到台泥也是賠錢貨 [chunk_0020]。",
+                "next_stage_concepts": [],
+                "forbidden_future_concepts": [],  # 空清單、不應觸發豁免
+            },
+        )
+        result = await agent.run(ctx)
+        self.assertFalse(result["aligned"])
+        self.assertIn("台泥", " ".join(result["issues"]))
+
+
 if __name__ == "__main__":
     unittest.main()
