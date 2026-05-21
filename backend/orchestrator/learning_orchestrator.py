@@ -195,9 +195,13 @@ class LearningOrchestrator:
         full_explanation: str = "",
         stages: list[dict] | None = None,
     ) -> dict:
-        # 若 caller 傳了 stages，算當前 stage 的 next_stage_concepts 給 DriftVerifier
-        # 作為反向 coverage 豁免清單（避免 chunker 切到一半的跨章節 chunk 觸發精簡漂移誤判）
+        # 若 caller 傳了 stages，算當前 stage 的 next_stage_concepts 與
+        # forbidden_future_concepts 給 DriftVerifier 作為反向 coverage 豁免清單：
+        #   - next_stage：下一節即將教、一句帶過豁免（既有行為）
+        #   - forbidden_future：下下節以後才教、整段豁免（新增、對應 Teacher 規則 11）
+        # forbidden_future 邏輯與 context_builder.py L73-78 一致、截前 10 筆避免 prompt 膨脹
         next_stage_concepts: list[str] = []
+        forbidden_future_concepts: list[str] = []
         if stages:
             key_concepts_here = set(stage.get("key_concepts") or [])
             current_idx = next(
@@ -209,6 +213,14 @@ class LearningOrchestrator:
                     c for c in (stages[current_idx + 1].get("key_concepts") or [])
                     if c not in key_concepts_here
                 ]
+            if 0 <= current_idx < len(stages) - 2:
+                next_stage_set = set(next_stage_concepts)
+                forbidden_future_concepts = list(dict.fromkeys([
+                    c
+                    for s in stages[current_idx + 2:]
+                    for c in s.get("key_concepts", [])
+                    if c not in key_concepts_here and c not in next_stage_set
+                ]))[:10]
         verify_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -218,6 +230,7 @@ class LearningOrchestrator:
                 "candidate_text": candidate_text,
                 "full_explanation": full_explanation,
                 "next_stage_concepts": next_stage_concepts,
+                "forbidden_future_concepts": forbidden_future_concepts,
             },
         )
         return await self.drift_verifier.run(verify_ctx)

@@ -129,5 +129,107 @@ class TestDriftVerifierUserMsgContainsForbiddenFuture(unittest.IsolatedAsyncioTe
         self.assertNotIn("forbidden_future_concepts（", user_msg)
 
 
+# ── L2: orchestrator 整合 ──────────────────────────────────────
+
+from unittest.mock import patch
+from backend.orchestrator.learning_orchestrator import LearningOrchestrator
+
+
+class TestOrchestratorPassesForbiddenFutureToDriftVerifier(unittest.IsolatedAsyncioTestCase):
+    """`_verify_grounding` helper 內部應從 stages 計算 forbidden_future_concepts
+    並塞進 task_payload，與既有 next_stage_concepts 行為一致。
+    """
+
+    async def test_forbidden_future_computed_from_stages_beyond_next(self):
+        """stages=[1,2,3,4]、當前 stage=1，forbidden_future 應為 stages[2,3] 的 key_concepts
+        排除已在 key_concepts_here 與 next_stage 內的概念。
+        """
+        captured = {"payload": None}
+
+        async def _fake_run(ctx):
+            captured["payload"] = ctx.task_payload
+            return {
+                "aligned": True, "issues": [], "missing_evidence": [],
+                "revision_hint": "", "claim_checks": [], "unsupported_claims": [],
+            }
+
+        orch = LearningOrchestrator.__new__(LearningOrchestrator)
+        orch.drift_verifier = MagicMock()
+        orch.drift_verifier.run = AsyncMock(side_effect=_fake_run)
+        orch._normalize_stage_source_chunks = lambda s: s.get("source_chunks", [])
+
+        stages = [
+            {"stage_id": 1, "key_concepts": ["A1", "A2"], "source_chunks": []},
+            {"stage_id": 2, "key_concepts": ["B1", "B2"], "source_chunks": []},
+            {"stage_id": 3, "key_concepts": ["C1", "C2"], "source_chunks": []},
+            {"stage_id": 4, "key_concepts": ["D1"], "source_chunks": []},
+        ]
+        await orch._verify_grounding(
+            session_id="s1", user_id="u1", stage=stages[0],
+            content_type="explanation", candidate_text="...",
+            full_explanation="...", stages=stages,
+        )
+        payload = captured["payload"]
+        self.assertEqual(set(payload["next_stage_concepts"]), {"B1", "B2"})
+        self.assertEqual(set(payload["forbidden_future_concepts"]), {"C1", "C2", "D1"})
+
+    async def test_forbidden_future_empty_when_no_stages(self):
+        """stages=None 時、forbidden_future 應為空 list（與 next_stage 一致行為）。"""
+        captured = {"payload": None}
+
+        async def _fake_run(ctx):
+            captured["payload"] = ctx.task_payload
+            return {
+                "aligned": True, "issues": [], "missing_evidence": [],
+                "revision_hint": "", "claim_checks": [], "unsupported_claims": [],
+            }
+
+        orch = LearningOrchestrator.__new__(LearningOrchestrator)
+        orch.drift_verifier = MagicMock()
+        orch.drift_verifier.run = AsyncMock(side_effect=_fake_run)
+        orch._normalize_stage_source_chunks = lambda s: []
+
+        await orch._verify_grounding(
+            session_id="s1", user_id="u1",
+            stage={"stage_id": 1, "key_concepts": []},
+            content_type="explanation", candidate_text="...",
+            full_explanation="...", stages=None,
+        )
+        payload = captured["payload"]
+        self.assertEqual(payload["forbidden_future_concepts"], [])
+
+    async def test_forbidden_future_truncated_to_10(self):
+        """forbidden_future > 10 個概念時、應截前 10 筆（避免 prompt 膨脹）。"""
+        captured = {"payload": None}
+
+        async def _fake_run(ctx):
+            captured["payload"] = ctx.task_payload
+            return {
+                "aligned": True, "issues": [], "missing_evidence": [],
+                "revision_hint": "", "claim_checks": [], "unsupported_claims": [],
+            }
+
+        orch = LearningOrchestrator.__new__(LearningOrchestrator)
+        orch.drift_verifier = MagicMock()
+        orch.drift_verifier.run = AsyncMock(side_effect=_fake_run)
+        orch._normalize_stage_source_chunks = lambda s: []
+
+        stages = [
+            {"stage_id": 1, "key_concepts": ["A1"], "source_chunks": []},
+            {"stage_id": 2, "key_concepts": ["B1"], "source_chunks": []},
+        ]
+        for i in range(15):
+            stages.append({"stage_id": 3 + i, "key_concepts": [f"F{i}"], "source_chunks": []})
+
+        await orch._verify_grounding(
+            session_id="s1", user_id="u1", stage=stages[0],
+            content_type="explanation", candidate_text="...",
+            full_explanation="...", stages=stages,
+        )
+        payload = captured["payload"]
+        self.assertEqual(len(payload["forbidden_future_concepts"]), 10)
+        self.assertEqual(payload["forbidden_future_concepts"], [f"F{i}" for i in range(10)])
+
+
 if __name__ == "__main__":
     unittest.main()
