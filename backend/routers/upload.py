@@ -8,13 +8,45 @@ from pydantic import BaseModel
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..auth.utils import decode_token_active
-from ..files.upload_store import save_upload
+from ..config import UPLOAD_MAX_CHAR_COUNT
+from ..files.upload_store import (
+    is_plain_upload,
+    save_upload_binary,
+    save_upload_plain,
+)
+from ..utils.text_extractor import extract_text
 from ..utils.url_fetcher import YoutubeTranscriptUnavailable, fetch_url_content
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
 _ALLOWED = {".txt", ".md", ".pdf", ".docx", ".pptx", ".html", ".htm", ".epub"}
 _MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def _save_parsed_upload(
+    filename: str,
+    mime_type: str,
+    raw: bytes,
+    text: str,
+    extra_meta: dict | None = None,
+) -> tuple[str, int]:
+    if is_plain_upload(filename):
+        return save_upload_plain(
+            filename,
+            mime_type,
+            raw,
+            text,
+            max_chars=UPLOAD_MAX_CHAR_COUNT,
+            extra_meta=extra_meta,
+        )
+    return save_upload_binary(
+        filename,
+        mime_type,
+        raw,
+        text,
+        max_chars=UPLOAD_MAX_CHAR_COUNT,
+        extra_meta=extra_meta,
+    )
 
 
 @router.post("")
@@ -39,17 +71,27 @@ async def upload_file(
     if len(raw) > _MAX_BYTES:
         raise HTTPException(status_code=413, detail="檔案超過 10 MB 上限")
 
-    file_id = save_upload(
-        filename=filename,
-        mime_type=file.content_type or "application/octet-stream",
-        raw=raw,
-    )
+    mime_type = file.content_type or "application/octet-stream"
+    try:
+        text = await asyncio.to_thread(extract_text, filename, raw)
+        file_id, char_count = await asyncio.to_thread(
+            _save_parsed_upload,
+            filename,
+            mime_type,
+            raw,
+            text,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"無法解析檔案內容：{e}")
 
     return {
         "file_id": file_id,
         "filename": filename,
         "size": len(raw),
-        "mime_type": file.content_type or "application/octet-stream",
+        "char_count": char_count,
+        "mime_type": mime_type,
     }
 
 
@@ -93,18 +135,22 @@ async def upload_url(
         raise HTTPException(status_code=422, detail="無法從該網址擷取到文字內容")
 
     raw = text.encode("utf-8")
-    file_id = save_upload(
-        filename=f"{title[:80]}.txt",
-        mime_type="text/plain; charset=utf-8",
-        raw=raw,
-        extra_meta={"source_url": url, "source_type": "url"},
-    )
+    try:
+        file_id, char_count = _save_parsed_upload(
+            filename=f"{title[:80]}.txt",
+            mime_type="text/plain; charset=utf-8",
+            raw=raw,
+            text=text,
+            extra_meta={"source_url": url, "source_type": "url"},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     return {
         "file_id": file_id,
         "title": title,
         "url": url,
-        "char_count": len(text),
+        "char_count": char_count,
     }
 
 
@@ -144,10 +190,11 @@ async def youtube_asr_stream(
         try:
             title, text = fetch_url_content(url, youtube_asr_mode="auto", progress_callback=progress_callback)
             raw = text.encode("utf-8")
-            file_id = save_upload(
+            file_id, char_count = _save_parsed_upload(
                 filename=f"{title[:80]}.txt",
                 mime_type="text/plain; charset=utf-8",
                 raw=raw,
+                text=text,
                 extra_meta={"source_url": url, "source_type": "url"},
             )
             _push(
@@ -156,9 +203,11 @@ async def youtube_asr_stream(
                     "file_id": file_id,
                     "title": title,
                     "url": url,
-                    "char_count": len(text),
+                    "char_count": char_count,
                 }
             )
+        except ValueError as e:
+            _push({"type": "error", "message": str(e)})
         except Exception as e:
             _push({"type": "error", "message": str(e)})
 
