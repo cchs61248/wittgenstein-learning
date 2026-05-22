@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-19，含 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica／DeepSeek Provider、上傳磁碟持久化、多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合、URL 擷取品質強化（WebFetch 風格結構化輸出 + strict_main 主文截斷 + YouTube ASR fallback）、Migration 011–015 補完（單裝置登入 session_version、跨裝置 UI 狀態、tutor_records 與 scope 三態、upload blob GC 追蹤）、ask_tutor 三態邊界判定、Enrichment 機制移除、DriftVerifier aligned 強制條件、QuestionGenerator JSON repair、Files API adapter 廢棄、A/B 批死代碼與邏輯漏洞清理、**出題對齊講解強化（2026-05-19）：QuestionGenerator prompt 加「出題範圍嚴格限制」（題目必須在 full_explanation 中明確出現）、DriftVerifier questions 模式改嚴格對齊（full_explanation 為唯一基準，chunks 提到但講解未涵蓋的概念視為漂移）、retry 提示注入 `unsupported_claims`、retry 後仍漂移的題目以 `[註：本題未對齊講解]` 軟性標記持久化、A/B 雙管把關「字面提及 vs 有展開」漏網（A：DriftVerifier 規則升級三態判定 + 「理財型房貸」few-shot；B：Teacher prompt 加「展開義務」第 7 條，提及的專有名詞必須至少一句解釋運作/特性/意義，否則不應在講解中提及）**）
+> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-22，含 **Curriculum Pipeline V2**（macro region / per-region split / global reducer）、**dynamic max_stages**（`stage_budget.py` + outline named_cases）、**SPLITTER_FAIL_MODE fail-soft** + `quality_warnings` + 前端 QualityWarningBanner、Migration 019 source provenance（`source_id`/`sources_json`）、`CURRICULUM_PIPELINE_V2` feature flag；以及既有 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica／DeepSeek Provider、上傳磁碟持久化、多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合、URL 擷取品質強化、Migration 011–015、ask_tutor 三態邊界判定、Enrichment 機制移除、DriftVerifier aligned 強制條件、QuestionGenerator JSON repair、Files API adapter 廢棄、A/B 批死代碼與邏輯漏洞清理、出題對齊講解強化（2026-05-19）**）
 
 ---
 
@@ -608,54 +608,28 @@ class WorkingMemory:
         │   ├── 每個來源獨立執行 build_source_chunks(text)
         │   ├── chunk_id 全域重新編號（chunk_0000, chunk_0001, ...，跨來源連續）
         │   └── 每個 chunk 附加：
-        │           source_label: str   # 來源名稱（用於 ContentSplitter 分組）
-        │           source_index: int   # 來源順序（用於 ContentSplitter 分組）
-        │           ※ 這兩個欄位只在 in-memory dict 存在，不寫入 DB
-        │
-        ├── 【Phase 1：後端 Source Truth 建立】
-        │   text_extractor.extract_text(filename, raw_bytes)
-        │       ├── .txt / .md → decode utf-8
-        │       ├── .pdf       → pdfplumber（保留段落）
-        │       ├── .docx      → python-docx（保留 heading）
-        │       ├── .pptx      → python-pptx（每張投影片標題 + 內文）
-        │       ├── .html/.htm → BeautifulSoup（清掉 script/style/nav/footer）
-        │       ├── .epub      → ebooklib + BeautifulSoup（逐章取 body 文字，標題前置 #）
-        │       └── 其他       → utf-8 fallback
-        │   chunker.build_source_chunks(text)
-        │       ├── 優先按結構切（Wittgenstein 命題編號、Markdown 標題、Word heading）
-        │       ├── 無結構則按段落 + 大小限制（目標 600 字，max 1000）
-        │       └── 每個 chunk：{chunk_id, text, order_index, section_title, char_start, char_end}
+        │           source_id: str        # 穩定 hash(label:index)，Migration 019 寫入 DB
+        │           source_label: str     # 來源名稱
+        │           source_index: int     # 來源順序
         │
         ├── create_provider(provider_name, model?)
         ├── LearningOrchestrator(llm)
         └── orchestrator.start_session(source_chunks=all_chunks, ...)
                 │
-                ├── ContentSplitterAgent.run(ctx)
-                │       輸入：source_chunks（帶 source_label 的 chunk 列表）
-                │       _format_chunks_with_sources()：
-                │           單來源 → 平面格式 "[chunk_0000]\n文字..."
-                │           多來源 → 分組格式：
-                │               "=== 來源 1：report.pdf ===\n[chunk_0000]...\n=== 來源 2：article.com ==="
-                │       Prompt 跨來源聚合原則：不同來源相同主題 chunks → 同一 stage
-                │       LLM 只做語義切分，不生成原文引用
-                │       回傳：{stages（含 source_chunk_ids），chunk_roles，summary}
+                ├── 【V1 預設路徑】`_start_session_v1`（`CURRICULUM_PIPELINE_V2` 未設）
+                │   ├── ContentOutlineAgent（preventive hint）
+                │   ├── compute_dynamic_max_stages(chunks, outline) → max_stages（非固定 30）
+                │   ├── ContentSplitterAgent + SplitterVerifier（MAX retries=2）
+                │   │   fail-hard（預設）或 SPLITTER_FAIL_MODE=soft → 保留最末切分 + quality_warnings
+                │   └── emit knowledge_map（可含 quality_warnings → 前端 QualityWarningBanner）
                 │
-                ├── 後端回填 source_chunks 至每個 stage：
-                │       stage["source_chunks"] = [
-                │           {"chunk_id": cid, "quote": db_chunks[cid]["text"]}
-                │           for cid in stage["source_chunk_ids"]
-                │       ]
-                │
-                ├── _check_stage_quality(stages, all_chunks)
-                │       檢查：過小節點 / 概念碎片化 / 孤立 chunk
-                │       僅 log warning，不阻擋流程
-                │
-                ├── session_memory.create_generating_stub(...)    # status = 'generating'
-                │
-                ├── session_memory.insert_source_chunks(session_id, chunks)
-                │       將後端 source truth 持久化至 DB（source_label/source_index 不寫入 DB）
-                │
-                └── emit: {type: "knowledge_map", payload: {nodes, summary}}
+                └── 【V2 路徑】`curriculum_pipeline_v2.run_start_session_v2`（`CURRICULUM_PIPELINE_V2=1`）
+                        ├── plan_macro_regions → per-region ContentSplitter + region SplitterVerifier
+                        ├── GlobalCurriculumReducer（rule merge + LLM unsure pairs）
+                        ├── StageComposerAgent（prerequisites 推斷）
+                        ├── global verify_global_coverage
+                        ├── Plan B（CURRICULUM_V2_PLAN_B=1）：主 source 骨架 + fuzzy attach
+                        └── WS 新增：region_done / reduce_done / composer_done（可選訂閱）
 ```
 
 ### 7.3 確認知識地圖（confirm_map）
@@ -1052,7 +1026,7 @@ _make_progress_decision(...)
 
 **輸入（Phase 1 改版）**：
 - `source_chunks: list[dict]` — 後端已切好的 chunk 列表（含 chunk_id、text、order_index）
-- `max_stages: int = 30`
+- `max_stages: int` — 由 `compute_dynamic_max_stages()` 動態計算（含 outline named_cases×4）
 - `target_depth: str` — beginner / intermediate / advanced
 
 **Prompt 重點（Phase 1）**：
@@ -1470,6 +1444,12 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `JWT_EXPIRE_DAYS` | `7` | JWT 有效期天數 |
 | `CORS_ORIGINS` | （見 config.py） | 允許 CORS 來源；逗號分隔，未設則用 Vite dev server 預設清單 |
 | `CORS_ORIGIN_REGEX` | `https://.*\.trycloudflare\.com` | 動態 Quick Tunnel 子網域用 regex 白名單；設為空字串可關閉 |
+| `CURRICULUM_PIPELINE_V2` | `0` | `1` 啟用 V2 macro region + reducer pipeline |
+| `SPLITTER_FAIL_MODE` | `hard` | `soft` 時 verifier 失敗仍進 pending，附 `quality_warnings` |
+| `REDUCER_FAIL_MODE` | `hard` | V2：`soft` 時 reducer 空結果平鋪 candidate stages |
+| `CURRICULUM_V2_PLAN_B` | `0` | `1` 時 V2 降級為主 source 骨架 + fuzzy attach |
+
+> Schema contract：`docs/superpowers/specs/2026-05-22-curriculum-v2-schema.md`
 
 > 進階門檻分數與重試上限目前寫死在 orchestrator 中（`pass_threshold=0.75`、`max_attempts=3`），不再由環境變數覆寫。
 
