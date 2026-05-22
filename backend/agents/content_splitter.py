@@ -291,6 +291,7 @@ class ContentSplitterAgent(BaseAgent):
         verifier_reason: str = (payload.get("verifier_reason") or "").strip()
         required_outline: dict | None = payload.get("required_outline")
         repair_plan_struct: dict | None = payload.get("repair_plan_struct")
+        must_cover_topics: list[str] = payload.get("must_cover_topics") or []
 
         db_chunks: dict[str, dict] = {c["chunk_id"]: c for c in source_chunks}
 
@@ -304,6 +305,17 @@ class ContentSplitterAgent(BaseAgent):
                 "\n\n【教材骨架 required_outline】本輪切分必須遵守："
                 f"\n{json.dumps(required_outline, ensure_ascii=False)}"
             )
+
+        must_cover_section = ""
+        if must_cover_topics:
+            cleaned = [str(t).strip() for t in must_cover_topics if str(t).strip()]
+            if cleaned:
+                must_cover_section = (
+                    "\n\n【強約束 — 本 region 必須教到的核心概念（來自 MacroRegionPlanner tier-3）】"
+                    "\n以下每個概念必須出現在至少一個 stage 的 key_concepts 內（字面 exact match）；"
+                    "概念數量 ≥ 4 個時，原則上每個概念對應獨立 stage，禁止 mash-up 壓縮："
+                    f"\n{json.dumps(cleaned, ensure_ascii=False)}"
+                )
 
         retry_hint_section = ""
         if repair_plan_struct or previous_attempt_missed or verifier_reason:
@@ -329,6 +341,7 @@ class ContentSplitterAgent(BaseAgent):
             f"以下是教材的分段內容，請根據語義關係組合成學習階段：\n\n"
             f"{chunks_text}"
             f"{outline_section}"
+            f"{must_cover_section}"
             f"{retry_hint_section}"
         )
         self._messages.append(LLMMessage(role=MessageRole.USER, content=user_msg))

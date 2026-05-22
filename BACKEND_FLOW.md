@@ -628,7 +628,7 @@ class WorkingMemory:
                         │     tier (a) source_id + section_title 分組；oversized group（>40 chunks）強制 fixed-size 切（避免 epub 共用 section_title 退化為 1-region）
                         │     tier (b) 無 section_title → fixed-size 25 chunks 切
                         │     tier (c) `MACRO_REGION_USE_LLM=1` 或 payload `use_llm_refinement=True` 啟用 LLM metadata refinement（每 region 首尾 300 字 → 補 title / expected_stage_count / must_cover_topics；不重切邊界；LLM 失敗 fallback 為 tier-1/2）
-                        ├── per-region ContentSplitter + region SplitterVerifier
+                        ├── per-region ContentSplitter：context 含 region.must_cover_topics（tier-3 LLM 強約束 → splitter user_msg 加「【強約束】每概念對應獨立 stage」段，避免 mash-up）+ region SplitterVerifier
                         ├── GlobalCurriculumReducer
                         │     Step A：`rule_merge_candidates`（Union-Find，threshold 見 `reducer_constants.py`）
                         │     Step B：LLM 處理 unsure pairs（`MAX_UNSURE_PAIRS_LLM=20`）

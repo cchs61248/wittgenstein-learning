@@ -158,6 +158,43 @@ class TestContentSplitterRetryHintInjection(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("重試提示", user_msg)
         self.assertNotIn("previous_attempt_missed", user_msg)
 
+    async def test_injects_must_cover_topics_from_tier3(self):
+        """V2 tier-3 MacroRegionPlanner refinement → per-region splitter 必須收到 must_cover_topics 強約束段。"""
+        llm, captured = _capture_llm()
+        agent = _make_agent(llm)
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "source_chunks": [{"chunk_id": "c1", "text": "...", "order_index": 0}],
+                "max_stages": 5,
+                "must_cover_topics": ["賭徒謬誤", "過度自信", "錨定效應", "框架效應"],
+            },
+        )
+        await agent.run(ctx)
+        user_msg = "\n".join(m.content for m in captured["messages"])
+        self.assertIn("強約束", user_msg)
+        self.assertIn("MacroRegionPlanner tier-3", user_msg)
+        self.assertIn("賭徒謬誤", user_msg)
+        self.assertIn("過度自信", user_msg)
+        self.assertIn("錨定效應", user_msg)
+        self.assertIn("框架效應", user_msg)
+        # 4+ 概念時要求獨立 stage
+        self.assertIn("獨立 stage", user_msg)
+
+    async def test_skips_must_cover_section_when_empty(self):
+        llm, captured = _capture_llm()
+        agent = _make_agent(llm)
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={
+                "source_chunks": [{"chunk_id": "c1", "text": "...", "order_index": 0}],
+                "must_cover_topics": [],  # 空 list
+            },
+        )
+        await agent.run(ctx)
+        user_msg = "\n".join(m.content for m in captured["messages"])
+        self.assertNotIn("MacroRegionPlanner tier-3", user_msg)
+
 
 class TestContentSplitterPlanCParsingAndMerge(unittest.IsolatedAsyncioTestCase):
     async def test_artifact_json_preserves_outline_thin_stages(self):

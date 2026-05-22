@@ -144,6 +144,8 @@ async def run_start_session_v2(
         }
         if required_outline:
             splitter_ctx_payload["required_outline"] = required_outline
+        if region.get("must_cover_topics"):
+            splitter_ctx_payload["must_cover_topics"] = region["must_cover_topics"]
         ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
