@@ -574,6 +574,8 @@ class LearningOrchestrator:
             session_id, user_id, content_hash, source_file_ids=source_file_ids or []
         )
         await session_memory.insert_source_chunks(session_id, source_chunks)
+        if source_file_ids:
+            await session_memory.purge_source_uploads(session_id, source_file_ids)
         await emit({"type": "session_generating", "payload": {"session_id": session_id}})
 
         # ── 2.0 ContentOutline（方案 C：先抽教材骨架，引導 splitter）

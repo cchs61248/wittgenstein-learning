@@ -120,6 +120,7 @@ async def abandon_generating_stub(session_id: str) -> None:
         return
 
     await _delete_session_upload_blobs(session_id)
+    await db.execute("DELETE FROM source_chunks WHERE session_id = ?", (session_id,))
     await db.execute(
         """UPDATE sessions
            SET status = 'abandoned', source_file_ids_json = '[]'
@@ -464,6 +465,21 @@ async def insert_source_chunks(session_id: str, chunks: list[dict]) -> None:
             )
             for c in chunks
         ],
+    )
+    await db.commit()
+
+
+async def purge_source_uploads(session_id: str, file_ids: list[str]) -> None:
+    """chunk 入庫後刪除磁碟 upload 並清空 session 的 file_ids 引用。"""
+    from ..files.upload_store import purge_upload_files
+
+    for fid in file_ids:
+        if isinstance(fid, str) and fid:
+            purge_upload_files(fid)
+    db = await get_db()
+    await db.execute(
+        "UPDATE sessions SET source_file_ids_json = '[]' WHERE session_id = ?",
+        (session_id,),
     )
     await db.commit()
 

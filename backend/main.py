@@ -23,9 +23,8 @@ from .llm.provider_factory import create_provider
 from .orchestrator.learning_orchestrator import LearningOrchestrator
 from .memory.working_memory import get_working_memory, delete_working_memory
 from .memory import session_memory
-from .files.upload_store import load_upload
+from .files.upload_store import load_upload_meta, load_upload_text
 from .files.upload_gc import gc_unreferenced_uploads
-from .utils.text_extractor import extract_text
 from .utils.chunker import build_source_chunks
 from .utils.logger import setup_logging, ws_logger
 from .ws.connection_manager import WebSocketManager
@@ -144,7 +143,7 @@ async def _build_source_chunks_from_payload(
     """
     從 start_session payload 組裝 source_chunks。
     支援新格式（sources 陣列）與舊格式（uploaded_file_id / content）。
-    回傳 (all_chunks, file_ids)；file_ids 供 session 刪除時 GC upload blob。
+    回傳 (all_chunks, file_ids)；file_ids 供 generating stub 追蹤，chunk 入庫後即 purge。
     回傳 None 表示已向客戶端送出錯誤，呼叫方應 continue。
     """
     sources_raw: list[dict] = p.get("sources") or []
@@ -165,13 +164,18 @@ async def _build_source_chunks_from_payload(
                 if not file_id:
                     continue
                 try:
-                    uploaded = load_upload(file_id)
+                    meta = load_upload_meta(file_id)
+                    text = load_upload_text(file_id)
                 except FileNotFoundError:
-                    await emit({"type": "error", "payload": {"message": f"找不到已上傳檔案（{label}），請重新上傳"}})
+                    await emit({
+                        "type": "error",
+                        "payload": {
+                            "message": f"找不到已上傳檔案（{label}），可能已釋放，請重新上傳",
+                        },
+                    })
                     return None
                 file_ids.append(file_id)
-                label = label or uploaded.get("filename", label)
-                text = extract_text(uploaded["filename"], uploaded["raw"])
+                label = label or meta.get("filename", label)
             if text:
                 source_infos.append({"label": label, "text": text, "index": i})
 
@@ -188,13 +192,16 @@ async def _build_source_chunks_from_payload(
 
         if uploaded_file_id:
             try:
-                uploaded = load_upload(uploaded_file_id)
+                meta = load_upload_meta(uploaded_file_id)
+                text = load_upload_text(uploaded_file_id)
             except FileNotFoundError:
-                await emit({"type": "error", "payload": {"message": "找不到已上傳檔案，請重新上傳"}})
+                await emit({
+                    "type": "error",
+                    "payload": {"message": "找不到已上傳檔案，可能已釋放，請重新上傳"},
+                })
                 return None
             file_ids.append(uploaded_file_id)
-            text = extract_text(uploaded["filename"], uploaded["raw"])
-            label = uploaded.get("filename", "上傳的檔案")
+            label = meta.get("filename", "上傳的檔案")
         else:
             text = raw_content
             label = "貼上的文字"
