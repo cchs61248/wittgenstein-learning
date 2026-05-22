@@ -42,3 +42,6 @@ else:
 
 # 未被 session 引用的 upload 超過此時數後，啟動時自動 GC（0 = 立即刪除所有孤兒）
 UPLOAD_ORPHAN_MAX_AGE_HOURS: float = float(os.getenv("UPLOAD_ORPHAN_MAX_AGE_HOURS", "24"))
+
+# 上傳解析後允許的最大字元數（與 URL 擷取一致）
+UPLOAD_MAX_CHAR_COUNT: int = int(os.getenv("UPLOAD_MAX_CHAR_COUNT", "500000"))
