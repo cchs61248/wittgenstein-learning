@@ -1433,7 +1433,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `drift_verifier` | DriftVerifierAgent（含 cited_chunks_lookup 驗證規則） |
 | `scope_judge` | handle_student_question（範疇判斷） |
 | `tutor_reply` | handle_student_question（生成回答） |
-| `global_curriculum_reducer` | GlobalCurriculumReducerAgent（V2 Step B unsure pairs） |
+| `global_curriculum_reducer` | GlobalCurriculumReducerAgent（V2 Step B unsure pairs；含 confidence 校準準則 + 4 few-shot 避免 LLM 過度保守） |
 
 ---
 
