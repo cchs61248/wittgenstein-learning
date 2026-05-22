@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Callable, Awaitable
@@ -638,6 +639,7 @@ class LearningOrchestrator:
         splitter_attempts = 0  # 已跑的 splitter 次數（first run 算 1）
         verifier_passed = not source_chunks
         last_vresult: dict | None = None
+        quality_warnings: dict | None = None
         if source_chunks:
             while True:
                 verify_ctx = AgentContext(
@@ -717,17 +719,30 @@ class LearningOrchestrator:
             if not verifier_passed:
                 missing = (last_vresult or {}).get("missing_options") or []
                 reason = (last_vresult or {}).get("reason") or ""
-                await session_memory.abandon_generating_stub(session_id)
-                _log.error(
-                    "splitter_verifier rejected  session=%s  splitter_runs=%d  "
-                    "missing=%s  reason=%s",
-                    session_id, splitter_attempts + 1, missing, reason,
-                )
-                detail = reason or "、".join(missing) or "切分結果未通過品質檢查"
-                raise SplitterVerificationRejected(
-                    f"教材切分未通過品質檢查（已自動修復 {MAX_SPLITTER_VERIFY_RETRIES} 次仍失敗），"
-                    f"請稍後重試。詳情：{detail}"
-                )
+                fail_mode = os.getenv("SPLITTER_FAIL_MODE", "hard").strip().lower()
+                if fail_mode == "soft":
+                    quality_warnings = {
+                        "splitter_verifier_failed": True,
+                        "missing_options": missing,
+                        "reason": reason,
+                        "splitter_runs": splitter_attempts + 1,
+                    }
+                    _log.warning(
+                        "splitter_verifier soft-fallback  session=%s  missing=%s  reason=%s",
+                        session_id, missing, reason,
+                    )
+                else:
+                    await session_memory.abandon_generating_stub(session_id)
+                    _log.error(
+                        "splitter_verifier rejected  session=%s  splitter_runs=%d  "
+                        "missing=%s  reason=%s",
+                        session_id, splitter_attempts + 1, missing, reason,
+                    )
+                    detail = reason or "、".join(missing) or "切分結果未通過品質檢查"
+                    raise SplitterVerificationRejected(
+                        f"教材切分未通過品質檢查（已自動修復 {MAX_SPLITTER_VERIFY_RETRIES} 次仍失敗），"
+                        f"請稍後重試。詳情：{detail}"
+                    )
 
         # ── 2.5 ConceptCanonicalize（splitter 後立即跑、寫回 stages）
         source_signature = content_hash
@@ -806,14 +821,19 @@ class LearningOrchestrator:
             model_name=model_name,
             question_mode=question_mode,
             source_file_ids=source_file_ids or [],
+            quality_warnings=quality_warnings,
         )
+
+        km_payload: dict = {
+            "nodes": nodes,
+            "summary": summary,
+        }
+        if quality_warnings:
+            km_payload["quality_warnings"] = quality_warnings
 
         await emit({
             "type": "knowledge_map",
-            "payload": {
-                "nodes": nodes,
-                "summary": summary,
-            },
+            "payload": km_payload,
         })
 
     # ── 使用者確認知識地圖後開始教學 ────────────────────────

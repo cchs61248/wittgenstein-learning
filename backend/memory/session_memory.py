@@ -141,9 +141,12 @@ async def create_pending_session(
     model_name: str | None = None,
     question_mode: str = "short_answer",
     source_file_ids: list[str] | None = None,
+    quality_warnings: dict | None = None,
 ) -> None:
     db = await get_db()
-    pending_map = {"nodes": nodes, "summary": summary}
+    pending_map: dict = {"nodes": nodes, "summary": summary}
+    if quality_warnings:
+        pending_map["quality_warnings"] = quality_warnings
     file_ids_json = json.dumps(source_file_ids or [], ensure_ascii=False)
     # UPSERT：若 session 已以 generating stub 存在，直接更新為 pending_confirmation
     await db.execute(

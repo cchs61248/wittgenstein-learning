@@ -55,10 +55,11 @@ def _stages_b():
 
 async def _run_start(orch, source_file_ids=None, source_chunks=None, *, expect_reject=False):
     """共用：跑 start_session、回傳 captured stages（最終寫入 DB 的）。"""
-    captured = {"stages": None}
+    captured = {"stages": None, "quality_warnings": None}
 
     async def _capture_create_pending(**kwargs):
         captured["stages"] = kwargs["stages"]
+        captured["quality_warnings"] = kwargs.get("quality_warnings")
 
     with patch(
         "backend.orchestrator.learning_orchestrator.session_memory.create_generating_stub",
@@ -70,9 +71,14 @@ async def _run_start(orch, source_file_ids=None, source_chunks=None, *, expect_r
         "backend.orchestrator.learning_orchestrator.session_memory.create_pending_session",
         new=AsyncMock(side_effect=_capture_create_pending),
     ), patch(
+        "backend.orchestrator.learning_orchestrator.session_memory.purge_source_uploads",
+        new=AsyncMock(),
+    ), patch(
         "backend.orchestrator.learning_orchestrator.session_memory.abandon_generating_stub",
         new=AsyncMock(),
-    ) as abandon_mock:
+    ) as abandon_mock, patch.dict(
+        "os.environ", {"CURRICULUM_PIPELINE_V2": "0"}, clear=False
+    ):
         try:
             await orch.start_session(
                 session_id="s1", user_id="u1",
@@ -85,9 +91,9 @@ async def _run_start(orch, source_file_ids=None, source_chunks=None, *, expect_r
             )
         except SplitterVerificationRejected:
             if expect_reject:
-                return None, abandon_mock
+                return None, abandon_mock, captured.get("quality_warnings")
             raise
-    return captured["stages"], abandon_mock
+    return captured["stages"], abandon_mock, captured.get("quality_warnings")
 
 
 # ── L3: reroll 行為路徑 ──────────────────────────────────────
@@ -103,7 +109,7 @@ class TestSplitterVerifyLoop(unittest.IsolatedAsyncioTestCase):
             "aligned": True, "missing_options": [],
             "issue_chunk_ids": [], "reason": "ok",
         })
-        final_stages, _ = await _run_start(orch)
+        final_stages, _, _ = await _run_start(orch)
 
         self.assertEqual(orch.splitter.run.await_count, 1)
         self.assertEqual(orch.splitter_verifier.run.await_count, 1)
@@ -131,7 +137,7 @@ class TestSplitterVerifyLoop(unittest.IsolatedAsyncioTestCase):
              "issue_chunk_ids": [], "reason": "ok after reroll",
              "repair_plan_struct": {}},
         ])
-        final_stages, _ = await _run_start(orch)
+        final_stages, _, _ = await _run_start(orch)
 
         self.assertEqual(orch.content_outliner.run.await_count, 1)
         self.assertEqual(orch.splitter.run.await_count, 2)
@@ -161,7 +167,7 @@ class TestSplitterVerifyLoop(unittest.IsolatedAsyncioTestCase):
             "aligned": False, "missing_options": ["GraphQL 案例"],
             "issue_chunk_ids": ["c1"], "reason": "mash-up",
         })
-        final_stages, abandon_mock = await _run_start(orch, expect_reject=True)
+        final_stages, abandon_mock, _ = await _run_start(orch, expect_reject=True)
         self.assertIsNone(final_stages)
         self.assertEqual(orch.splitter.run.await_count, 3)
         self.assertEqual(orch.splitter_verifier.run.await_count, 3)
@@ -178,7 +184,7 @@ class TestSplitterVerifyFallback(unittest.IsolatedAsyncioTestCase):
             "stages": _stages_a(), "summary": "",
         })
         orch.splitter_verifier.run = AsyncMock(side_effect=RuntimeError("LLM down"))
-        final_stages, abandon_mock = await _run_start(orch, expect_reject=True)
+        final_stages, abandon_mock, _ = await _run_start(orch, expect_reject=True)
         self.assertIsNone(final_stages)
         self.assertEqual(orch.splitter.run.await_count, 3)
         abandon_mock.assert_awaited_once()
@@ -194,9 +200,30 @@ class TestSplitterVerifyFallback(unittest.IsolatedAsyncioTestCase):
             "aligned": False, "missing_options": ["X"],
             "issue_chunk_ids": ["c1"], "reason": "missing X",
         })
-        final_stages, abandon_mock = await _run_start(orch, expect_reject=True)
+        final_stages, abandon_mock, _ = await _run_start(orch, expect_reject=True)
         self.assertIsNone(final_stages)
         abandon_mock.assert_awaited_once()
+
+
+class TestSplitterFailSoft(unittest.IsolatedAsyncioTestCase):
+    async def test_soft_mode_keeps_stages_with_quality_warnings(self):
+        orch = _mk_orch()
+        orch.splitter.run = AsyncMock(return_value={
+            "stages": _stages_a(), "summary": "",
+        })
+        orch.splitter_verifier.run = AsyncMock(return_value={
+            "aligned": False,
+            "missing_options": ["期貨選擇權", "虛擬資產"],
+            "issue_chunk_ids": ["c1"],
+            "reason": "Part 5 mash-up",
+        })
+        with patch.dict("os.environ", {"SPLITTER_FAIL_MODE": "soft", "CURRICULUM_PIPELINE_V2": "0"}):
+            final_stages, abandon_mock, qw = await _run_start(orch)
+        self.assertEqual(final_stages, _stages_a())
+        self.assertIsNotNone(qw)
+        self.assertTrue(qw.get("splitter_verifier_failed"))
+        self.assertEqual(qw.get("missing_options"), ["期貨選擇權", "虛擬資產"])
+        abandon_mock.assert_not_awaited()
 
 
 # ── L4: 回歸（既有 start_session 流程不破） ────────────────────
@@ -212,7 +239,7 @@ class TestStartSessionFlowUnaffected(unittest.IsolatedAsyncioTestCase):
             "aligned": True, "missing_options": [],
             "issue_chunk_ids": [], "reason": "ok",
         })
-        final_stages, _ = await _run_start(orch)
+        final_stages, _, _ = await _run_start(orch)
         self.assertEqual(final_stages, _stages_a())
 
     def test_max_retries_constant_plan_b(self):
