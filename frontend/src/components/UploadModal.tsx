@@ -212,7 +212,7 @@ export function UploadModal({ onStart, onClose }: Props) {
               ? {
                   ...s,
                   fileId: result.file_id,
-                  charCount: result.size,
+                  charCount: result.char_count,
                   uploading: false,
                   error: undefined,
                 }

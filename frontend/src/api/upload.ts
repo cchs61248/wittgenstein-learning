@@ -6,6 +6,7 @@ export interface UploadFileResult {
   file_id: string;
   filename: string;
   size: number;
+  char_count: number;
   mime_type: string;
 }
 
