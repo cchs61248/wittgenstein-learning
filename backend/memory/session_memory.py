@@ -608,7 +608,7 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> boo
 
 
 async def delete_session(session_id: str, user_id: str) -> bool:
-    """刪除 session 及相關學習記錄與 upload blob，但保留 concept_mastery（學習成效不刪）。"""
+    """刪除 session 及相關學習記錄；upload 通常已在 chunk 入庫後 purge，此處為冪等保險。"""
     from ..files.upload_store import delete_upload
 
     db = await get_db()
