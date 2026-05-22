@@ -3,6 +3,7 @@ import { useSessionStore } from './store/sessionStore';
 import { AuthForm } from './components/AuthForm';
 import { UploadModal } from './components/UploadModal';
 import { KnowledgeMapModal } from './components/KnowledgeMapModal';
+import { QualityWarningBanner } from './components/QualityWarningBanner';
 import { ExplanationPanel } from './components/ExplanationPanel';
 import { QuestionPanel } from './components/QuestionPanel';
 import { AskTutorPanel } from './components/AskTutorPanel';
@@ -481,7 +482,11 @@ export default function App() {
         });
         break;
       case 'knowledge_map':
-        setPendingMap({ nodes: msg.payload.nodes, summary: msg.payload.summary });
+        setPendingMap({
+          nodes: msg.payload.nodes,
+          summary: msg.payload.summary,
+          quality_warnings: msg.payload.quality_warnings,
+        });
         listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
         break;
       case 'session_started': {
@@ -1260,6 +1265,7 @@ export default function App() {
         <KnowledgeMapModal
           nodes={pendingMap.nodes}
           summary={pendingMap.summary}
+          qualityWarnings={pendingMap.quality_warnings}
           onConfirm={() => {
             setPendingMap(null);
             setShowUpload(false);
@@ -1267,6 +1273,11 @@ export default function App() {
               type: 'confirm_map',
               payload: { provider: activeProviderRef.current, model: activeModelRef.current },
             });
+          }}
+          onReupload={() => {
+            setPendingMap(null);
+            setShowUpload(true);
+            setStartSessionError(null);
           }}
         />
       )}

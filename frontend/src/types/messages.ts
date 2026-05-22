@@ -11,6 +11,15 @@ export interface KnowledgeMapNode {
 export interface KnowledgeMapPayload {
   nodes: KnowledgeMapNode[];
   summary: string;
+  quality_warnings?: QualityWarnings;
+}
+
+export interface QualityWarnings {
+  splitter_verifier_failed?: boolean;
+  missing_options?: string[];
+  reason?: string;
+  splitter_runs?: number;
+  reducer_fallback_flat?: boolean;
 }
 
 export interface StageInfo {

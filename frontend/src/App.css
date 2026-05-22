@@ -2607,6 +2607,42 @@ textarea:disabled {
   max-width: 680px;
 }
 
+.quality-warning-banner {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.quality-warning-banner__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.quality-warning-banner__icon {
+  flex-shrink: 0;
+}
+
+.quality-warning-banner__toggle {
+  margin-left: auto;
+}
+
+.quality-warning-banner__detail {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.quality-warning-banner__detail ul {
+  margin: 8px 0 0 18px;
+  padding: 0;
+}
+
 .km-summary {
   color: var(--accent);
   font-size: 14px;

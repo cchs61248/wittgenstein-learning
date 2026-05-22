@@ -1,17 +1,30 @@
-import type { KnowledgeMapNode } from '../types/messages';
+import type { KnowledgeMapNode, QualityWarnings } from '../types/messages';
+import { QualityWarningBanner } from './QualityWarningBanner';
 
 interface Props {
   nodes: KnowledgeMapNode[];
   summary: string;
+  qualityWarnings?: QualityWarnings;
   onConfirm: () => void;
   onCancel?: () => void;
+  onReupload?: () => void;
 }
 
-export function KnowledgeMapModal({ nodes, summary, onConfirm, onCancel }: Props) {
+export function KnowledgeMapModal({
+  nodes,
+  summary,
+  qualityWarnings,
+  onConfirm,
+  onCancel,
+  onReupload,
+}: Props) {
   return (
     <div className="modal-overlay">
       <div className="modal-card km-modal">
         <h2>知識地圖</h2>
+        {qualityWarnings?.splitter_verifier_failed && (
+          <QualityWarningBanner warnings={qualityWarnings} onReupload={onReupload} />
+        )}
         {summary && <p className="km-summary">{summary}</p>}
 
         <p className="km-desc">

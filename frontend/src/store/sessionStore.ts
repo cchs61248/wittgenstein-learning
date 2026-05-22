@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode, SourceChunk, TutorMessage, TutorReplyPayload } from '../types/messages';
+import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode, KnowledgeMapPayload, SourceChunk, TutorMessage, TutorReplyPayload } from '../types/messages';
 
 export type StageStatus = 'pending' | 'current' | 'completed';
 
@@ -142,8 +142,8 @@ interface SessionState {
   setPendingCourseComplete: (v: boolean) => void;
 
   // 知識地圖確認
-  pendingMap: { nodes: KnowledgeMapNode[]; summary: string } | null;
-  setPendingMap: (map: { nodes: KnowledgeMapNode[]; summary: string } | null) => void;
+  pendingMap: KnowledgeMapPayload | null;
+  setPendingMap: (map: KnowledgeMapPayload | null) => void;
 
   // UI 狀態
   isConnected: boolean;
