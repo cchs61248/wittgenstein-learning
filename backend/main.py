@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from .config import DB_PATH, CORS_ORIGINS, CORS_ORIGIN_REGEX, DEFAULT_PROVIDER
+from .config import DB_PATH, CORS_ORIGINS, CORS_ORIGIN_REGEX, DEFAULT_PROVIDER, UPLOAD_ORPHAN_MAX_AGE_HOURS
 from .db.database import init_db, close_db
 from .db.inflight_lock import cleanup_stale as inflight_cleanup_stale
 from .auth.router import router as auth_router
@@ -24,6 +24,7 @@ from .orchestrator.learning_orchestrator import LearningOrchestrator
 from .memory.working_memory import get_working_memory, delete_working_memory
 from .memory import session_memory
 from .files.upload_store import load_upload
+from .files.upload_gc import gc_unreferenced_uploads
 from .utils.text_extractor import extract_text
 from .utils.chunker import build_source_chunks
 from .utils.logger import setup_logging, ws_logger
@@ -52,6 +53,21 @@ async def lifespan(app: FastAPI):
             ws_logger().info(f"inflight_locks: cleaned {n} stale entries on startup")
     except Exception as e:
         ws_logger().warning(f"inflight_locks cleanup_stale failed on startup: {e}")
+    # 清理未被 session 引用的 upload 孤兒（含上傳後未開 session、失敗 session 遺留）
+    try:
+        gc_result = gc_unreferenced_uploads(
+            DB_PATH,
+            max_age_hours=UPLOAD_ORPHAN_MAX_AGE_HOURS,
+        )
+        if gc_result["deleted_count"]:
+            ws_logger().info(
+                "upload_gc: deleted %d orphan blobs (referenced=%d, max_age_h=%s)",
+                gc_result["deleted_count"],
+                gc_result["referenced_count"],
+                UPLOAD_ORPHAN_MAX_AGE_HOURS,
+            )
+    except Exception as e:
+        ws_logger().warning(f"upload_gc failed on startup: {e}")
     yield
     await close_db()
     ws_logger().info("Wittgenstein Learning System shutting down")
@@ -384,6 +400,9 @@ async def websocket_endpoint(
                             model_name=model,
                             emit=emit,
                         )
+                    except asyncio.CancelledError:
+                        await session_memory.abandon_generating_stub(session_id)
+                        raise
                     except Exception as e:
                         await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})
                     finally:
@@ -605,8 +624,8 @@ async def websocket_endpoint(
                 target_key = p.get("key")
                 cancelled_keys: list[str] = []
                 if not target_key:
-                    # 沒指定 key 就嘗試取消該 session 任何 in-flight 的兩個常見來源
-                    for k in (session_id, f"{session_id}:tutor"):
+                    # 沒指定 key 就嘗試取消該 session 任何 in-flight 的常見來源
+                    for k in (f"{session_id}:start", session_id, f"{session_id}:tutor"):
                         if await _gen_cancel_async(k):
                             cancelled_keys.append(k)
                     if not cancelled_keys:
@@ -616,6 +635,8 @@ async def websocket_endpoint(
                         cancelled_keys.append(target_key)
                     else:
                         _ws_log.info("cancel_generation: key=%s not found", target_key)
+                if any(k.endswith(":start") or k == session_id for k in cancelled_keys):
+                    await session_memory.abandon_generating_stub(session_id)
                 for k in cancelled_keys:
                     kind = "ask_tutor" if k.endswith(":tutor") else "other"
                     await emit({

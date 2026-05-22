@@ -60,24 +60,70 @@ async def get_source_signature(session_id: str) -> str | None:
 
 
 async def create_generating_stub(
-    session_id: str, user_id: str, content_hash: str
+    session_id: str,
+    user_id: str,
+    content_hash: str,
+    source_file_ids: list[str] | None = None,
 ) -> None:
     """ContentSplitter 執行前建立佔位記錄，讓書櫃在 LLM 呼叫期間持久顯示「生成中」。"""
     db = await get_db()
+    file_ids_json = json.dumps(source_file_ids or [], ensure_ascii=False)
     await db.execute(
         """INSERT OR IGNORE INTO sessions
-           (session_id, user_id, content_hash, total_stages, status, title)
-           VALUES (?, ?, ?, 0, 'generating', '生成中…')""",
-        (session_id, user_id, content_hash),
+           (session_id, user_id, content_hash, total_stages, status, title,
+            source_file_ids_json)
+           VALUES (?, ?, ?, 0, 'generating', '生成中…', ?)""",
+        (session_id, user_id, content_hash, file_ids_json),
+    )
+    # 若 stub 已存在（重試），補寫 file_ids
+    await db.execute(
+        """UPDATE sessions
+           SET source_file_ids_json = ?
+           WHERE session_id = ? AND status = 'generating'""",
+        (file_ids_json, session_id),
     )
     await db.commit()
 
 
-async def abandon_generating_stub(session_id: str) -> None:
-    """ContentSplitter 失敗時，將 generating 佔位標記為 abandoned。"""
+async def _delete_session_upload_blobs(session_id: str) -> list[str]:
+    """讀取 session 的 file_ids 並刪除磁碟 blob；回傳已刪除的 id 列表。"""
+    from ..files.upload_store import delete_upload
+
     db = await get_db()
+    async with db.execute(
+        "SELECT source_file_ids_json FROM sessions WHERE session_id = ?",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return []
+    try:
+        file_ids = json.loads(row[0] or "[]")
+    except Exception:
+        file_ids = []
+    deleted: list[str] = []
+    for fid in file_ids if isinstance(file_ids, list) else []:
+        if isinstance(fid, str) and delete_upload(fid):
+            deleted.append(fid)
+    return deleted
+
+
+async def abandon_generating_stub(session_id: str) -> None:
+    """ContentSplitter 失敗或取消時，標記 abandoned 並 GC 關聯 upload。"""
+    db = await get_db()
+    async with db.execute(
+        "SELECT status FROM sessions WHERE session_id = ?",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row or row[0] != "generating":
+        return
+
+    await _delete_session_upload_blobs(session_id)
     await db.execute(
-        "UPDATE sessions SET status = 'abandoned' WHERE session_id = ? AND status = 'generating'",
+        """UPDATE sessions
+           SET status = 'abandoned', source_file_ids_json = '[]'
+           WHERE session_id = ? AND status = 'generating'""",
         (session_id,),
     )
     await db.commit()

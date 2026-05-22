@@ -39,3 +39,6 @@ elif not _raw_cors_regex.strip():
     CORS_ORIGIN_REGEX = None
 else:
     CORS_ORIGIN_REGEX = _raw_cors_regex.strip()
+
+# 未被 session 引用的 upload 超過此時數後，啟動時自動 GC（0 = 立即刪除所有孤兒）
+UPLOAD_ORPHAN_MAX_AGE_HOURS: float = float(os.getenv("UPLOAD_ORPHAN_MAX_AGE_HOURS", "24"))

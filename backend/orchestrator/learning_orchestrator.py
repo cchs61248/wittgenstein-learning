@@ -570,7 +570,9 @@ class LearningOrchestrator:
 
         # ── 1. ContentSplitter 執行前，先建立 generating stub + 存入 source_chunks
         #       讓書櫃在 LLM 呼叫期間持久顯示「生成中」，頁面重整也不消失
-        await session_memory.create_generating_stub(session_id, user_id, content_hash)
+        await session_memory.create_generating_stub(
+            session_id, user_id, content_hash, source_file_ids=source_file_ids or []
+        )
         await session_memory.insert_source_chunks(session_id, source_chunks)
         await emit({"type": "session_generating", "payload": {"session_id": session_id}})
 
