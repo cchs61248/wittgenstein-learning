@@ -1466,7 +1466,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | 類型 | 指令 | 用途 |
 |------|------|------|
 | CI mock baseline | `pytest backend/tests/test_reducer_go_nogo.py` | 驗證 `integrate_llm_outcomes`、Step C、hard fail（mock LLM） |
-| 真 LLM gate（手動） | `RUN_LLM_TESTS=1 pytest -m llm_live backend/tests/test_reducer_go_nogo_live.py` | 上線前量測 reducer prompt 準確率（同 source ≥90%、多 source ≥75%） |
+| 真 LLM gate（手動） | `RUN_LLM_TESTS=1 pytest -m llm_live backend/tests/test_reducer_go_nogo_live.py` | 上線前量測 reducer prompt 準確率；**每 baseline ≥5 對** unsure pairs 取 avg（`reducer_go_nogo_live_pairs.json`） |
 | 健康監控 | `orchestrator.log` grep `curriculum_health_alert` | outcome 比例異常 / fallback / `plan_b_recommended` |
 
 > 預設 `pytest.ini` 排除 `llm_live`；CI 不呼叫真 LLM。

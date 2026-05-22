@@ -4,10 +4,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-_log = logging.getLogger("wl.orchestrator.v2.health")
+from .reducer_constants import OUTCOME_RATIO_WARN
 
-# Outcome count < ratio * candidates → possible reducer collapse
-OUTCOME_RATIO_WARN = 0.5
+_log = logging.getLogger("wl.orchestrator.v2.health")
 
 
 def assess_reducer_health(

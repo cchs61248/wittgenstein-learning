@@ -18,3 +18,7 @@ FUZZY_ATTACH_THRESHOLD = 0.85
 # Go/No-Go baselines (spike tests)
 GO_NOGO_SAME_SOURCE_MERGE_MIN = 0.90
 GO_NOGO_MULTI_SOURCE_MERGE_MIN = 0.75
+GO_NOGO_LIVE_MIN_PAIRS = 5
+
+# Health monitoring — outcome collapse threshold
+OUTCOME_RATIO_WARN = 0.5
