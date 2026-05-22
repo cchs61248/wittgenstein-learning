@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（Phase 1–4 完整實作，最後更新：2026-05-22，含 **Curriculum Pipeline V2**（macro region / per-region split / global reducer）、**dynamic max_stages**（`stage_budget.py` + outline named_cases）、**SPLITTER_FAIL_MODE fail-soft** + `quality_warnings` + 前端 QualityWarningBanner、Migration 019 source provenance（`source_id`/`sources_json`）、`CURRICULUM_PIPELINE_V2` feature flag；以及既有 retry/remediate 邊界收斂、重教／補強子章節解綁、retry 持久化修正、ask_tutor 前端持久化、三階段 Agent 品質修復、書櫃 sessions CRUD、learner stats、Monica／DeepSeek Provider、上傳磁碟持久化、多來源資料源支援（URL/檔案/純文字）、ContentSplitter 跨來源聚合、URL 擷取品質強化、Migration 011–015、ask_tutor 三態邊界判定、Enrichment 機制移除、DriftVerifier aligned 強制條件、QuestionGenerator JSON repair、Files API adapter 廢棄、A/B 批死代碼與邏輯漏洞清理、出題對齊講解強化（2026-05-19）**）
+> 適用版本：2026-05 feature 分支（最後更新：2026-05-22，含 **Curriculum Pipeline V2** 強化：GlobalCurriculumReducer Step B/C（confidence&lt;0.8 保留 split）、`REDUCER_FAIL_MODE=hard` LLM 失敗 raise、`verify_global_coverage` duplicate 標題檢查、`curriculum_health` 監控信號（`plan_b_recommended` 不自動切 Plan B）、Go/No-Go mock CI + `pytest -m llm_live` 真 LLM 手動 gate；以及 macro region / per-region split、**dynamic max_stages**、**SPLITTER_FAIL_MODE fail-soft** + QualityWarningBanner、Migration 019 provenance、`CURRICULUM_PIPELINE_V2` feature flag；既有 retry/remediate、多來源、DriftVerifier 等（2026-05-19 前項從略）**）
 
 ---
 
@@ -624,12 +624,19 @@ class WorkingMemory:
                 │   └── emit knowledge_map（可含 quality_warnings → 前端 QualityWarningBanner）
                 │
                 └── 【V2 路徑】`curriculum_pipeline_v2.run_start_session_v2`（`CURRICULUM_PIPELINE_V2=1`）
-                        ├── plan_macro_regions → per-region ContentSplitter + region SplitterVerifier
-                        ├── GlobalCurriculumReducer（rule merge + LLM unsure pairs）
+                        ├── MacroRegionPlannerAgent → `plan_macro_regions`（tier a/b；tier c LLM 邊界 → V2.1）
+                        ├── per-region ContentSplitter + region SplitterVerifier
+                        ├── GlobalCurriculumReducer
+                        │     Step A：`rule_merge_candidates`（Union-Find，threshold 見 `reducer_constants.py`）
+                        │     Step B：LLM 處理 unsure pairs（`MAX_UNSURE_PAIRS_LLM=20`）
+                        │     Step C：confidence &lt; 0.8 → 保留 Step A split，不丟 stage
+                        │     `REDUCER_FAIL_MODE=hard`：LLM 失敗 → `GlobalCurriculumReducerError`（session 中止）
+                        │     conflict / comparison stage → **V2.1 deferred**（降級為 split + `conflict_deferred`）
                         ├── StageComposerAgent（prerequisites 推斷）
-                        ├── global verify_global_coverage
-                        ├── Plan B（CURRICULUM_V2_PLAN_B=1）：主 source 骨架 + fuzzy attach
-                        └── WS 新增：region_done / reduce_done / composer_done（可選訂閱）
+                        ├── `assess_reducer_health` → log `curriculum_health_alert` + 可選寫入 `quality_warnings.health_signals`
+                        ├── `verify_global_coverage`（named_cases + orphan chunks + duplicate titles）
+                        ├── Plan B（**手動** `CURRICULUM_V2_PLAN_B=1`）：主 source 骨架 + fuzzy attach；`plan_b_recommended` 僅告警
+                        └── WS：`region_done` / `reduce_done`（含 health）/ `composer_done`
 ```
 
 ### 7.3 確認知識地圖（confirm_map）
@@ -1423,6 +1430,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `drift_verifier` | DriftVerifierAgent（含 cited_chunks_lookup 驗證規則） |
 | `scope_judge` | handle_student_question（範疇判斷） |
 | `tutor_reply` | handle_student_question（生成回答） |
+| `global_curriculum_reducer` | GlobalCurriculumReducerAgent（V2 Step B unsure pairs） |
 
 ---
 
@@ -1446,10 +1454,33 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `CORS_ORIGIN_REGEX` | `https://.*\.trycloudflare\.com` | 動態 Quick Tunnel 子網域用 regex 白名單；設為空字串可關閉 |
 | `CURRICULUM_PIPELINE_V2` | `0` | `1` 啟用 V2 macro region + reducer pipeline |
 | `SPLITTER_FAIL_MODE` | `hard` | `soft` 時 verifier 失敗仍進 pending，附 `quality_warnings` |
-| `REDUCER_FAIL_MODE` | `hard` | V2：`soft` 時 reducer 空結果平鋪 candidate stages |
-| `CURRICULUM_V2_PLAN_B` | `0` | `1` 時 V2 降級為主 source 骨架 + fuzzy attach |
+| `REDUCER_FAIL_MODE` | `hard` | V2：`soft` 時 reducer 空結果平鋪 candidate；`hard` 時 LLM 失敗 raise |
+| `CURRICULUM_V2_PLAN_B` | `0` | **手動**啟用 Plan B；不自動切換（見 `plan_b_recommended` 告警） |
+| `GO_NOGO_LLM_PROVIDER` | — | 真 LLM Go/No-Go 測試用 provider 覆寫（預設 `DEFAULT_PROVIDER`） |
+| `RUN_LLM_TESTS` | — | 設 `1` 才執行 `pytest -m llm_live` 真 LLM gate |
 
 > Schema contract：`docs/superpowers/specs/2026-05-22-curriculum-v2-schema.md`
+
+### V2 測試與 Go/No-Go
+
+| 類型 | 指令 | 用途 |
+|------|------|------|
+| CI mock baseline | `pytest backend/tests/test_reducer_go_nogo.py` | 驗證 `integrate_llm_outcomes`、Step C、hard fail（mock LLM） |
+| 真 LLM gate（手動） | `RUN_LLM_TESTS=1 pytest -m llm_live backend/tests/test_reducer_go_nogo_live.py` | 上線前量測 reducer prompt 準確率（同 source ≥90%、多 source ≥75%） |
+| 健康監控 | `orchestrator.log` grep `curriculum_health_alert` | outcome 比例異常 / fallback / `plan_b_recommended` |
+
+> 預設 `pytest.ini` 排除 `llm_live`；CI 不呼叫真 LLM。
+
+### V2 監控信號（`backend/utils/curriculum_health.py`）
+
+Reducer 完成後寫 log 並可選附加至 `pending_map_json.quality_warnings`：
+
+| signal | 意義 |
+|--------|------|
+| `reducer_fallback_flat` | `REDUCER_FAIL_MODE=soft` 平鋪 candidate |
+| `reducer_outcome_ratio_low` | outcome 數 &lt; 50% candidate 數 |
+| `llm_reducer_no_accepted_outcomes` | 有 unsure pairs 但 LLM 無 accepted outcome |
+| `plan_b_recommended` | 建議人工評估是否改 `CURRICULUM_V2_PLAN_B=1`（**不自動切**） |
 
 > 進階門檻分數與重試上限目前寫死在 orchestrator 中（`pass_threshold=0.75`、`max_attempts=3`），不再由環境變數覆寫。
 
