@@ -624,10 +624,10 @@ class WorkingMemory:
                 │   └── emit knowledge_map（可含 quality_warnings → 前端 QualityWarningBanner）
                 │
                 └── 【V2 路徑】`curriculum_pipeline_v2.run_start_session_v2`（`CURRICULUM_PIPELINE_V2=1`）
-                        ├── MacroRegionPlannerAgent → `plan_macro_regions`
+                        ├── MacroRegionPlannerAgent → `plan_macro_regions` + 可選 LLM refinement
                         │     tier (a) source_id + section_title 分組；oversized group（>40 chunks）強制 fixed-size 切（避免 epub 共用 section_title 退化為 1-region）
                         │     tier (b) 無 section_title → fixed-size 25 chunks 切
-                        │     tier (c) LLM 邊界 refinement → V2.1
+                        │     tier (c) `MACRO_REGION_USE_LLM=1` 或 payload `use_llm_refinement=True` 啟用 LLM metadata refinement（每 region 首尾 300 字 → 補 title / expected_stage_count / must_cover_topics；不重切邊界；LLM 失敗 fallback 為 tier-1/2）
                         ├── per-region ContentSplitter + region SplitterVerifier
                         ├── GlobalCurriculumReducer
                         │     Step A：`rule_merge_candidates`（Union-Find，threshold 見 `reducer_constants.py`）
@@ -1434,6 +1434,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `scope_judge` | handle_student_question（範疇判斷） |
 | `tutor_reply` | handle_student_question（生成回答） |
 | `global_curriculum_reducer` | GlobalCurriculumReducerAgent（V2 Step B unsure pairs；含 confidence 校準準則 + 4 few-shot 避免 LLM 過度保守） |
+| `macro_region_refiner` | MacroRegionPlannerAgent tier-3（補 title / expected_stage_count / must_cover_topics，不重切邊界） |
 
 ---
 
@@ -1461,6 +1462,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `CURRICULUM_V2_PLAN_B` | `0` | **手動**啟用 Plan B；不自動切換（見 `plan_b_recommended` 告警） |
 | `GO_NOGO_LLM_PROVIDER` | — | 真 LLM Go/No-Go 測試用 provider 覆寫（預設 `DEFAULT_PROVIDER`） |
 | `RUN_LLM_TESTS` | — | 設 `1` 才執行 `pytest -m llm_live` 真 LLM gate |
+| `MACRO_REGION_USE_LLM` | `0` | V2 tier-3：`1` 啟用 MacroRegionPlanner LLM metadata refinement（補 title/expected_stage_count/must_cover_topics，不重切邊界） |
 
 > Schema contract：`docs/superpowers/specs/2026-05-22-curriculum-v2-schema.md`
 
