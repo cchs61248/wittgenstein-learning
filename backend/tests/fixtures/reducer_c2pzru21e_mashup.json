@@ -1,0 +1,12 @@
+{
+  "description": "sess_c2pzru21e Part 5 mash-up mock candidates",
+  "session_id": "sess_c2pzru21e",
+  "verify_missing_attempt_3": [
+    "股票", "債券", "基金", "高股息", "槓反ETF", "期貨選擇權", "虛擬資產", "房地產"
+  ],
+  "candidate_stages": [
+    {"region_id": "region_004", "source_id": "src_0", "title": "Part 5 金融商品總覽（合併）", "teaching_goal": "概覽八種金融商品", "key_concepts": ["股票", "債券", "基金", "ETF"], "source_chunk_ids": ["chunk_0090", "chunk_0091", "chunk_0092"], "confidence": 0.7},
+    {"region_id": "region_004", "source_id": "src_0", "title": "期貨與虛擬資產", "teaching_goal": "理解衍生性商品", "key_concepts": ["期貨", "虛擬資產"], "source_chunk_ids": ["chunk_0100", "chunk_0101"], "confidence": 0.75},
+    {"region_id": "region_003", "source_id": "src_0", "title": "行為偏誤總結", "teaching_goal": "整合 Part 1-4", "key_concepts": ["偏誤", "心理"], "source_chunk_ids": ["chunk_0060"], "confidence": 0.9}
+  ]
+}

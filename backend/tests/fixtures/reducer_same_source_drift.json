@@ -1,0 +1,15 @@
+{
+  "description": "同 source 重複跑 — 巴菲特命名漂移",
+  "candidates_a": [
+    {"title": "巴菲特神話", "teaching_goal": "理解出身對投資視野的影響", "key_concepts": ["巴菲特", "家世"], "source_id": "src_a", "source_chunk_ids": ["chunk_0001"]},
+    {"title": "賭徒謬誤", "teaching_goal": "理解追損心理", "key_concepts": ["賭徒謬誤", "追損"], "source_id": "src_a", "source_chunk_ids": ["chunk_0010"]}
+  ],
+  "candidates_b": [
+    {"title": "巴菲特流派的家世背景", "teaching_goal": "理解出身對投資視野的影響", "key_concepts": ["巴菲特", "流派", "家世"], "source_id": "src_a", "source_chunk_ids": ["chunk_0005"]},
+    {"title": "追高殺低", "teaching_goal": "理解追損心理", "key_concepts": ["追高", "追損"], "source_id": "src_a", "source_chunk_ids": ["chunk_0012"]}
+  ],
+  "expected_merge_pairs": [
+    ["巴菲特神話", "巴菲特流派的家世背景"],
+    ["賭徒謬誤", "追高殺低"]
+  ]
+}

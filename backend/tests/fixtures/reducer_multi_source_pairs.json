@@ -1,0 +1,15 @@
+{
+  "description": "多 source 同概念 synthetic pairs",
+  "pairs": [
+    {
+      "a": {"source_id": "src_a", "title": "賭徒謬誤", "teaching_goal": "理解追損心理", "key_concepts": ["賭徒謬誤", "追損"], "source_chunk_ids": ["chunk_0012"]},
+      "b": {"source_id": "src_b", "title": "追高殺低", "teaching_goal": "理解追損心理", "key_concepts": ["追高", "追損", "心理"], "source_chunk_ids": ["chunk_0045"]},
+      "should_merge": true
+    },
+    {
+      "a": {"source_id": "src_a", "title": "股票質押", "teaching_goal": "理解槓桿風險", "key_concepts": ["質押", "槓桿"], "source_chunk_ids": ["chunk_0020"]},
+      "b": {"source_id": "src_b", "title": "房貸利率", "teaching_goal": "理解利率對現金流的影響", "key_concepts": ["房貸", "利率"], "source_chunk_ids": ["chunk_0050"]},
+      "should_merge": false
+    }
+  ]
+}
