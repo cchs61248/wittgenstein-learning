@@ -1466,10 +1466,21 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | 類型 | 指令 | 用途 |
 |------|------|------|
 | CI mock baseline | `pytest backend/tests/test_reducer_go_nogo.py` | 驗證 `integrate_llm_outcomes`、Step C、hard fail（mock LLM） |
-| 真 LLM gate（手動） | `RUN_LLM_TESTS=1 pytest -m llm_live backend/tests/test_reducer_go_nogo_live.py` | 上線前量測 reducer prompt 準確率；**每 baseline ≥5 對** unsure pairs 取 avg（`reducer_go_nogo_live_pairs.json`） |
+| Fixture 結構驗證（CI） | `pytest backend/tests/test_go_nogo_fixture_validation.py` | 驗證 `reducer_go_nogo_live_pairs.json` v2：merge/negative 數量、drift_pattern 覆蓋、merge case 必須 hit unsure path |
+| 真 LLM gate（手動） | `RUN_LLM_TESTS=1 pytest -m llm_live backend/tests/test_reducer_go_nogo_live.py` | 三指標 per baseline（avg）：**merge 準確率**、**split 準確率**（negative cases）、**unsure 率**；fixture 每 baseline ≥5 merge + ≥3 negative |
+| Nightly LLM gate | `.github/workflows/reducer-go-nogo-nightly.yml` | cron 18:00 UTC + `workflow_dispatch`；需 repo secrets |
 | 健康監控 | `orchestrator.log` grep `curriculum_health_alert` | outcome 比例異常 / fallback / `plan_b_recommended` |
 
-> 預設 `pytest.ini` 排除 `llm_live`；CI 不呼叫真 LLM。
+**Go/No-Go 門檻**（`reducer_constants.py`）：
+
+| 指標 | same_source | multi_source | 備註 |
+|------|-------------|--------------|------|
+| merge 準確率 min | 0.90 | 0.75 | |
+| split 準確率 min | 0.80 | 0.80 | negative cases，防 false merge |
+| unsure 率 max | 0.20 | 0.30 | LLM 有 unsure 但零 accepted outcome |
+| conflict 誤判率 | — | — | **V2.1 deferred** |
+
+> 預設 `pytest.ini` 排除 `llm_live`；一般 CI 不呼叫真 LLM。Nightly workflow 可選啟用。
 
 ### V2 監控信號（`backend/utils/curriculum_health.py`）
 

@@ -1,103 +1,189 @@
 {
-  "description": "Live LLM Go/No-Go — 每 baseline 多對 unsure pairs（各 pair 獨立跑 reducer）",
-  "same_source": [
-    {
-      "id": "buffett_drift",
-      "candidates": [
-        {"source_id": "src_a", "title": "巴菲特神話", "teaching_goal": "理解出身對投資視野的影響", "key_concepts": ["神話"], "source_chunk_ids": ["chunk_0001"]},
-        {"source_id": "src_a", "title": "巴菲特流派家世", "teaching_goal": "理解出身對投資視野的影響", "key_concepts": ["流派"], "source_chunk_ids": ["chunk_0005"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "gambler_drift",
-      "candidates": [
-        {"source_id": "src_a", "title": "賭徒謬誤", "teaching_goal": "理解追損心理", "key_concepts": ["賭徒謬誤"], "source_chunk_ids": ["chunk_0010"]},
-        {"source_id": "src_a", "title": "追高殺低", "teaching_goal": "理解追損心理", "key_concepts": ["追高"], "source_chunk_ids": ["chunk_0012"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "compound_interest",
-      "candidates": [
-        {"source_id": "src_a", "title": "複利效应", "teaching_goal": "理解長期複利對資產成長的影響", "key_concepts": ["複利"], "source_chunk_ids": ["chunk_0020"]},
-        {"source_id": "src_a", "title": "72法則", "teaching_goal": "理解長期複利對資產成長的影響", "key_concepts": ["72法則"], "source_chunk_ids": ["chunk_0021"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "margin_of_safety",
-      "candidates": [
-        {"source_id": "src_a", "title": "安全邊際", "teaching_goal": "理解以折扣價買入的風險緩衝", "key_concepts": ["安全邊際"], "source_chunk_ids": ["chunk_0030"]},
-        {"source_id": "src_a", "title": "安全边际概念", "teaching_goal": "理解以折扣價買入的風險緩衝", "key_concepts": ["折扣"], "source_chunk_ids": ["chunk_0031"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "intrinsic_value",
-      "candidates": [
-        {"source_id": "src_a", "title": "內在價值", "teaching_goal": "理解企業真實價值估算", "key_concepts": ["內在價值"], "source_chunk_ids": ["chunk_0040"]},
-        {"source_id": "src_a", "title": "价值估算方法", "teaching_goal": "理解企業真實價值估算", "key_concepts": ["估算"], "source_chunk_ids": ["chunk_0041"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "circle_of_competence",
-      "candidates": [
-        {"source_id": "src_a", "title": "能力圈", "teaching_goal": "理解只投資熟悉領域的原則", "key_concepts": ["能力圈"], "source_chunk_ids": ["chunk_0050"]},
-        {"source_id": "src_a", "title": "能力圈边界", "teaching_goal": "理解只投資熟悉領域的原則", "key_concepts": ["边界"], "source_chunk_ids": ["chunk_0051"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    }
-  ],
-  "multi_source": [
-    {
-      "id": "gambler_multi",
-      "candidates": [
-        {"source_id": "src_a", "title": "賭徒謬誤", "teaching_goal": "理解追損心理", "key_concepts": ["賭徒謬誤"], "source_chunk_ids": ["chunk_0012"]},
-        {"source_id": "src_b", "title": "追高殺低", "teaching_goal": "理解追損心理", "key_concepts": ["追高"], "source_chunk_ids": ["chunk_0045"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "compound_multi",
-      "candidates": [
-        {"source_id": "src_a", "title": "複利的力量", "teaching_goal": "理解長期複利效應", "key_concepts": ["複利"], "source_chunk_ids": ["chunk_0060"]},
-        {"source_id": "src_b", "title": "Compound Interest", "teaching_goal": "理解長期複利效應", "key_concepts": ["interest"], "source_chunk_ids": ["chunk_0061"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "diversification_multi",
-      "candidates": [
-        {"source_id": "src_a", "title": "分散投資", "teaching_goal": "理解降低非系統風險", "key_concepts": ["分散"], "source_chunk_ids": ["chunk_0070"]},
-        {"source_id": "src_b", "title": "Diversification", "teaching_goal": "理解降低非系統風險", "key_concepts": ["portfolio"], "source_chunk_ids": ["chunk_0071"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "stop_loss_multi",
-      "candidates": [
-        {"source_id": "src_a", "title": "停損紀律", "teaching_goal": "理解控制單筆最大虧損", "key_concepts": ["停損"], "source_chunk_ids": ["chunk_0080"]},
-        {"source_id": "src_b", "title": "Stop Loss", "teaching_goal": "理解控制單筆最大虧損", "key_concepts": ["loss"], "source_chunk_ids": ["chunk_0081"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "cashflow_multi",
-      "candidates": [
-        {"source_id": "src_a", "title": "現金流", "teaching_goal": "理解企業造血能力", "key_concepts": ["現金流"], "source_chunk_ids": ["chunk_0090"]},
-        {"source_id": "src_b", "title": "Free Cash Flow", "teaching_goal": "理解企業造血能力", "key_concepts": ["FCF"], "source_chunk_ids": ["chunk_0091"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    },
-    {
-      "id": "moat_multi",
-      "candidates": [
-        {"source_id": "src_a", "title": "護城河", "teaching_goal": "理解競爭優勢的可持續性", "key_concepts": ["護城河"], "source_chunk_ids": ["chunk_0100"]},
-        {"source_id": "src_b", "title": "Economic Moat", "teaching_goal": "理解競爭優勢的可持續性", "key_concepts": ["moat"], "source_chunk_ids": ["chunk_0101"]}
-      ],
-      "expected_merge_pairs": [[0, 1]]
-    }
-  ]
+  "version": 2,
+  "description": "Live LLM Go/No-Go — merge + negative cases per baseline, tagged by drift_pattern",
+  "drift_pattern_glossary": {
+    "literal_tweak": "字面微改（简繁/用字差异）",
+    "word_order": "词序或语序变动",
+    "synonym": "同义词替换",
+    "added_words": "标题加修饰词",
+    "translation": "跨语言同概念（中/英）",
+    "complementary_angle": "同主题不同表述角度（应 merge）",
+    "false_similar_title": "标题相似但教学目标不同（不应 merge）",
+    "false_similar_topic": "共享领域词但目标不同（不应 merge）",
+    "different_goal": "表面相关概念、 distinct teaching_goal（不应 merge）"
+  },
+  "same_source": {
+    "merge": [
+      {
+        "id": "buffett_literal_tweak",
+        "drift_pattern": "literal_tweak",
+        "candidates": [
+          {"source_id": "src_a", "title": "巴菲特神話", "teaching_goal": "理解出身對投資視野的影響", "key_concepts": ["神話"], "source_chunk_ids": ["chunk_0001"]},
+          {"source_id": "src_a", "title": "巴菲特神话", "teaching_goal": "理解出身對投資視野的影響", "key_concepts": ["神话"], "source_chunk_ids": ["chunk_0005"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "gambler_word_order",
+        "drift_pattern": "word_order",
+        "candidates": [
+          {"source_id": "src_a", "title": "追損的賭徒謬誤", "teaching_goal": "理解追損心理", "key_concepts": ["賭徒謬誤"], "source_chunk_ids": ["chunk_0010"]},
+          {"source_id": "src_a", "title": "賭徒謬誤與追損", "teaching_goal": "理解追損心理", "key_concepts": ["追損"], "source_chunk_ids": ["chunk_0012"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "margin_synonym",
+        "drift_pattern": "synonym",
+        "candidates": [
+          {"source_id": "src_a", "title": "安全邊際", "teaching_goal": "理解以折扣價買入的風險緩衝", "key_concepts": ["安全邊際"], "source_chunk_ids": ["chunk_0030"]},
+          {"source_id": "src_a", "title": "風險緩衝帶", "teaching_goal": "理解以折扣價買入的風險緩衝", "key_concepts": ["緩衝"], "source_chunk_ids": ["chunk_0031"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "compound_added_words",
+        "drift_pattern": "added_words",
+        "candidates": [
+          {"source_id": "src_a", "title": "複利", "teaching_goal": "理解長期複利對資產成長的影響", "key_concepts": ["複利"], "source_chunk_ids": ["chunk_0020"]},
+          {"source_id": "src_a", "title": "複利的長期威力", "teaching_goal": "理解長期複利對資產成長的影響", "key_concepts": ["長期"], "source_chunk_ids": ["chunk_0021"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "intrinsic_complementary",
+        "drift_pattern": "complementary_angle",
+        "candidates": [
+          {"source_id": "src_a", "title": "內在價值", "teaching_goal": "理解企業真實價值估算", "key_concepts": ["內在價值"], "source_chunk_ids": ["chunk_0040"]},
+          {"source_id": "src_a", "title": "价值估算方法", "teaching_goal": "理解企業真實價值估算", "key_concepts": ["估算"], "source_chunk_ids": ["chunk_0041"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "circle_added_words",
+        "drift_pattern": "added_words",
+        "candidates": [
+          {"source_id": "src_a", "title": "能力圈", "teaching_goal": "理解只投資熟悉領域的原則", "key_concepts": ["能力圈"], "source_chunk_ids": ["chunk_0050"]},
+          {"source_id": "src_a", "title": "能力圈边界", "teaching_goal": "理解只投資熟悉領域的原則", "key_concepts": ["边界"], "source_chunk_ids": ["chunk_0051"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      }
+    ],
+    "negative": [
+      {
+        "id": "loan_vs_equity_title",
+        "drift_pattern": "false_similar_title",
+        "candidates": [
+          {"source_id": "src_a", "title": "借錢投資（一）信用貸款", "teaching_goal": "理解信用貸款利率與還款壓力", "key_concepts": ["信用貸款"], "source_chunk_ids": ["chunk_0100"]},
+          {"source_id": "src_a", "title": "借錢投資（二）股票質押", "teaching_goal": "理解質押槓桿與追繳風險", "key_concepts": ["股票質押"], "source_chunk_ids": ["chunk_0101"]}
+        ],
+        "expected_split_pairs": [[0, 1]]
+      },
+      {
+        "id": "macro_vs_stock_topic",
+        "drift_pattern": "false_similar_topic",
+        "candidates": [
+          {"source_id": "src_a", "title": "總體經濟與股市", "teaching_goal": "理解景氣循環對大盤的影響", "key_concepts": ["景氣"], "source_chunk_ids": ["chunk_0110"]},
+          {"source_id": "src_a", "title": "個股財報分析", "teaching_goal": "理解從財報判斷單一公司體質", "key_concepts": ["財報"], "source_chunk_ids": ["chunk_0111"]}
+        ],
+        "expected_split_pairs": [[0, 1]]
+      },
+      {
+        "id": "leverage_vs_diversification",
+        "drift_pattern": "different_goal",
+        "candidates": [
+          {"source_id": "src_a", "title": "槓桿操作", "teaching_goal": "理解放大報酬與虧損的双刃性", "key_concepts": ["槓桿"], "source_chunk_ids": ["chunk_0120"]},
+          {"source_id": "src_a", "title": "分散配置", "teaching_goal": "理解降低非系統性風險", "key_concepts": ["分散"], "source_chunk_ids": ["chunk_0121"]}
+        ],
+        "expected_split_pairs": [[0, 1]]
+      }
+    ]
+  },
+  "multi_source": {
+    "merge": [
+      {
+        "id": "gambler_translation",
+        "drift_pattern": "translation",
+        "candidates": [
+          {"source_id": "src_a", "title": "賭徒謬誤", "teaching_goal": "理解追損心理", "key_concepts": ["賭徒謬誤"], "source_chunk_ids": ["chunk_0012"]},
+          {"source_id": "src_b", "title": "Gambler's Fallacy", "teaching_goal": "理解追損心理", "key_concepts": ["fallacy"], "source_chunk_ids": ["chunk_0045"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "compound_translation",
+        "drift_pattern": "translation",
+        "candidates": [
+          {"source_id": "src_a", "title": "複利的力量", "teaching_goal": "理解長期複利效應", "key_concepts": ["複利"], "source_chunk_ids": ["chunk_0060"]},
+          {"source_id": "src_b", "title": "Compound Interest", "teaching_goal": "理解長期複利效應", "key_concepts": ["interest"], "source_chunk_ids": ["chunk_0061"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "diversification_synonym",
+        "drift_pattern": "synonym",
+        "candidates": [
+          {"source_id": "src_a", "title": "分散投資", "teaching_goal": "理解降低非系統風險", "key_concepts": ["分散"], "source_chunk_ids": ["chunk_0070"]},
+          {"source_id": "src_b", "title": "投資組合分散", "teaching_goal": "理解降低非系統風險", "key_concepts": ["組合"], "source_chunk_ids": ["chunk_0071"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "stop_loss_literal",
+        "drift_pattern": "literal_tweak",
+        "candidates": [
+          {"source_id": "src_a", "title": "停損紀律", "teaching_goal": "理解控制單筆最大虧損", "key_concepts": ["停損"], "source_chunk_ids": ["chunk_0080"]},
+          {"source_id": "src_b", "title": "停损纪律", "teaching_goal": "理解控制單筆最大虧損", "key_concepts": ["停损"], "source_chunk_ids": ["chunk_0081"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "cashflow_complementary",
+        "drift_pattern": "complementary_angle",
+        "candidates": [
+          {"source_id": "src_a", "title": "現金流", "teaching_goal": "理解企業造血能力", "key_concepts": ["現金流"], "source_chunk_ids": ["chunk_0090"]},
+          {"source_id": "src_b", "title": "Free Cash Flow", "teaching_goal": "理解企業造血能力", "key_concepts": ["FCF"], "source_chunk_ids": ["chunk_0091"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      },
+      {
+        "id": "moat_added_words",
+        "drift_pattern": "added_words",
+        "candidates": [
+          {"source_id": "src_a", "title": "護城河", "teaching_goal": "理解競爭優勢的可持續性", "key_concepts": ["護城河"], "source_chunk_ids": ["chunk_0100"]},
+          {"source_id": "src_b", "title": "Economic Moat 概念", "teaching_goal": "理解競爭優勢的可持續性", "key_concepts": ["moat"], "source_chunk_ids": ["chunk_0101"]}
+        ],
+        "expected_merge_pairs": [[0, 1]]
+      }
+    ],
+    "negative": [
+      {
+        "id": "credit_vs_mortgage_multi",
+        "drift_pattern": "false_similar_title",
+        "candidates": [
+          {"source_id": "src_a", "title": "信用貸款入門", "teaching_goal": "理解無擔保借款利率", "key_concepts": ["信用貸款"], "source_chunk_ids": ["chunk_0200"]},
+          {"source_id": "src_b", "title": "房屋貸款入門", "teaching_goal": "理解抵押貸款年限與利率", "key_concepts": ["房貸"], "source_chunk_ids": ["chunk_0201"]}
+        ],
+        "expected_split_pairs": [[0, 1]]
+      },
+      {
+        "id": "inflation_vs_earnings_multi",
+        "drift_pattern": "false_similar_topic",
+        "candidates": [
+          {"source_id": "src_a", "title": "通膨影響", "teaching_goal": "理解物價上升對購買力的侵蝕", "key_concepts": ["通膨"], "source_chunk_ids": ["chunk_0210"]},
+          {"source_id": "src_b", "title": "盈餘成長", "teaching_goal": "理解 EPS 成長對估值的支撐", "key_concepts": ["EPS"], "source_chunk_ids": ["chunk_0211"]}
+        ],
+        "expected_split_pairs": [[0, 1]]
+      },
+      {
+        "id": "bond_vs_stock_multi",
+        "drift_pattern": "different_goal",
+        "candidates": [
+          {"source_id": "src_a", "title": "債券定價", "teaching_goal": "理解利率與債價反向關係", "key_concepts": ["債券"], "source_chunk_ids": ["chunk_0220"]},
+          {"source_id": "src_b", "title": "股票估值", "teaching_goal": "理解本益比與成長率", "key_concepts": ["估值"], "source_chunk_ids": ["chunk_0221"]}
+        ],
+        "expected_split_pairs": [[0, 1]]
+      }
+    ]
+  }
 }

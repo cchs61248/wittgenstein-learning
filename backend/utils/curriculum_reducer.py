@@ -356,3 +356,42 @@ def measure_merge_accuracy(
         if share:
             correct += 1
     return correct / len(expected_merge_pairs)
+
+
+def pair_is_merged(outcomes: list[dict], i: int, j: int) -> bool:
+    for o in outcomes:
+        indices = o.get("_source_indices")
+        if not indices:
+            continue
+        idx_set = set(indices)
+        if i in idx_set and j in idx_set and o.get("merge_decision") == "merged":
+            return True
+    return False
+
+
+def measure_split_accuracy(
+    outcomes: list[dict],
+    pairs_should_split: list[tuple[int, int]],
+) -> float:
+    """Go/No-Go: fraction of pairs correctly kept separate (no false merge)."""
+    if not pairs_should_split:
+        return 1.0
+    correct = sum(
+        1 for i, j in pairs_should_split
+        if not pair_is_merged(outcomes, i, j)
+    )
+    return correct / len(pairs_should_split)
+
+
+def measure_unsure_abstain_rate(agent_result: dict, *, expected_merge: bool) -> float:
+    """
+    Per-run unsure proxy: LLM had unsure pairs but zero parsed outcomes accepted.
+    Aggregate average across merge cases approximates plan 'unsure 率'.
+    """
+    if not expected_merge:
+        return 0.0
+    unsure = int(agent_result.get("unsure_pair_count") or 0)
+    if unsure == 0:
+        return 0.0
+    llm_out = int(agent_result.get("llm_outcome_count") or 0)
+    return 1.0 if llm_out == 0 else 0.0
