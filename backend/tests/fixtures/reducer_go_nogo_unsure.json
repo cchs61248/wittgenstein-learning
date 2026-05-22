@@ -1,0 +1,62 @@
+{
+  "description": "Unsure pairs for Step B mock LLM Go/No-Go (same teaching_goal, low kc overlap)",
+  "scenarios": [
+    {
+      "id": "multi_source_merge",
+      "candidates": [
+        {"source_id": "src_a", "title": "賭徒謬誤", "teaching_goal": "理解追損心理", "key_concepts": ["賭徒謬誤", "追損"], "source_chunk_ids": ["chunk_0012"]},
+        {"source_id": "src_b", "title": "追高殺低", "teaching_goal": "理解追損心理", "key_concepts": ["追高", "心理"], "source_chunk_ids": ["chunk_0045"]}
+      ],
+      "expected_merge_pairs": [[0, 1]],
+      "llm_outcomes": [{
+        "outcome_id": "lo_llm_001",
+        "title": "賭徒謬誤",
+        "teaching_goal": "理解追損心理",
+        "key_concepts": ["賭徒謬誤", "追損", "心理"],
+        "primary_evidence": {"source_id": "src_a", "chunk_ids": ["chunk_0012"]},
+        "supporting_evidence": [{"source_id": "src_b", "chunk_ids": ["chunk_0045"]}],
+        "merge_decision": "merged",
+        "merge_confidence": 0.88
+      }],
+      "baseline": "multi_source"
+    },
+    {
+      "id": "same_source_drift_merge",
+      "candidates": [
+        {"source_id": "src_a", "title": "巴菲特神話", "teaching_goal": "理解出身對投資視野的影響", "key_concepts": ["巴菲特", "神話"], "source_chunk_ids": ["chunk_0001"]},
+        {"source_id": "src_a", "title": "巴菲特流派家世", "teaching_goal": "理解出身對投資視野的影響", "key_concepts": ["巴菲特", "流派"], "source_chunk_ids": ["chunk_0005"]}
+      ],
+      "expected_merge_pairs": [[0, 1]],
+      "llm_outcomes": [{
+        "outcome_id": "lo_llm_002",
+        "title": "巴菲特家世",
+        "teaching_goal": "理解出身對投資視野的影響",
+        "key_concepts": ["巴菲特", "家世"],
+        "primary_evidence": {"source_id": "src_a", "chunk_ids": ["chunk_0001"]},
+        "supporting_evidence": [{"source_id": "src_a", "chunk_ids": ["chunk_0005"]}],
+        "merge_decision": "merged",
+        "merge_confidence": 0.92
+      }],
+      "baseline": "same_source"
+    },
+    {
+      "id": "low_confidence_split",
+      "candidates": [
+        {"source_id": "src_a", "title": "股票質押", "teaching_goal": "理解槓桿風險", "key_concepts": ["質押", "槓桿"], "source_chunk_ids": ["chunk_0020"]},
+        {"source_id": "src_b", "title": "房貸利率", "teaching_goal": "理解利率對現金流", "key_concepts": ["房貸", "利率"], "source_chunk_ids": ["chunk_0050"]}
+      ],
+      "expected_merge_pairs": [],
+      "llm_outcomes": [{
+        "outcome_id": "lo_llm_003",
+        "title": "槓桿與利率",
+        "teaching_goal": "理解槓桿風險",
+        "key_concepts": ["槓桿", "利率"],
+        "primary_evidence": {"source_id": "src_a", "chunk_ids": ["chunk_0020"]},
+        "supporting_evidence": [{"source_id": "src_b", "chunk_ids": ["chunk_0050"]}],
+        "merge_decision": "merged",
+        "merge_confidence": 0.65
+      }],
+      "baseline": "step_c"
+    }
+  ]
+}

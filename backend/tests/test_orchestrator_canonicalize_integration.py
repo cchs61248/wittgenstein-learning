@@ -120,6 +120,9 @@ class TestOrchestratorCanonicalizeIntegration(unittest.IsolatedAsyncioTestCase):
             "backend.orchestrator.learning_orchestrator.session_memory.create_pending_session",
             new=AsyncMock(side_effect=_capture_create_pending),
         ), patch(
+            "backend.orchestrator.learning_orchestrator.session_memory.purge_source_uploads",
+            new=AsyncMock(),
+        ), patch(
             "backend.orchestrator.learning_orchestrator.longterm_memory.get_concept_canonical_pool",
             new=AsyncMock(return_value=[
                 {"concept_name": "巴菲特神話", "total_exposures": 6, "last_tested": ""},
@@ -200,6 +203,9 @@ class TestOrchestratorCanonicalizeIntegration(unittest.IsolatedAsyncioTestCase):
             "backend.orchestrator.learning_orchestrator.session_memory.create_pending_session",
             new=AsyncMock(side_effect=_capture_create_pending),
         ), patch(
+            "backend.orchestrator.learning_orchestrator.session_memory.purge_source_uploads",
+            new=AsyncMock(),
+        ), patch(
             "backend.orchestrator.learning_orchestrator.longterm_memory.get_concept_canonical_pool",
             new=AsyncMock(return_value=[]),
         ):
@@ -237,6 +243,9 @@ class TestOrchestratorCanonicalizeIntegration(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(),
         ), patch(
             "backend.orchestrator.learning_orchestrator.session_memory.create_pending_session",
+            new=AsyncMock(),
+        ), patch(
+            "backend.orchestrator.learning_orchestrator.session_memory.purge_source_uploads",
             new=AsyncMock(),
         ), patch(
             "backend.orchestrator.learning_orchestrator.longterm_memory.get_concept_canonical_pool",
