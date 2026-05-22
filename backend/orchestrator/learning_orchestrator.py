@@ -29,6 +29,7 @@ from .debounced_writer import DebouncedExplanationWriter
 from .stage_boundary import compute_stage_boundary_lists
 from .qg_payload import build_qg_task_payload
 from ..utils.teaching_intent import normalize_teaching_intent
+from ..utils.stage_budget import compute_dynamic_max_stages
 
 WSEmitter = Callable[[dict], Awaitable[None]]
 
@@ -601,9 +602,15 @@ class LearningOrchestrator:
                 )
 
         # ── 2. ContentSplitter（LLM 呼叫，可能耗時 10–60s）
+        source_count = len({c.get("source_index", 0) for c in source_chunks}) or 1
+        max_stages = compute_dynamic_max_stages(
+            source_chunks,
+            source_count=source_count,
+            required_outline=required_outline,
+        )
         splitter_ctx_payload: dict = {
             "source_chunks": source_chunks,
-            "max_stages": 30,
+            "max_stages": max_stages,
             "target_depth": target_depth,
         }
         if required_outline:
