@@ -20,9 +20,12 @@ def _group_key(chunk: dict) -> tuple:
 
 def plan_macro_regions(source_chunks: list[dict], *, chunks_per_region: int = 25) -> list[dict]:
     """
-    Three-tier fallback:
+    Two-tier fallback (V2 baseline):
     (a) group by source + section_title when present
     (b) fixed-size windows within each source
+
+    Tier (c) LLM boundary refinement from region head/tail 500 chars is V2.1
+    (see MacroRegionPlannerAgent — currently delegates here).
     """
     if not source_chunks:
         return []
