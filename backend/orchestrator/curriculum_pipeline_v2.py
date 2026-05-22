@@ -8,13 +8,15 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from ..agents.base_agent import AgentContext
-from ..agents.global_curriculum_reducer import GlobalCurriculumReducerAgent
+from ..agents.global_curriculum_reducer import GlobalCurriculumReducerAgent, GlobalCurriculumReducerError
 from ..agents.global_curriculum_verifier import verify_global_coverage
+from ..agents.macro_region_planner import MacroRegionPlannerAgent
 from ..agents.stage_composer import StageComposerAgent
 from ..memory import session_memory
+from ..utils.canonicalize_apply import apply_canonical_mappings
 from ..utils.curriculum_reducer import attach_supporting_by_fuzzy_match, outcomes_to_stages
 from ..utils.fuzzy_match import concepts_match
-from ..utils.region_planning import plan_macro_regions, slice_region_chunks
+from ..utils.region_planning import slice_region_chunks
 from ..utils.stage_budget import compute_dynamic_max_stages
 
 if TYPE_CHECKING:
@@ -109,7 +111,14 @@ async def run_start_session_v2(
         except Exception as e:
             _log.warning("v2 content_outline failed  session=%s  err=%s", session_id, e)
 
-    regions = plan_macro_regions(source_chunks)
+    regions = await MacroRegionPlannerAgent(orch.splitter.llm, orch.splitter.token_counter).run(
+        AgentContext(
+            session_id=session_id,
+            user_id=user_id,
+            task_payload={"source_chunks": source_chunks},
+        )
+    )
+    regions = regions.get("regions") or []
     await emit({
         "type": "region_done",
         "payload": {"session_id": session_id, "region_count": len(regions)},
@@ -210,6 +219,8 @@ async def run_start_session_v2(
         try:
             reduce_result = await reducer.run(reducer_ctx)
             outcomes = reduce_result.get("outcomes") or []
+        except GlobalCurriculumReducerError:
+            raise
         except Exception as e:
             _log.warning("v2 reducer failed  session=%s  err=%s", session_id, e)
             outcomes = []
@@ -262,7 +273,6 @@ async def run_start_session_v2(
     if content_hash and new_concepts:
         try:
             from ..memory import longterm_memory
-            from ..orchestrator.learning_orchestrator import _apply_canonical_mappings
             historical_pool = await longterm_memory.get_concept_canonical_pool(
                 user_id=user_id, source_signature=content_hash, limit=80,
             )
@@ -271,7 +281,7 @@ async def run_start_session_v2(
                 task_payload={"new_concepts": new_concepts, "historical_pool": historical_pool},
             )
             canon_result = await orch.canonicalizer.run(canon_ctx)
-            stages = _apply_canonical_mappings(stages, canon_result["mappings"])
+            stages = apply_canonical_mappings(stages, canon_result["mappings"])
         except Exception as e:
             _log.warning("v2 canonicalize failed  session=%s  err=%s", session_id, e)
 

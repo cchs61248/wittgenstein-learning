@@ -31,6 +31,7 @@ from .stage_boundary import compute_stage_boundary_lists
 from .qg_payload import build_qg_task_payload
 from ..utils.teaching_intent import normalize_teaching_intent
 from ..utils.stage_budget import compute_dynamic_max_stages
+from ..utils.canonicalize_apply import apply_canonical_mappings
 
 WSEmitter = Callable[[dict], Awaitable[None]]
 
@@ -43,35 +44,9 @@ class SplitterVerificationRejected(Exception):
     """SplitterVerifier 在重試用盡後仍不通過，拒絕進入 pending_confirmation。"""
 
 
-def _apply_canonical_mappings(
-    stages: list[dict],
-    mappings: list[dict],
-) -> list[dict]:
-    """根據 canonicalize agent 的判定結果、改寫 stages[].key_concepts。
+# Backward-compatible alias for tests and external imports.
+_apply_canonical_mappings = apply_canonical_mappings
 
-    - decision="mapped"：key_concepts 內的 new_name 替換為 canonical
-    - decision="new" / "unsure"：保留原名
-    - mappings 漏掉的 concept：保留原名（向後相容）
-
-    回傳新的 stages list（原 stages 不修改、深拷貝 key_concepts）。
-    """
-    mapping_by_name: dict[str, str | None] = {}
-    for m in mappings:
-        new_name = m.get("new_name")
-        if not new_name:
-            continue
-        if m.get("decision") == "mapped" and m.get("canonical"):
-            mapping_by_name[new_name] = m["canonical"]
-
-    result: list[dict] = []
-    for stage in stages:
-        new_stage = dict(stage)
-        original_concepts = stage.get("key_concepts") or []
-        new_stage["key_concepts"] = [
-            mapping_by_name.get(c, c) for c in original_concepts
-        ]
-        result.append(new_stage)
-    return result
 
 # 持久化用分隔符：僅存於 DB，不應出現在 WS／前端顯示字串中
 _EXPL_PERSIST_SEP = "\n<<WL_EXPL_BODY>>\n"
