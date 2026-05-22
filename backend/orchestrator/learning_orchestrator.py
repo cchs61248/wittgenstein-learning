@@ -1,4 +1,3 @@
-import hashlib
 import json
 import logging
 import os
@@ -32,6 +31,7 @@ from .qg_payload import build_qg_task_payload
 from ..utils.teaching_intent import normalize_teaching_intent
 from ..utils.stage_budget import compute_dynamic_max_stages
 from ..utils.canonicalize_apply import apply_canonical_mappings
+from ..utils.content_hash import compute_content_hash
 
 WSEmitter = Callable[[dict], Awaitable[None]]
 
@@ -575,8 +575,7 @@ class LearningOrchestrator:
         emit: WSEmitter,
         source_file_ids: list[str] | None = None,
     ) -> None:
-        hash_seed = "".join(c["text"][:80] for c in source_chunks)
-        content_hash = hashlib.sha256(hash_seed.encode()).hexdigest()[:16]
+        content_hash = compute_content_hash(source_chunks)
 
         _log.info(
             "start_session  session=%s  user=%s  chunks=%d  depth=%s  mode=%s",

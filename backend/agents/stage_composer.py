@@ -10,11 +10,15 @@ from ..utils.curriculum_reducer import outcomes_to_stages
 class StageComposerAgent:
     """Order outcomes and infer prerequisites from key_concepts overlap."""
 
-    def compose(self, outcomes: list[dict]) -> list[dict]:
+    def compose(
+        self,
+        outcomes: list[dict],
+        chunks_lookup: dict[str, str] | None = None,
+    ) -> list[dict]:
         if not outcomes:
             return []
         ordered = list(outcomes)
-        stages = outcomes_to_stages(ordered)
+        stages = outcomes_to_stages(ordered, chunks_lookup=chunks_lookup)
         id_by_outcome = {o["outcome_id"]: i for i, o in enumerate(ordered)}
         for i, stage in enumerate(stages):
             prereq_ids: list[str] = []

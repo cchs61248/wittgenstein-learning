@@ -1,11 +1,12 @@
 """Curriculum pipeline V2 — macro regions, per-region split, global reduce."""
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any
+
+from ..utils.content_hash import compute_content_hash
 
 from ..agents.base_agent import AgentContext
 from ..agents.global_curriculum_reducer import GlobalCurriculumReducerAgent, GlobalCurriculumReducerError
@@ -47,15 +48,33 @@ def _dedupe_candidates(candidates: list[dict], threshold: float = 0.85) -> list[
 
 
 def _splitter_stages_to_candidates(stages: list[dict], region: dict) -> list[dict]:
+    """Convert splitter stages → reducer candidates，過濾掉 region 邊界外的 chunk_id。
+
+    splitter 收到的 region_chunks 含上下文 overlap（前後 region 的 chunk），
+    但 stage.source_chunk_ids 只能包含 region 本身的 chunk_ids，
+    否則同一 chunk 會被前後兩個 region 的 stage 同時宣告為「正主」，
+    導致 reducer 出 duplicate candidate（claude session region_000/001 都涵蓋 chunk_0000-2 的 root cause）。
+    """
+    region_chunk_set = set(region.get("chunk_ids") or [])
     out: list[dict] = []
     for s in stages:
+        raw_ids = s.get("source_chunk_ids") or []
+        if region_chunk_set:
+            filtered_ids = [cid for cid in raw_ids if cid in region_chunk_set]
+        else:
+            filtered_ids = list(raw_ids)
+        # raw_ids 非空但 filter 後全變空 = splitter 把 chunks 全分到 region 外
+        # → skip 此 stage 避免 region_001 重切 region_000 的 chunks。
+        # raw_ids 本來就空 = stage 沒 chunks（測試 mock 或邊界），保留候選不削減。
+        if raw_ids and not filtered_ids:
+            continue
         out.append({
             "region_id": region.get("region_id"),
             "source_id": region.get("source_id"),
             "title": s.get("title"),
             "teaching_goal": s.get("teaching_goal", ""),
             "key_concepts": s.get("key_concepts") or [],
-            "source_chunk_ids": s.get("source_chunk_ids") or [],
+            "source_chunk_ids": filtered_ids,
             "confidence": 0.9,
         })
     return out
@@ -74,8 +93,7 @@ async def run_start_session_v2(
     emit,
     source_file_ids: list[str] | None = None,
 ) -> None:
-    hash_seed = "".join(c["text"][:80] for c in source_chunks)
-    content_hash = hashlib.sha256(hash_seed.encode()).hexdigest()[:16]
+    content_hash = compute_content_hash(source_chunks)
     sources_manifest = _build_sources_manifest(source_chunks)
 
     _log.info(
@@ -185,6 +203,12 @@ async def run_start_session_v2(
     all_candidates = _dedupe_candidates(all_candidates)
     summary = " ".join(s for s in summary_parts if s).strip() or "V2 課程路徑"
 
+    chunks_lookup = {
+        c["chunk_id"]: c.get("text", "")
+        for c in source_chunks
+        if isinstance(c, dict) and c.get("chunk_id")
+    }
+
     use_plan_b = os.getenv("CURRICULUM_V2_PLAN_B") == "1"
     quality_warnings: dict | None = None
     stages: list[dict]
@@ -214,7 +238,7 @@ async def run_start_session_v2(
                 "merge_confidence": 1.0,
             }
             for i, c in enumerate(primary_candidates)
-        ])
+        ], chunks_lookup=chunks_lookup)
         stages = attach_supporting_by_fuzzy_match(stages, other_chunks)
         quality_warnings = {"plan_b_active": True, "primary_source_id": primary_source}
         reduce_metrics["outcome_count"] = len(primary_candidates)
@@ -254,14 +278,14 @@ async def run_start_session_v2(
                         "merge_confidence": 1.0,
                     }
                     for i, c in enumerate(all_candidates)
-                ])
+                ], chunks_lookup=chunks_lookup)
                 quality_warnings = {"reducer_fallback_flat": True}
             else:
                 await session_memory.abandon_generating_stub(session_id)
                 raise RuntimeError("GlobalCurriculumReducer 未產出任何 unified outcomes")
         else:
             composer = StageComposerAgent()
-            stages = composer.compose(outcomes)
+            stages = composer.compose(outcomes, chunks_lookup=chunks_lookup)
 
     from ..utils.curriculum_health import assess_reducer_health
 

@@ -83,6 +83,10 @@ class SplitterVerifierAgent(BaseAgent):
         self._reset()
 
         data = json.loads(extract_json(response.content))
+        if isinstance(data, list):
+            data = next((x for x in data if isinstance(x, dict)), {})
+        if not isinstance(data, dict):
+            data = {}
         result = normalize_verifier_result(data)
         self._log_end(ctx, t0, {
             "aligned": result["aligned"],

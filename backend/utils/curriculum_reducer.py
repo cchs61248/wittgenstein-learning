@@ -50,13 +50,26 @@ def rule_merge_candidates(
             tg_b = (b.get("teaching_goal") or "").strip()
             kc_a = a.get("key_concepts") or []
             kc_b = b.get("key_concepts") or []
-            title_sim = similarity(a.get("title", ""), b.get("title", ""))
+            title_a = (a.get("title") or "").strip()
+            title_b = (b.get("title") or "").strip()
+            title_sim = similarity(title_a, title_b)
             tg_sim = similarity(tg_a, tg_b)
             kc_score = concept_overlap_score(
                 [str(x) for x in kc_a],
                 [str(x) for x in kc_b],
             )
-            if tg_sim >= RULE_MERGE_TG_SIM and kc_score >= threshold:
+            chunks_a = set(a.get("source_chunk_ids") or [])
+            chunks_b = set(b.get("source_chunk_ids") or [])
+            if chunks_a and chunks_b:
+                chunk_overlap = len(chunks_a & chunks_b) / min(len(chunks_a), len(chunks_b))
+            else:
+                chunk_overlap = 0.0
+            # hard rule: 標題完全相同 + chunk 子集關係（overlap ≥ 80%）強制 merge。
+            # 處理 LLM reducer 對「同名 title 來自不同 region 的重複 candidate」
+            # 0 accepted 的失敗模式（gemini / claude 已觀察）。
+            if title_a and title_a == title_b and chunk_overlap >= 0.8:
+                union(i, j)
+            elif tg_sim >= RULE_MERGE_TG_SIM and kc_score >= threshold:
                 union(i, j)
             elif tg_sim >= UNSURE_TG_SIM or title_sim >= UNSURE_TITLE_SIM or kc_score >= UNSURE_KC_SCORE:
                 unsure.append((i, j))
@@ -250,8 +263,12 @@ def build_step_a_outcomes(candidates: list[dict], merged_groups: list[list[int]]
     return outcomes
 
 
-def outcomes_to_stages(outcomes: list[dict]) -> list[dict]:
+def outcomes_to_stages(
+    outcomes: list[dict],
+    chunks_lookup: dict[str, str] | None = None,
+) -> list[dict]:
     stages: list[dict] = []
+    lookup = chunks_lookup or {}
     for idx, o in enumerate(outcomes):
         chunk_ids: list[str] = []
         source_chunks_meta: list[dict] = []
@@ -261,7 +278,11 @@ def outcomes_to_stages(outcomes: list[dict]) -> list[dict]:
             for cid in ev.get("chunk_ids") or []:
                 if cid not in chunk_ids:
                     chunk_ids.append(cid)
-                    source_chunks_meta.append({"chunk_id": cid, "quote": "", "note": ev.get("source_id", "")})
+                    source_chunks_meta.append({
+                        "chunk_id": cid,
+                        "quote": (lookup.get(cid) or "")[:500],
+                        "note": ev.get("source_id", ""),
+                    })
         stages.append({
             "stage_id": idx + 1,
             "node_id": f"{(idx // 3) + 1}.{(idx % 3) + 1}",
