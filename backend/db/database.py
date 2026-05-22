@@ -275,6 +275,21 @@ async def init_db(db_path: str) -> None:
         )
         await _connection.commit()
 
+    # Migration 019：source_chunks 來源 metadata + sessions.sources_json
+    for col in ("source_id TEXT", "source_index INTEGER", "source_label TEXT"):
+        try:
+            await _connection.execute(f"ALTER TABLE source_chunks ADD COLUMN {col}")
+            await _connection.commit()
+        except Exception:
+            pass
+    try:
+        await _connection.execute(
+            "ALTER TABLE sessions ADD COLUMN sources_json TEXT DEFAULT '[]'"
+        )
+        await _connection.commit()
+    except Exception:
+        pass
+
 
 async def close_db() -> None:
     global _connection

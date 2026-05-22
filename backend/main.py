@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -211,12 +212,16 @@ async def _build_source_chunks_from_payload(
     all_chunks: list[dict] = []
     global_offset = 0
     for src_info in source_infos:
+        label = src_info["label"]
+        idx = src_info["index"]
+        source_id = hashlib.sha256(f"{label}:{idx}".encode()).hexdigest()[:12]
         chunks = build_source_chunks(src_info["text"])
         for c in chunks:
             c["chunk_id"] = f"chunk_{global_offset:04d}"
             c["order_index"] = global_offset
-            c["source_label"] = src_info["label"]
-            c["source_index"] = src_info["index"]
+            c["source_label"] = label
+            c["source_index"] = idx
+            c["source_id"] = source_id
             global_offset += 1
         all_chunks.extend(chunks)
 

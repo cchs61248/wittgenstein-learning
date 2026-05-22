@@ -64,23 +64,26 @@ async def create_generating_stub(
     user_id: str,
     content_hash: str,
     source_file_ids: list[str] | None = None,
+    sources_json: list[dict] | None = None,
 ) -> None:
     """ContentSplitter 執行前建立佔位記錄，讓書櫃在 LLM 呼叫期間持久顯示「生成中」。"""
     db = await get_db()
     file_ids_json = json.dumps(source_file_ids or [], ensure_ascii=False)
+    sources_json_str = json.dumps(sources_json or [], ensure_ascii=False)
     await db.execute(
         """INSERT OR IGNORE INTO sessions
            (session_id, user_id, content_hash, total_stages, status, title,
-            source_file_ids_json)
-           VALUES (?, ?, ?, 0, 'generating', '生成中…', ?)""",
-        (session_id, user_id, content_hash, file_ids_json),
+            source_file_ids_json, sources_json)
+           VALUES (?, ?, ?, 0, 'generating', '生成中…', ?, ?)""",
+        (session_id, user_id, content_hash, file_ids_json, sources_json_str),
     )
     # 若 stub 已存在（重試），補寫 file_ids
     await db.execute(
         """UPDATE sessions
-           SET source_file_ids_json = ?
+           SET source_file_ids_json = ?,
+               sources_json = COALESCE(?, sources_json)
            WHERE session_id = ? AND status = 'generating'""",
-        (file_ids_json, session_id),
+        (file_ids_json, sources_json_str if sources_json else None, session_id),
     )
     await db.commit()
 
@@ -454,8 +457,9 @@ async def insert_source_chunks(session_id: str, chunks: list[dict]) -> None:
     db = await get_db()
     await db.executemany(
         """INSERT OR REPLACE INTO source_chunks
-           (chunk_id, session_id, order_index, text, section_title, char_start, char_end)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           (chunk_id, session_id, order_index, text, section_title, char_start, char_end,
+            source_id, source_index, source_label)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         [
             (
                 c["chunk_id"],
@@ -465,6 +469,9 @@ async def insert_source_chunks(session_id: str, chunks: list[dict]) -> None:
                 c.get("section_title"),
                 c.get("char_start"),
                 c.get("char_end"),
+                c.get("source_id"),
+                c.get("source_index"),
+                c.get("source_label"),
             )
             for c in chunks
         ],
