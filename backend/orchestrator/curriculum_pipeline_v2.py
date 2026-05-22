@@ -186,6 +186,12 @@ async def run_start_session_v2(
     use_plan_b = os.getenv("CURRICULUM_V2_PLAN_B") == "1"
     quality_warnings: dict | None = None
     stages: list[dict]
+    reduce_metrics: dict = {
+        "candidate_count": len(all_candidates),
+        "outcome_count": 0,
+        "unsure_pair_count": 0,
+        "llm_outcome_count": 0,
+    }
 
     if use_plan_b:
         primary_source = sources_manifest[0]["source_id"] if sources_manifest else "src_0"
@@ -209,6 +215,7 @@ async def run_start_session_v2(
         ])
         stages = attach_supporting_by_fuzzy_match(stages, other_chunks)
         quality_warnings = {"plan_b_active": True, "primary_source_id": primary_source}
+        reduce_metrics["outcome_count"] = len(primary_candidates)
     else:
         reducer = GlobalCurriculumReducerAgent(orch.splitter.llm, orch.splitter.token_counter)
         reducer_ctx = AgentContext(
@@ -219,6 +226,9 @@ async def run_start_session_v2(
         try:
             reduce_result = await reducer.run(reducer_ctx)
             outcomes = reduce_result.get("outcomes") or []
+            reduce_metrics["outcome_count"] = len(outcomes)
+            reduce_metrics["unsure_pair_count"] = reduce_result.get("unsure_pair_count") or 0
+            reduce_metrics["llm_outcome_count"] = reduce_result.get("llm_outcome_count") or 0
         except GlobalCurriculumReducerError:
             raise
         except Exception as e:
@@ -251,9 +261,33 @@ async def run_start_session_v2(
             composer = StageComposerAgent()
             stages = composer.compose(outcomes)
 
+    from ..utils.curriculum_health import assess_reducer_health
+
+    health = assess_reducer_health(
+        session_id=session_id,
+        candidate_count=reduce_metrics["candidate_count"],
+        outcome_count=reduce_metrics["outcome_count"],
+        stage_count=len(stages),
+        unsure_pair_count=reduce_metrics["unsure_pair_count"],
+        llm_outcome_count=reduce_metrics["llm_outcome_count"],
+        quality_warnings=quality_warnings,
+        plan_b_active=bool(use_plan_b),
+    )
+    if health["signals"]:
+        quality_warnings = {
+            **(quality_warnings or {}),
+            "health_signals": health["signals"],
+            "plan_b_recommended": health["plan_b_recommended"],
+        }
+
     await emit({
         "type": "reduce_done",
-        "payload": {"session_id": session_id, "candidate_count": len(all_candidates), "stage_count": len(stages)},
+        "payload": {
+            "session_id": session_id,
+            "candidate_count": len(all_candidates),
+            "stage_count": len(stages),
+            "health": health,
+        },
     })
 
     gverify = verify_global_coverage(stages, source_chunks, required_outline)
