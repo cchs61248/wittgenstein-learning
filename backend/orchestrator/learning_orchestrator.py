@@ -562,6 +562,44 @@ class LearningOrchestrator:
         emit: WSEmitter,
         source_file_ids: list[str] | None = None,
     ) -> None:
+        if os.getenv("CURRICULUM_PIPELINE_V2") == "1":
+            from .curriculum_pipeline_v2 import run_start_session_v2
+            return await run_start_session_v2(
+                self,
+                session_id=session_id,
+                user_id=user_id,
+                source_chunks=source_chunks,
+                target_depth=target_depth,
+                question_mode=question_mode,
+                provider_name=provider_name,
+                model_name=model_name,
+                emit=emit,
+                source_file_ids=source_file_ids,
+            )
+        return await self._start_session_v1(
+            session_id=session_id,
+            user_id=user_id,
+            source_chunks=source_chunks,
+            target_depth=target_depth,
+            question_mode=question_mode,
+            provider_name=provider_name,
+            model_name=model_name,
+            emit=emit,
+            source_file_ids=source_file_ids,
+        )
+
+    async def _start_session_v1(
+        self,
+        session_id: str,
+        user_id: str,
+        source_chunks: list[dict],
+        target_depth: str,
+        question_mode: str,
+        provider_name: str | None,
+        model_name: str | None,
+        emit: WSEmitter,
+        source_file_ids: list[str] | None = None,
+    ) -> None:
         hash_seed = "".join(c["text"][:80] for c in source_chunks)
         content_hash = hashlib.sha256(hash_seed.encode()).hexdigest()[:16]
 
