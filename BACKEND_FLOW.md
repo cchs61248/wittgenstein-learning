@@ -624,7 +624,10 @@ class WorkingMemory:
                 │   └── emit knowledge_map（可含 quality_warnings → 前端 QualityWarningBanner）
                 │
                 └── 【V2 路徑】`curriculum_pipeline_v2.run_start_session_v2`（`CURRICULUM_PIPELINE_V2=1`）
-                        ├── MacroRegionPlannerAgent → `plan_macro_regions`（tier a/b；tier c LLM 邊界 → V2.1）
+                        ├── MacroRegionPlannerAgent → `plan_macro_regions`
+                        │     tier (a) source_id + section_title 分組；oversized group（>40 chunks）強制 fixed-size 切（避免 epub 共用 section_title 退化為 1-region）
+                        │     tier (b) 無 section_title → fixed-size 25 chunks 切
+                        │     tier (c) LLM 邊界 refinement → V2.1
                         ├── per-region ContentSplitter + region SplitterVerifier
                         ├── GlobalCurriculumReducer
                         │     Step A：`rule_merge_candidates`（Union-Find，threshold 見 `reducer_constants.py`）

@@ -18,11 +18,36 @@ def _group_key(chunk: dict) -> tuple:
     )
 
 
-def plan_macro_regions(source_chunks: list[dict], *, chunks_per_region: int = 25) -> list[dict]:
+def _split_oversized_groups(
+    groups: list[list[dict]],
+    chunks_per_region: int,
+    max_group_size: int,
+) -> list[list[dict]]:
+    """Split groups exceeding max_group_size into fixed-size sub-groups."""
+    out: list[list[dict]] = []
+    for group in groups:
+        if len(group) <= max_group_size:
+            out.append(group)
+            continue
+        for i in range(0, len(group), chunks_per_region):
+            sub = group[i : i + chunks_per_region]
+            if sub:
+                out.append(sub)
+    return out
+
+
+def plan_macro_regions(
+    source_chunks: list[dict],
+    *,
+    chunks_per_region: int = 25,
+    max_group_size: int = 40,
+) -> list[dict]:
     """
     Two-tier fallback (V2 baseline):
-    (a) group by source + section_title when present
-    (b) fixed-size windows within each source
+    (a) group by source + section_title when present;
+        groups exceeding max_group_size force-split into fixed-size sub-groups
+        (avoids 1-region degradation when epub chunker yields single shared title).
+    (b) fixed-size windows within each source.
 
     Tier (c) LLM boundary refinement from region head/tail 500 chars is V2.1
     (see MacroRegionPlannerAgent — currently delegates here).
@@ -54,6 +79,7 @@ def plan_macro_regions(source_chunks: list[dict], *, chunks_per_region: int = 25
                 last_key = key
             if current:
                 groups.append(current)
+            groups = _split_oversized_groups(groups, chunks_per_region, max_group_size)
         else:
             groups = [
                 chunks[i : i + chunks_per_region]

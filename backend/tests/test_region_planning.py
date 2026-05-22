@@ -25,6 +25,27 @@ class TestRegionPlanning(unittest.TestCase):
         sliced = slice_region_chunks(chunks, regions[1], regions, 1)
         self.assertGreater(len(sliced), len(regions[1]["chunk_ids"]))
 
+    def test_oversized_single_section_is_force_split(self):
+        """epub-style: 134 chunks share one section_title → must NOT collapse to 1 region."""
+        chunks = [
+            {"chunk_id": f"c{i:04d}", "order_index": i, "source_id": "s1",
+             "section_title": "長期買進", "text": "x"}
+            for i in range(134)
+        ]
+        regions = plan_macro_regions(chunks, chunks_per_region=25, max_group_size=40)
+        self.assertGreaterEqual(len(regions), 4, f"expected >=4 regions, got {len(regions)}")
+        for r in regions:
+            self.assertLessEqual(len(r["chunk_ids"]), 25)
+
+    def test_small_section_group_not_split(self):
+        chunks = [
+            {"chunk_id": f"c{i}", "order_index": i, "source_id": "s1",
+             "section_title": "Part 1", "text": "x"}
+            for i in range(20)
+        ]
+        regions = plan_macro_regions(chunks, chunks_per_region=25, max_group_size=40)
+        self.assertEqual(len(regions), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
