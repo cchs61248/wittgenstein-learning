@@ -1,24 +1,68 @@
 """Global curriculum coverage verifier."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from ..utils.fuzzy_match import similarity
+from ..utils.fuzzy_match import concept_overlap_score, similarity
 from ..utils.small_curriculum import (
     compact_orphan_limit,
     filter_missing_named_cases,
 )
 
 
-def _duplicate_titles(stages: list[dict], threshold: float = 0.92) -> list[str]:
+_ENUM_PREFIX_RE = re.compile(r"[（(][一二三四五六七八九十\d]+[）)]")
+
+
+def _topic_core(title: str) -> str:
+    """提取標題的「主題核心名詞」：剝編號後，取冒號 / 連字號分隔的最後一段，
+    並截掉「與 / 及 / 和」之後的修飾尾。
+
+    範例：
+    - 「借錢工具選型（一）：信用貸款」 → 「信用貸款」
+    - 「借錢工具（二）：信用貸款與波浪操作」 → 「信用貸款」
+    - 「借錢工具選型（二）：房屋貸款」 → 「房屋貸款」
+    """
+    s = _ENUM_PREFIX_RE.sub("", title).strip()
+    # 取最後一個冒號 / 破折號後的部分（main topic）
+    for sep in ("：", ":", "—", "—", "-"):
+        if sep in s:
+            s = s.rsplit(sep, 1)[-1].strip()
+    # 截掉「與 / 及 / 和」修飾尾（保留前端主題名）
+    for conj in ("與", "及", "和"):
+        if conj in s:
+            s = s.split(conj, 1)[0].strip()
+    return s
+
+
+def _duplicate_titles(
+    stages: list[dict],
+    threshold: float = 0.92,
+    kc_overlap_threshold: float = 0.6,
+) -> list[str]:
+    """偵測重複 stage：
+    (a) 標題字面相似度 ≥ 0.92（沿用原邏輯）
+    (b) 「（N）」編號剝離後主題核心名詞相同 + key_concepts overlap ≥ 0.6
+        — 處理 sess_live_2834df87 「（一）信用貸款」+「（二）信用貸款與波浪操作」
+        這種同主題不同編號的 splitter 過拆失敗。
+    """
     dupes: list[str] = []
     titles = [(s.get("title") or "").strip() for s in stages]
+    cores = [_topic_core(t) for t in titles]
     for i in range(len(titles)):
         if not titles[i]:
             continue
         for j in range(i + 1, len(titles)):
-            if titles[j] and similarity(titles[i], titles[j]) >= threshold:
+            if not titles[j]:
+                continue
+            if similarity(titles[i], titles[j]) >= threshold:
                 dupes.append(f"{titles[i]} ~ {titles[j]}")
+                continue
+            if cores[i] and cores[i] == cores[j]:
+                kc_i = [str(x) for x in stages[i].get("key_concepts") or []]
+                kc_j = [str(x) for x in stages[j].get("key_concepts") or []]
+                if concept_overlap_score(kc_i, kc_j) >= kc_overlap_threshold:
+                    dupes.append(f"{titles[i]} ~ {titles[j]} (enum-stripped)")
     return dupes
 
 

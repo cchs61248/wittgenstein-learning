@@ -39,6 +39,47 @@ class TestGlobalCurriculumVerifier(unittest.TestCase):
         self.assertFalse(result["aligned"])
         self.assertTrue(result["duplicate_titles"])
 
+    def test_enum_stripped_duplicate_with_kc_overlap_fails(self):
+        # sess_live_2834df87 案例：splitter 把信用貸款的不同子細節
+        # 切成 (一) + (二) 兩個編號 stage，主軸都是「信貸」。
+        # 標題字面相似度不足 0.92，但剝離 (N) 後核心名詞相同 + kc overlap > 0.6 → 應判 dup。
+        stages = [
+            {
+                "title": "借錢工具選型（一）：信用貸款",
+                "key_concepts": ["信用貸款", "22倍月薪", "永豐信貸", "還款期限"],
+                "source_chunk_ids": ["chunk_0007"],
+            },
+            {
+                "title": "借錢工具（二）：信用貸款與波浪操作",
+                "key_concepts": ["信用貸款", "撥款速度", "7年期限", "軍公教信貸"],
+                "source_chunk_ids": ["chunk_0108"],
+            },
+        ]
+        result = verify_global_coverage(
+            stages, [_chunk("chunk_0007"), _chunk("chunk_0108")],
+        )
+        self.assertFalse(result["aligned"])
+        self.assertTrue(any("enum-stripped" in d for d in result["duplicate_titles"]))
+
+    def test_enum_stripped_distinct_topics_pass(self):
+        # 正確：信貸 vs 房貸是真正不同並列方案，雖然都帶 (N) 編號但不應判 dup。
+        stages = [
+            {
+                "title": "借錢工具選型（一）：信用貸款",
+                "key_concepts": ["信用貸款", "22倍月薪"],
+                "source_chunk_ids": ["chunk_0007"],
+            },
+            {
+                "title": "借錢工具選型（二）：房屋貸款",
+                "key_concepts": ["房屋貸款", "理財型房貸"],
+                "source_chunk_ids": ["chunk_0017"],
+            },
+        ]
+        result = verify_global_coverage(
+            stages, [_chunk("chunk_0007"), _chunk("chunk_0017")],
+        )
+        self.assertEqual(result["duplicate_titles"], [])
+
     def test_compact_source_zero_orphan_tolerance(self):
         """23-chunk IT PDF: 5 orphans must fail global verify (full V2 regression)."""
         stages = [
