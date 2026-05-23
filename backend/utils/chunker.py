@@ -25,6 +25,8 @@ def build_source_chunks(text: str) -> list[dict]:
         raw_chunks = _chunk_by_proposition(text)
     elif _has_markdown_headers(text):
         raw_chunks = _chunk_by_headers(text)
+    elif _has_numbered_rules(text):
+        raw_chunks = _chunk_by_numbered_rules(text)
     else:
         raw_chunks = _chunk_by_paragraphs(text)
         # 純散文走 paragraph 切分時，把 inline heading（短行、無句尾標點）
@@ -61,6 +63,12 @@ def build_source_chunks(text: str) -> list[dict]:
 
 _WITTGENSTEIN_RE = re.compile(r"^\s*(\d+(\.\d+)+)\s", re.MULTILINE)
 _MARKDOWN_HEADER_RE = re.compile(r"^#{1,4}\s+\S", re.MULTILINE)
+# 法則 1　標題 / 法則1 + 下一行標題（epub 常見 listicle 結構）
+_RULE_LINE_RE = re.compile(
+    r"^\s*法則\s*(\d+)\s*(?:[　：:\s]\s*(.*))?\s*$",
+    re.MULTILINE,
+)
+_RULE_STANDALONE_RE = re.compile(r"^\s*法則\s*(\d+)\s*$", re.MULTILINE)
 
 
 def _has_wittgenstein_numbering(text: str) -> bool:
@@ -71,6 +79,53 @@ def _has_wittgenstein_numbering(text: str) -> bool:
 def _has_markdown_headers(text: str) -> bool:
     matches = _MARKDOWN_HEADER_RE.findall(text)
     return len(matches) >= 2
+
+
+def _has_numbered_rules(text: str) -> bool:
+    """Detect 法則 N listicle structure (≥10 rule markers in body)."""
+    numbers: set[str] = set()
+    for m in _RULE_LINE_RE.finditer(text):
+        numbers.add(m.group(1))
+    for m in _RULE_STANDALONE_RE.finditer(text):
+        numbers.add(m.group(1))
+    return len(numbers) >= 10
+
+
+def _rule_boundary_starts(text: str) -> list[int]:
+    """Return char offsets where a numbered 法則 section begins (skip TOC-only lines)."""
+    starts: set[int] = set()
+    lines = text.splitlines(keepends=True)
+    cursor = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if _RULE_STANDALONE_RE.match(stripped):
+            starts.add(cursor)
+        else:
+            m_inline = _RULE_LINE_RE.match(stripped)
+            if m_inline and m_inline.group(2):
+                rest = "".join(lines[i + 1 : i + 4])
+                if len(rest.strip()) > 120:
+                    starts.add(cursor)
+        cursor += len(line)
+    return sorted(starts)
+
+
+def _chunk_by_numbered_rules(text: str) -> list[str]:
+    """Split on 法則 N boundaries; keep intro before first rule intact."""
+    starts = _rule_boundary_starts(text)
+    if not starts:
+        return _chunk_by_paragraphs(text)
+    segments: list[str] = []
+    if starts[0] > 0:
+        intro = text[: starts[0]].strip()
+        if intro:
+            segments.append(intro)
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(text)
+        seg = text[start:end].strip()
+        if seg:
+            segments.append(seg)
+    return segments if segments else [text]
 
 
 # ── 切分策略 ────────────────────────────────────────────────────
@@ -229,12 +284,24 @@ def _split_long_chunk(text: str, max_chars: int) -> list[str]:
 # ── 工具函式 ─────────────────────────────────────────────────
 
 def _extract_section_title(text: str) -> Optional[str]:
-    """從 chunk 第一行抽取標題（Markdown 標題或命題編號）。"""
-    first_line = text.split("\n")[0].strip()
+    """從 chunk 第一行抽取標題（Markdown 標題、命題編號、法則 N）。"""
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if not lines:
+        return None
+    first_line = lines[0]
     if re.match(r"^#{1,4}\s+", first_line):
         return re.sub(r"^#{1,4}\s+", "", first_line).strip()
     if re.match(r"^\d+(\.\d+)+", first_line):
         return first_line[:80]
+    m_inline = _RULE_LINE_RE.match(first_line)
+    if m_inline and m_inline.group(2):
+        return f"法則 {m_inline.group(1)}：{m_inline.group(2).strip()}"
+    m_standalone = _RULE_STANDALONE_RE.match(first_line)
+    if m_standalone and len(lines) >= 2:
+        subtitle = lines[1]
+        if len(subtitle) <= 40 and not _SENTENCE_END_RE.search(subtitle):
+            return f"法則 {m_standalone.group(1)}：{subtitle}"
+        return f"法則 {m_standalone.group(1)}"
     return None
 
 

@@ -200,6 +200,19 @@ class TestFuzzyNamedCase(unittest.TestCase):
         )
         self.assertEqual(filtered, [])
 
+    def test_numbered_rule_range_in_stage_title(self):
+        stages = [{
+            "title": "法則 3-7：心態與市場規律",
+            "key_concepts": ["均值回歸"],
+            "source_chunk_ids": ["chunk_0008"],
+        }]
+        filtered = filter_false_verifier_misses(
+            ["法則 5：利息是武器"],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, [])
+
     def test_global_verifier_aligned_after_fuzzy(self):
         chunks = _api_design_chunks()
         stages = _api_design_reroll_stages()

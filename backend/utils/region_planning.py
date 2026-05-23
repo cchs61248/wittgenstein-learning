@@ -2,13 +2,29 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
+
+_RULE_SECTION_RE = re.compile(r"^法則\s*\d+", re.IGNORECASE)
 
 
 def overlap_chunk_count(region_size: int) -> int:
     if region_size <= 0:
         return 0
     return min(8, max(2, math.ceil(region_size * 0.10)))
+
+
+def _is_numbered_rule_title(title: str | None) -> bool:
+    return bool(_RULE_SECTION_RE.match((title or "").strip()))
+
+
+def _listicle_rule_ratio(chunks: list[dict]) -> float:
+    if not chunks:
+        return 0.0
+    rule_count = sum(
+        1 for c in chunks if _is_numbered_rule_title(c.get("section_title"))
+    )
+    return rule_count / len(chunks)
 
 
 def _group_key(chunk: dict) -> tuple:
@@ -66,7 +82,14 @@ def plan_macro_regions(
 
     for source_id, chunks in by_source.items():
         has_sections = any((c.get("section_title") or "").strip() for c in chunks)
-        if has_sections:
+        listicle = has_sections and _listicle_rule_ratio(chunks) >= 0.4
+        if listicle:
+            # 法則 1…50 listicle：按固定窗口分 region，避免 50 個 one-chunk region
+            groups = [
+                chunks[i : i + chunks_per_region]
+                for i in range(0, len(chunks), chunks_per_region)
+            ]
+        elif has_sections:
             groups: list[list[dict]] = []
             current: list[dict] = []
             last_key = None

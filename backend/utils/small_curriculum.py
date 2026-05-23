@@ -15,6 +15,8 @@ DEFAULT_SMALL_FILE_CHUNK_THRESHOLD = 50
 DEFAULT_SMALL_FILE_TEXT_CHARS = 12_000
 CASE_MATCH_THRESHOLD = 0.72
 _PAREN_SUFFIX_RE = re.compile(r"\s*[\(（].*?[\)）]\s*$")
+_RULE_MISS_RE = re.compile(r"法則\s*(\d+)")
+_RULE_RANGE_RE = re.compile(r"法則\s*(\d+)\s*[-–—~～]\s*(\d+)")
 _COMPOUND_SPLIT_RE = re.compile(r"[與和、/及／]")
 _TOPIC_ALIASES: dict[str, list[str]] = {
     "信用貸款": ["信用貸款", "信貸"],
@@ -39,6 +41,39 @@ def _topic_tokens(topic: str) -> list[str]:
             if key not in tokens:
                 tokens.append(key)
     return tokens
+
+
+def _rule_ranges_in_haystack(haystack: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for m in _RULE_RANGE_RE.finditer(haystack):
+        a, b = int(m.group(1)), int(m.group(2))
+        ranges.append((min(a, b), max(a, b)))
+    return ranges
+
+
+def _rule_number_from_label(label: str) -> int | None:
+    m = _RULE_MISS_RE.search(str(label))
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _numbered_rule_covered(case_name: str, haystack: str) -> bool:
+    num = _rule_number_from_label(case_name)
+    if num is None:
+        return False
+    for start, end in _rule_ranges_in_haystack(haystack):
+        if start <= num <= end:
+            return True
+    # 法則 1：朋友 / 法則1 / 法則 1　朋友
+    normalized = re.sub(r"[　：:\s]+", " ", str(case_name).strip())
+    if normalized and normalized in haystack.replace("　", " "):
+        return True
+    rule_pat = re.compile(rf"法則\s*0*{num}(?:\s|[　：:]|$)")
+    return bool(rule_pat.search(haystack))
 
 
 def _chinese_compound_suffixes(name: str) -> list[str]:
@@ -127,6 +162,8 @@ def verifier_miss_covered(
         return True
     if case_covered_in_stages(miss_str, stages, source_chunks, threshold=threshold):
         return True
+    if any(_numbered_rule_covered(miss_str, _stage_metadata_text(s)) for s in stages):
+        return True
     if topic_covered_in_stages(miss_str, stages):
         return True
     return False
@@ -173,6 +210,11 @@ def _case_tokens(case_name: str) -> list[str]:
     if len(parts) >= 1 and len(parts[0]) >= 5:
         if parts[0] not in tokens:
             tokens.append(parts[0])
+    if "的" in case_str:
+        for part in case_str.split("的"):
+            part = part.strip()
+            if len(part) >= 3 and part not in tokens:
+                tokens.append(part)
     return tokens
 
 
