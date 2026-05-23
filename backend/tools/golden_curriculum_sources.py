@@ -42,6 +42,22 @@ GOLDEN_SOURCES: tuple[GoldenSource, ...] = (
         notes="Small-file tech handbook; V2 uses small_file path",
     ),
     GoldenSource(
+        id="realtime_updates",
+        archetype="case_series",
+        label="Real-time Updates.pdf",
+        candidate_paths=(
+            str(_DOWNLOADS / "Real-time Updates 30f90cd3ccd8808092ace91c5e3f6c9c.pdf"),
+            str(_DOWNLOADS / "Real-time Updates.pdf"),
+            str(_EPUB_BOOK / "Real-time Updates.pdf"),
+        ),
+        min_chunks=20,
+        min_section_titles=0,
+        notes=(
+            "Small-file IT case series; 5 protocol stages + framework/summary; "
+            "global finalize recovers orphan chunks; stage1 Drift 100% regression"
+        ),
+    ),
+    GoldenSource(
         id="qinzi_yingyu",
         archetype="framework_narrative",
         label="親子英語，玩出來.epub",

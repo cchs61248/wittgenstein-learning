@@ -13,6 +13,7 @@ class TestGoldenSources(unittest.TestCase):
     def test_archetypes_documented(self):
         allowed = {
             "tech_handbook",
+            "case_series",
             "framework_narrative",
             "parallel_lessons",
             "listicle_rules",
