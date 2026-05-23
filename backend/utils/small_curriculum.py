@@ -413,6 +413,8 @@ def best_chunk_for_case(
         text = str(chunk.get("text") or "")
         if not text:
             continue
+        if is_toc_listicle_chunk(chunk) or is_toc_cn_epub_chunk(chunk):
+            continue
         if intro_chunk_id and cid == intro_chunk_id:
             if not any(token in text for token in tokens):
                 continue
@@ -941,6 +943,19 @@ def finalize_small_file_stages(
 
 
 _TOC_RULE_LINE_RE = re.compile(r"^\s*法則\s*\d+")
+_CN_TOC_SECTION_RE = re.compile(r"^第[一二三四五六七八九十百零\d]+節")
+
+
+def is_toc_cn_epub_chunk(chunk: dict) -> bool:
+    """目次 chunk：含「目錄」且多行 第X節 標題、缺正文段落。"""
+    text = str(chunk.get("text") or "")
+    if "目錄" not in text[:1200]:
+        return False
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 8:
+        return False
+    section_lines = sum(1 for ln in lines if _CN_TOC_SECTION_RE.match(ln))
+    return section_lines >= 8 and section_lines / len(lines) >= 0.2
 
 
 def is_toc_listicle_chunk(chunk: dict) -> bool:
@@ -963,7 +978,7 @@ def prune_toc_listicle_chunks(
     toc_ids = {
         c["chunk_id"]
         for c in source_chunks
-        if c.get("chunk_id") and is_toc_listicle_chunk(c)
+        if c.get("chunk_id") and (is_toc_listicle_chunk(c) or is_toc_cn_epub_chunk(c))
     }
     if not toc_ids:
         return stages

@@ -78,6 +78,7 @@ async def main(
     full_v2: bool,
     keep: bool,
     cleanup_all: bool,
+    run_stage1: bool,
 ) -> None:
     from backend.db.database import init_db, close_db
 
@@ -160,6 +161,44 @@ async def main(
         print("\n=== GLOBAL VERIFY ===", json.dumps(g, ensure_ascii=False, indent=2))
         refs = Counter(cid for s in stages for cid in (s.get("source_chunk_ids") or []))
         print("=== CHUNK REF COUNTS ===", dict(refs))
+
+        if run_stage1 and stages:
+            print(f"\n=== RUN STAGE 1 (multiple_choice) session={session_id} ===")
+            stage1_events: list[str] = []
+            explanation_chars = 0
+            questions_out: list[dict] = []
+
+            async def stage_emit(msg: dict) -> None:
+                t = msg.get("type")
+                if t == "explanation_chunk":
+                    chunk = (msg.get("payload") or {}).get("chunk") or ""
+                    nonlocal explanation_chars
+                    explanation_chars += len(chunk)
+                elif t == "questions_ready":
+                    questions_out.extend((msg.get("payload") or {}).get("questions") or [])
+                if t in ("explanation_chunk", "questions_ready", "explanation_reset"):
+                    stage1_events.append(t)
+
+            await orch.run_stage(
+                session_id=session_id,
+                user_id=DEFAULT_USER_ID,
+                stages=stages,
+                stage_index=0,
+                question_mode="multiple_choice",
+                emit=stage_emit,
+            )
+            from backend.memory import session_memory
+            questions_out = await session_memory.get_stage_questions(
+                session_id, stages[0]["stage_id"],
+            )
+            print(f"stage1_title={stages[0].get('title')}")
+            print(f"explanation_chars={explanation_chars}")
+            print(f"questions={len(questions_out)} events={stage1_events[-5:]}")
+            for q in questions_out[:6]:
+                kc = q.get("key_concepts_tested") or []
+                qtype = q.get("type") or q.get("answer_mode")
+                text = (q.get("question_text") or q.get("text") or "")[:80]
+                print(f"  Q[{qtype}] kc={kc} {text}...")
     finally:
         if not keep:
             ok = await __import__(
@@ -185,6 +224,11 @@ if __name__ == "__main__":
         help="Force full V2 path (disable small-file shortcut)",
     )
     parser.add_argument(
+        "--run-stage1",
+        action="store_true",
+        help="After start_session, run stage 1 (teacher + MC questions)",
+    )
+    parser.add_argument(
         "--keep",
         action="store_true",
         help="Keep session in DB after test (default: delete)",
@@ -198,6 +242,7 @@ if __name__ == "__main__":
     asyncio.run(main(
         Path(args.source) if args.source else None,
         full_v2=args.full_v2,
-        keep=args.keep,
+        keep=args.keep or args.run_stage1,
         cleanup_all=args.cleanup_all,
+        run_stage1=args.run_stage1,
     ))

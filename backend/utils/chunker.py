@@ -20,6 +20,8 @@ def build_source_chunks(text: str) -> list[dict]:
     if not text:
         return []
 
+    text = _strip_cn_epub_front_matter(text)
+
     # 嘗試按結構切
     if _has_wittgenstein_numbering(text):
         raw_chunks = _chunk_by_proposition(text)
@@ -29,6 +31,10 @@ def build_source_chunks(text: str) -> list[dict]:
         raw_chunks = _chunk_by_lessons(text)
     elif _has_part_sections(text):
         raw_chunks = _chunk_by_part_sections(text)
+    elif _has_cn_sections(text):
+        raw_chunks = _chunk_by_cn_sections(text)
+    elif _has_cn_chapters(text):
+        raw_chunks = _chunk_by_cn_chapters(text)
     elif _has_markdown_headers(text):
         raw_chunks = _chunk_by_headers(text)
     else:
@@ -78,6 +84,30 @@ _PART_LINE_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 _LESSON_LINE_RE = re.compile(r"^第\s*(\d+)\s*堂\s*(.*)$")
+_CN_SECTION_RE = re.compile(r"^第[一二三四五六七八九十百零\d]+節\s*(.*)$")
+_CN_CHAPTER_RE = re.compile(r"^第[一二三四五六七八九十百零\d]+章\s*(.*)$")
+_CN_METADATA_SKIP_RE = re.compile(
+    r"^(附錄|ISBN|CIP|圖書在版|中國版本|定\s*價|版\s*權|出版發行|經\s*銷)"
+)
+
+
+def _strip_cn_epub_front_matter(text: str) -> str:
+    """Drop 目錄 + CIP block; keep 序言/前言 and body."""
+    head = text[:5000]
+    if "目錄" not in head:
+        return text
+    # Real 序言 follows the publication/CIP block (avoid TOC line「序言 標題」).
+    m = re.search(r"客服電話[^\n]*\n+\s*(序言\s*\n)", text)
+    if m:
+        return text[m.start(1) :].strip()
+    m = re.search(r"定\s*價[^\n]*\n[^\n]{0,200}\n+\s*(序言\s*\n)", text)
+    if m:
+        return text[m.start(1) :].strip()
+    for marker in ("前言",):
+        m = re.search(rf"(?:^|\n){re.escape(marker)}\s*\n", text)
+        if m and m.start() > 1500:
+            return text[m.start() :].strip()
+    return text
 
 
 def _has_wittgenstein_numbering(text: str) -> bool:
@@ -178,6 +208,104 @@ def _subsplit_by_lessons(segment: str, *, min_lessons: int = 3) -> list[str]:
         if piece:
             parts.append(piece)
     return parts if parts else [segment]
+
+
+def _cn_heading_has_prose_body(segment: str) -> bool:
+    """Skip TOC-only headings: require a substantive prose line after the title."""
+    for line in segment.splitlines()[1:12]:
+        s = line.strip()
+        if len(s) < 60:
+            continue
+        if _CN_SECTION_RE.match(s) or _CN_CHAPTER_RE.match(s):
+            continue
+        if _CN_METADATA_SKIP_RE.search(s):
+            continue
+        return True
+    return False
+
+
+def _cn_section_line_starts(text: str) -> list[tuple[int, str]]:
+    """Return (offset, line) for each 第X節 heading line."""
+    lines = text.splitlines(keepends=True)
+    cursor = 0
+    hits: list[tuple[int, str]] = []
+    for line in lines:
+        stripped = line.strip()
+        if _CN_SECTION_RE.match(stripped):
+            hits.append((cursor, stripped))
+        cursor += len(line)
+    return hits
+
+
+def _cn_chapter_line_starts(text: str) -> list[tuple[int, str]]:
+    lines = text.splitlines(keepends=True)
+    cursor = 0
+    hits: list[tuple[int, str]] = []
+    for line in lines:
+        stripped = line.strip()
+        if _CN_CHAPTER_RE.match(stripped):
+            hits.append((cursor, stripped))
+        cursor += len(line)
+    return hits
+
+
+def _cn_boundary_starts(
+    hits: list[tuple[int, str]],
+    text: str,
+    *,
+    min_segment: int = 200,
+) -> list[int]:
+    """Filter heading hits to those with real body text (not TOC stubs)."""
+    starts: list[int] = []
+    for idx, (pos, _title) in enumerate(hits):
+        end_pos = hits[idx + 1][0] if idx + 1 < len(hits) else len(text)
+        segment = text[pos:end_pos]
+        if len(segment) < min_segment:
+            continue
+        if not _cn_heading_has_prose_body(segment):
+            continue
+        starts.append(pos)
+    return starts
+
+
+def _chunk_by_cn_boundaries(
+    text: str,
+    hits: list[tuple[int, str]],
+) -> list[str]:
+    starts = _cn_boundary_starts(hits, text)
+    if not starts:
+        return _chunk_by_paragraphs(text)
+    segments: list[str] = []
+    if starts[0] > 0:
+        intro = text[: starts[0]].strip()
+        if intro:
+            segments.append(intro)
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(text)
+        seg = text[start:end].strip()
+        if seg:
+            segments.append(seg)
+    return segments if segments else [text]
+
+
+def _has_cn_sections(text: str) -> bool:
+    """Detect 第X節 structure (≥8 sections with prose body)."""
+    hits = _cn_section_line_starts(text)
+    return len(_cn_boundary_starts(hits, text)) >= 8
+
+
+def _has_cn_chapters(text: str) -> bool:
+    """Detect 第X章 structure (≥3 chapters with prose body)."""
+    hits = _cn_chapter_line_starts(text)
+    return len(_cn_boundary_starts(hits, text)) >= 3
+
+
+def _chunk_by_cn_sections(text: str) -> list[str]:
+    return _chunk_by_cn_boundaries(text, _cn_section_line_starts(text))
+
+
+def _chunk_by_cn_chapters(text: str) -> list[str]:
+    return _chunk_by_cn_boundaries(text, _cn_chapter_line_starts(text))
 
 
 def _chunk_by_part_sections(text: str) -> list[str]:
@@ -418,6 +546,18 @@ def _extract_section_title(text: str) -> Optional[str]:
             if title:
                 return f"第{m_lesson.group(1)}堂：{title[:60]}"
             return f"第{m_lesson.group(1)}堂"
+        m_cn_sec = _CN_SECTION_RE.match(line)
+        if m_cn_sec:
+            subtitle = (m_cn_sec.group(1) or "").strip()
+            if subtitle:
+                return subtitle[:80]
+            return line[:80]
+        m_cn_ch = _CN_CHAPTER_RE.match(line)
+        if m_cn_ch:
+            subtitle = (m_cn_ch.group(1) or "").strip()
+            if subtitle:
+                return subtitle[:80]
+            return line[:80]
     if re.match(r"^#{1,4}\s+", first_line):
         return re.sub(r"^#{1,4}\s+", "", first_line).strip()
     if re.match(r"^\d+(\.\d+)+", first_line):
