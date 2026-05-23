@@ -39,6 +39,7 @@ GOLDEN_SOURCES: tuple[GoldenSource, ...] = (
         ),
         min_chunks=3,
         min_section_titles=0,
+        full_v2=False,
         notes="Small-file tech handbook; V2 uses small_file path",
     ),
     GoldenSource(
@@ -52,6 +53,7 @@ GOLDEN_SOURCES: tuple[GoldenSource, ...] = (
         ),
         min_chunks=20,
         min_section_titles=0,
+        full_v2=False,
         notes=(
             "Small-file IT case series; 5 protocol stages + framework/summary; "
             "global finalize recovers orphan chunks; stage1 Drift 100% regression"

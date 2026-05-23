@@ -5,8 +5,8 @@ from typing import Any
 
 from ..utils.fuzzy_match import similarity
 from ..utils.small_curriculum import (
+    compact_orphan_limit,
     filter_missing_named_cases,
-    is_small_file,
 )
 
 
@@ -37,7 +37,7 @@ def verify_global_coverage(
     named_cases = [str(c) for c in outline.get("named_cases") or []]
     missing_cases = filter_missing_named_cases(named_cases, stages, source_chunks)
     duplicate_titles = _duplicate_titles(stages)
-    orphan_limit = 0 if is_small_file(source_chunks) else max(5, len(all_ids) // 20)
+    orphan_limit = compact_orphan_limit(source_chunks)
     aligned = (
         not missing_cases
         and not duplicate_titles

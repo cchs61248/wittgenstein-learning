@@ -39,6 +39,33 @@ class TestGlobalCurriculumVerifier(unittest.TestCase):
         self.assertFalse(result["aligned"])
         self.assertTrue(result["duplicate_titles"])
 
+    def test_compact_source_zero_orphan_tolerance(self):
+        """23-chunk IT PDF: 5 orphans must fail global verify (full V2 regression)."""
+        stages = [
+            {
+                "title": "框架",
+                "key_concepts": ["HTTP"],
+                "source_chunk_ids": [f"chunk_{i:04d}" for i in range(18)],
+            },
+        ]
+        chunks = [_chunk(f"chunk_{i:04d}") for i in range(23)]
+        result = verify_global_coverage(stages, chunks)
+        self.assertFalse(result["aligned"])
+        self.assertEqual(len(result["orphan_chunk_ids"]), 5)
+
+    def test_large_source_allows_orphan_budget(self):
+        stages = [
+            {
+                "title": "章節",
+                "key_concepts": ["x"],
+                "source_chunk_ids": [f"chunk_{i:04d}" for i in range(95)],
+            },
+        ]
+        chunks = [_chunk(f"chunk_{i:04d}") for i in range(100)]
+        result = verify_global_coverage(stages, chunks)
+        self.assertTrue(result["aligned"])
+        self.assertEqual(len(result["orphan_chunk_ids"]), 5)
+
 
 if __name__ == "__main__":
     unittest.main()

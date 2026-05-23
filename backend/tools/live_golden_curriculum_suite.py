@@ -150,7 +150,8 @@ async def main(
         _, path = avail[spec.id]
         if use_llm:
             _require_live_llm_opt_in()
-            rows.append(await _run_llm_row(spec, path, full_v2=full_v2, run_stage1=run_stage1))
+            use_full_v2 = full_v2 if full_v2 else spec.full_v2
+            rows.append(await _run_llm_row(spec, path, full_v2=use_full_v2, run_stage1=run_stage1))
         else:
             rows.append(_check_probe(spec, path))
 

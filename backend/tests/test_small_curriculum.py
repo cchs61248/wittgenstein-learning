@@ -12,6 +12,7 @@ from backend.utils.small_curriculum import (
     filter_false_verifier_misses,
     filter_missing_named_cases,
     finalize_small_file_stages,
+    is_compact_curriculum,
     is_small_file,
     merge_duplicate_topic_stages,
     merge_empty_chunk_stages,
@@ -103,6 +104,12 @@ class TestSmallFileDetection(unittest.TestCase):
         zero_region_overlaps(regions)
         self.assertEqual(regions[0]["overlap_before"], 0)
         self.assertEqual(regions[0]["overlap_after"], 0)
+
+    def test_compact_curriculum_when_full_v2_forces_threshold_zero(self):
+        chunks = [{"chunk_id": f"chunk_{i:04d}", "text": "x"} for i in range(23)]
+        with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "0"}, clear=False):
+            self.assertFalse(is_small_file(chunks))
+            self.assertTrue(is_compact_curriculum(chunks))
 
 
 class TestFuzzyNamedCase(unittest.TestCase):

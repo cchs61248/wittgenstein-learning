@@ -13,6 +13,10 @@ from .fuzzy_match import similarity
 
 DEFAULT_SMALL_FILE_CHUNK_THRESHOLD = 50
 DEFAULT_SMALL_FILE_TEXT_CHARS = 12_000
+# ≤50 chunks: run finalize orphan recovery even on forced full V2 path.
+COMPACT_FINALIZE_CHUNK_MAX = 50
+# ≤30 chunks: global verifier requires zero orphan chunks.
+COMPACT_ZERO_ORPHAN_CHUNK_MAX = 30
 CASE_MATCH_THRESHOLD = 0.72
 DUPLICATE_TITLE_THRESHOLD = 0.92
 _PAREN_SUFFIX_RE = re.compile(r"\s*[\(（].*?[\)）]\s*$")
@@ -450,6 +454,19 @@ def small_file_text_char_threshold() -> int:
 
 def is_small_file(source_chunks: list[dict]) -> bool:
     return len(source_chunks) <= small_file_chunk_threshold()
+
+
+def is_compact_curriculum(source_chunks: list[dict]) -> bool:
+    """Small-file path or short PDFs/epubs that need finalize even when full V2 is forced."""
+    return is_small_file(source_chunks) or len(source_chunks) <= COMPACT_FINALIZE_CHUNK_MAX
+
+
+def compact_orphan_limit(source_chunks: list[dict]) -> int:
+    """Max allowed orphan chunks for global coverage verify."""
+    n = len(source_chunks)
+    if is_small_file(source_chunks) or n <= COMPACT_ZERO_ORPHAN_CHUNK_MAX:
+        return 0
+    return max(5, n // 20)
 
 
 def chunks_lookup(source_chunks: list[dict]) -> dict[str, dict]:

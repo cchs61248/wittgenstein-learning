@@ -29,6 +29,7 @@ from ..utils.small_curriculum import (
     finalize_small_file_stages,
     filter_false_verifier_misses,
     filter_missing_named_cases,
+    is_compact_curriculum,
     is_small_file,
     merge_duplicate_topic_stages,
     normalize_case_name,
@@ -581,18 +582,18 @@ async def run_start_session_v2(
                     "v2 global verifier post-process succeeded  session=%s", session_id,
                 )
 
-    if small_file:
+    if is_compact_curriculum(source_chunks):
         stages = finalize_small_file_stages(stages, source_chunks)
         gverify = verify_global_coverage(stages, source_chunks, required_outline)
         if gverify.get("aligned") and not initial_gverify.get("aligned"):
             _log.info(
-                "v2 small_file recovered after finalize  session=%s  orphans_before=%d",
+                "v2 compact recovered after finalize  session=%s  orphans_before=%d",
                 session_id,
                 len(initial_gverify.get("orphan_chunk_ids") or []),
             )
         elif not gverify.get("aligned"):
             _log.warning(
-                "v2 small_file still misaligned after finalize  session=%s  %s",
+                "v2 compact still misaligned after finalize  session=%s  %s",
                 session_id,
                 gverify,
             )
