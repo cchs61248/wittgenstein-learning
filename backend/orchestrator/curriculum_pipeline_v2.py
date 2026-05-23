@@ -47,6 +47,90 @@ def _dedupe_candidates(candidates: list[dict], threshold: float = 0.85) -> list[
     return merged
 
 
+def _build_follow_up_stages(
+    *,
+    stages: list[dict],
+    source_chunks: list[dict],
+    missing_options: list[str],
+    orphan_chunk_ids: list[str],
+    max_total_stages: int,
+) -> list[dict]:
+    """P1 (b)：global verifier fail 後補建 follow-up stages 救 missing case + orphan chunk。
+
+    - missing_options 內每個 named case 嘗試找含 case 名的 chunk，補 1 stage
+    - orphan_chunk_ids 全部歸到 1 個「章節總結」stage
+    - 受 max_total_stages 硬上限保護避免爆 stage 數
+    """
+    if not stages:
+        return []
+    next_stage_id = max((s.get("stage_id") or 0) for s in stages) + 1
+    next_node_chapter = max(int(str(s.get("node_id", "0.0")).split(".")[0] or 0) for s in stages) + 1
+    chunks_by_id = {c["chunk_id"]: c for c in source_chunks if isinstance(c, dict) and c.get("chunk_id")}
+    covered_chunks: set[str] = set()
+    for s in stages:
+        covered_chunks.update(s.get("source_chunk_ids") or [])
+
+    new_stages: list[dict] = []
+
+    for case_name in missing_options:
+        if len(stages) + len(new_stages) >= max_total_stages:
+            break
+        case_main = case_name.split("(")[0].strip()
+        if not case_main:
+            continue
+        matched_chunk_id: str | None = None
+        for cid, chunk in chunks_by_id.items():
+            text = str(chunk.get("text") or "")
+            if case_main in text:
+                matched_chunk_id = cid
+                break
+        if not matched_chunk_id:
+            continue
+        chunk = chunks_by_id[matched_chunk_id]
+        new_stages.append({
+            "stage_id": next_stage_id,
+            "node_id": f"{next_node_chapter}.{len(new_stages) + 1}",
+            "title": f"案例：{case_main}",
+            "key_concepts": [case_main],
+            "source_chunk_ids": [matched_chunk_id],
+            "source_chunks": [{
+                "chunk_id": matched_chunk_id,
+                "quote": chunk.get("text") or "",
+                "note": chunk.get("source_id") or "",
+            }],
+            "prerequisites": [],
+            "estimated_questions": 2,
+            "teaching_goal": f"補建案例：{case_main} 的核心設計考量與應用情境",
+            "kind": "follow_up_case",
+        })
+        next_stage_id += 1
+
+    remaining_orphans = [cid for cid in orphan_chunk_ids if cid not in covered_chunks and cid in chunks_by_id]
+    if remaining_orphans and len(stages) + len(new_stages) < max_total_stages:
+        orphan_meta = [
+            {
+                "chunk_id": cid,
+                "quote": chunks_by_id[cid].get("text") or "",
+                "note": chunks_by_id[cid].get("source_id") or "",
+            }
+            for cid in remaining_orphans
+        ]
+        new_stages.append({
+            "stage_id": next_stage_id,
+            "node_id": f"{next_node_chapter}.{len(new_stages) + 1}",
+            "title": "章節總結與補充內容",
+            "key_concepts": ["章節總結", "補充內容"],
+            "source_chunk_ids": remaining_orphans,
+            "source_chunks": orphan_meta,
+            "prerequisites": [],
+            "estimated_questions": 2,
+            "teaching_goal": "補建：未被前面節點覆蓋的章節總結、面試話術與補充內容",
+            "kind": "follow_up_orphan",
+        })
+
+    return new_stages
+
+
 def _splitter_stages_to_candidates(stages: list[dict], region: dict) -> list[dict]:
     """Convert splitter stages → reducer candidates，過濾掉 region 邊界外的 chunk_id。
 
@@ -181,15 +265,52 @@ async def run_start_session_v2(
             user_id=user_id,
             task_payload={"source_chunks": region_chunks, "stages": region_stages},
         )
+        vresult: dict | None = None
         try:
             vresult = await orch.splitter_verifier.run(verify_ctx)
-            if not vresult.get("aligned"):
-                _log.warning(
-                    "v2 region verifier failed  region=%s  missing=%s",
-                    region.get("region_id"), vresult.get("missing_options"),
-                )
         except Exception as e:
             _log.warning("v2 region verifier error  region=%s  err=%s", region.get("region_id"), e)
+
+        # P1 (a)：V2 per-region splitter_verifier fail 時 reroll 1 次
+        # （V1 path 有 2 次 reroll；V2 短期至少給 1 次以救 named case 漏切）
+        if vresult and not vresult.get("aligned"):
+            _log.warning(
+                "v2 region verifier failed  region=%s  missing=%s",
+                region.get("region_id"), vresult.get("missing_options"),
+            )
+            repair_struct = vresult.get("repair_plan_struct") or {}
+            if not repair_struct.get("required_stage_titles") and required_outline:
+                repair_struct = {
+                    **repair_struct,
+                    "required_stage_titles": (
+                        required_outline.get("required_stage_titles") or []
+                    ),
+                }
+            reroll_payload = {
+                **splitter_ctx_payload,
+                "previous_attempt_missed": vresult.get("missing_options") or [],
+                "issue_chunk_ids": vresult.get("issue_chunk_ids") or [],
+                "verifier_reason": vresult.get("reason", ""),
+                "repair_plan_struct": repair_struct,
+            }
+            reroll_ctx = AgentContext(
+                session_id=session_id, user_id=user_id, task_payload=reroll_payload,
+            )
+            try:
+                reroll_result = await orch.splitter.run(reroll_ctx)
+                rerolled_stages = reroll_result.get("stages") or []
+                if rerolled_stages:
+                    region_stages = rerolled_stages
+                    _log.info(
+                        "v2 region reroll done  region=%s  stages=%d",
+                        region.get("region_id"), len(region_stages),
+                    )
+            except Exception as e:
+                _log.warning(
+                    "v2 region reroll failed (keeping initial stages)  region=%s  err=%s",
+                    region.get("region_id"), e,
+                )
+
         all_candidates.extend(_splitter_stages_to_candidates(region_stages, region))
         await emit({
             "type": "region_done",
@@ -328,6 +449,30 @@ async def run_start_session_v2(
             quality_warnings = {**(quality_warnings or {}), **qw}
         else:
             _log.warning("v2 global verifier failed  session=%s  %s", session_id, gverify)
+
+        # P1 (b)：補建 follow-up stages 救 missing named case + orphan chunk
+        follow_up = _build_follow_up_stages(
+            stages=stages,
+            source_chunks=source_chunks,
+            missing_options=gverify.get("missing_options") or [],
+            orphan_chunk_ids=gverify.get("orphan_chunk_ids") or [],
+            max_total_stages=int(len(stages) * 1.5) + 2,
+        )
+        if follow_up:
+            stages.extend(follow_up)
+            _log.info(
+                "v2 global verifier post-process  session=%s  added_stages=%d  total=%d",
+                session_id, len(follow_up), len(stages),
+            )
+            quality_warnings = {
+                **(quality_warnings or {}),
+                "post_process_added_stages": len(follow_up),
+            }
+            gverify_after = verify_global_coverage(stages, source_chunks, required_outline)
+            if gverify_after.get("aligned"):
+                _log.info(
+                    "v2 global verifier post-process succeeded  session=%s", session_id,
+                )
 
     new_concepts = sorted({c for s in stages for c in s.get("key_concepts", [])})
     if content_hash and new_concepts:
