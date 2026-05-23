@@ -71,6 +71,21 @@ GOLDEN_SOURCES: tuple[GoldenSource, ...] = (
         notes="第X節 + 序言；敘述型 Drift 範例 I",
     ),
     GoldenSource(
+        id="xingqisan_epub",
+        archetype="framework_narrative",
+        label="星期三郵局.epub",
+        candidate_paths=(
+            str(_DOWNLOADS / "apk.tw_星期三郵局.epub"),
+        ),
+        min_chunks=80,
+        min_section_titles=0,
+        full_v2=True,
+        notes=(
+            "Literary EPUB ~94 chunks; full V2 orphan attach + narrative Drift "
+            "(範例 J); stage1 rewrite 閉環 regression"
+        ),
+    ),
+    GoldenSource(
         id="changqimaijin",
         archetype="parallel_lessons",
         label="長期買進.epub",

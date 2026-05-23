@@ -19,6 +19,11 @@ COMPACT_FINALIZE_CHUNK_MAX = 50
 COMPACT_ZERO_ORPHAN_CHUNK_MAX = 30
 CASE_MATCH_THRESHOLD = 0.72
 DUPLICATE_TITLE_THRESHOLD = 0.92
+# Bulk orphan attach: cap per-stage growth so narrative EPUBs don't mash 20+ chunks into one stage.
+ORPHAN_BULK_MAX_ATTACH_PER_STAGE = 3
+ORPHAN_STAGE_MAX_CHUNKS = 14
+STAGE_MAX_KEY_CONCEPTS = 8
+ORPHAN_OVERFLOW_BATCH_SIZE = 6
 _PAREN_SUFFIX_RE = re.compile(r"\s*[\(（].*?[\)）]\s*$")
 _GRADE_LABEL_RE = re.compile(r"[\(（]?\s*[AB]級[^\)）]*[\)）]?")
 _RULE_MISS_RE = re.compile(r"法則\s*(\d+)")
@@ -782,6 +787,63 @@ def _attach_chunk_to_stage(stage: dict, chunk_id: str, by_id: dict[str, dict]) -
     return s
 
 
+def trim_stage_key_concepts(
+    stages: list[dict],
+    max_kc: int = STAGE_MAX_KEY_CONCEPTS,
+) -> list[dict]:
+    """Cap key_concepts per stage after orphan attach / reducer mash-up."""
+    if max_kc <= 0:
+        return stages
+    out: list[dict] = []
+    for stage in stages:
+        s = dict(stage)
+        kcs = list(s.get("key_concepts") or [])
+        if len(kcs) > max_kc:
+            s["key_concepts"] = kcs[:max_kc]
+        out.append(s)
+    return out
+
+
+def _append_orphan_overflow_stages(
+    stages: list[dict],
+    orphan_ids: list[str],
+    by_id: dict[str, dict],
+    batch_size: int = ORPHAN_OVERFLOW_BATCH_SIZE,
+) -> list[dict]:
+    """Split excess orphans into dedicated follow-up stages instead of one mega-stage."""
+    if not orphan_ids:
+        return stages
+    out = [dict(s) for s in stages]
+    next_stage_id = max((s.get("stage_id") or 0) for s in out) + 1
+    batch_num = 0
+    for i in range(0, len(orphan_ids), batch_size):
+        batch = orphan_ids[i : i + batch_size]
+        batch_num += 1
+        orphan_meta = [
+            {
+                "chunk_id": cid,
+                "quote": by_id[cid].get("text") or "",
+                "note": by_id[cid].get("source_id") or "",
+            }
+            for cid in batch
+            if cid in by_id
+        ]
+        out.append({
+            "stage_id": next_stage_id,
+            "node_id": f"orphan.{batch_num}",
+            "title": f"補充段落（{batch_num}）",
+            "key_concepts": ["章節補充"],
+            "source_chunk_ids": batch,
+            "source_chunks": orphan_meta,
+            "prerequisites": [],
+            "estimated_questions": 2,
+            "teaching_goal": "補充：未被前面節點覆蓋的段落（orphan overflow 分批）",
+            "kind": "follow_up_orphan",
+        })
+        next_stage_id += 1
+    return out
+
+
 def ensure_orphan_chunks_attached(
     stages: list[dict],
     source_chunks: list[dict],
@@ -818,9 +880,11 @@ def ensure_orphan_chunks_attached(
                 for kw in ("面試", "總結"):
                     if kw not in out[-1]["key_concepts"]:
                         out[-1]["key_concepts"].append(kw)
-            return out
+            return trim_stage_key_concepts(out)
 
     if len(orphans) > 3:
+        attach_counts = [0] * len(out)
+        overflow: list[str] = []
         for oid in orphans:
             oidx = _chunk_order_index(oid, source_chunks)
             best_i = 0
@@ -834,8 +898,17 @@ def ensure_orphan_chunks_attached(
                 if dist < best_dist:
                     best_dist = dist
                     best_i = i
-            out[best_i] = _attach_chunk_to_stage(out[best_i], oid, by_id)
-        return out
+            stage_ids = out[best_i].get("source_chunk_ids") or []
+            at_chunk_cap = len(stage_ids) >= ORPHAN_STAGE_MAX_CHUNKS
+            at_attach_cap = attach_counts[best_i] >= ORPHAN_BULK_MAX_ATTACH_PER_STAGE
+            if at_chunk_cap or at_attach_cap:
+                overflow.append(oid)
+            else:
+                out[best_i] = _attach_chunk_to_stage(out[best_i], oid, by_id)
+                attach_counts[best_i] += 1
+        if overflow:
+            out = _append_orphan_overflow_stages(out, overflow, by_id)
+        return trim_stage_key_concepts(out)
 
     next_stage_id = max((s.get("stage_id") or 0) for s in out) + 1
     last_node = out[-1].get("node_id", "1.1")
@@ -864,7 +937,7 @@ def ensure_orphan_chunks_attached(
         "teaching_goal": "補充：未被前面節點覆蓋的章節總結、面試話術與重點整理",
         "kind": "follow_up_orphan",
     })
-    return out
+    return trim_stage_key_concepts(out)
 
 
 def reassign_case_stage_chunks(
@@ -1074,7 +1147,7 @@ def finalize_small_file_stages(
     """Full post-compose normalization including orphan attach."""
     stages = normalize_small_file_stages(stages, source_chunks)
     stages = ensure_orphan_chunks_attached(stages, source_chunks)
-    return stages
+    return trim_stage_key_concepts(stages)
 
 
 _TOC_RULE_LINE_RE = re.compile(r"^\s*法則\s*\d+")

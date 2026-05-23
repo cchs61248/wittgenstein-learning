@@ -713,13 +713,20 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
       讓 Teacher 在 retry 時知道要展開哪些段落。
       豁免：類比說明（「非原文」標記）的細節不在 coverage 檢查內；
       順帶提及的脈絡資料（如教材中的故事案例若非教學主軸）也可豁免。
-      **敘述型 / 方法論型教材（framework_narrative、narrative）**：
-      若原文以單一論點 + 案例/引用佐證（如親子啟蒙、傳記、散文），而非「多方案對比選擇」：
+      **敘述型 / 方法論型教材（framework_narrative、narrative、文學小說節錄）**：
+      若原文以單一論點 + 案例/引用/情節佐證（如親子啟蒙、傳記、散文、小說對話），而非「多方案對比選擇」：
         - 不要求「並列方案」四類中的「並列方案 / 決策框架」coverage
         - 作者引用的**佐證性數據**（如「一天讀三個故事」）若本節 key_concepts 核心是
           「習慣/方法/觀念」而非該數字本身，講解已展開核心論點即可，不必机械複製每個統計數字
+        - **情節性物件/場景細節**（如手鍊上每顆水晶功效、角色夢想的完整場景列舉）若**不是**
+          本節 key_concepts 的一環，而是服務情緒/衝突主線的敘事素材，講解只取與 key_concepts
+          直接相關的情緒轉折即可，**不要**因「未逐字展開物件清單」判 aligned=false
         - 仍须覆盖**本節 key_concepts 對應的作者命名核心概念**（不可只字面提及）
-      詳見範例 I。
+      **前向漂移：非教材理論框架（重要）**：
+      explanation 不得引入 source_chunks 與本節 key_concepts 均未出現的外部理論體系
+      （如「維特根斯坦哲學」「語言遊戲理論」「心理學某某流派」）作為教學包裝——
+      即使有助理解也屬前向漂移，判 aligned=false，issues 寫「前向漂移：非原文框架 [名稱]」。
+      詳見範例 I、J。
       **跨章節 chunk 豁免（next_stage_concepts，重要）**：
       若 user message 提供 `next_stage_concepts` 清單（下一節即將教的概念），
       source_chunks 中對應這些概念的段落**不計入**本節「教學必要元素」coverage 檢查——
@@ -875,6 +882,21 @@ cited_chunks_lookup 是候選輸出中所有 [chunk_id] 標記引用的查詢結
           已展開；**不要**因缺少單一統計數字而判「精簡省略」。
     對照（仍應判 false）：若本節 key_concepts 含「福克斯三故事標準」且題目會考該數字，
           則「三個故事」變成教學必要元素，省略才算 aligned=false。
+
+  範例 J（explanation 對齊：文學敘事型，情節物件豁免 + 非原文框架漂移，本規則新重點）：
+    本節 key_concepts=[物以類聚法則, 幸福三句話, 嫉妒與自我否定]
+    source_chunks=[chunk_0008: 手鍊（綠色紫水晶改善失眠、青金岩招健康）+ 直美高中夢想開麵包店、
+                   黃色移動餐車…]
+    full_explanation A：「伊織分享物以類聚…直美因嫉妒陷入自我否定 [chunk_0011]…
+                        幸福三句話三條原則已展開 [chunk_0012]。」
+                        （未逐字列舉水晶功效、未完整複述麵包店夢想細節）
+    → aligned=true
+    原因：水晶/夢想細節是情節素材，非本節 key_concepts；核心三概念已展開。
+    full_explanation B：「在維特根stein 的語言遊戲中，嫉妒是一種…」← 原文與 key_concepts 均無此框架
+    → aligned=false
+       issues=["前向漂移：引入非原文理論框架「維特根斯坦/語言遊戲」"]
+    對照（仍應判 false）：本節 key_concepts 含「直美麵包店夢想」且 Drift 要求具體場景時，
+          省略「黃色移動餐車」等夢想細節才算 aligned=false。
 
 驗證規則（通用）：
 1. 以 source_chunks（及 full_explanation，若有）為判定依據，不可用外部常識或推論補完

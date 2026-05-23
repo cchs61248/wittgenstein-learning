@@ -18,7 +18,10 @@ from backend.utils.small_curriculum import (
     merge_empty_chunk_stages,
     normalize_stages_pre_verify,
     prune_intro_chunk_sharing,
+    trim_stage_key_concepts,
     zero_region_overlaps,
+    ORPHAN_STAGE_MAX_CHUNKS,
+    STAGE_MAX_KEY_CONCEPTS,
 )
 
 
@@ -487,6 +490,30 @@ class TestOrphanAttach(unittest.TestCase):
             for cid in (s.get("source_chunk_ids") or [])
         }
         self.assertEqual(referenced, {c["chunk_id"] for c in chunks})
+
+    def test_bulk_orphan_caps_per_stage_and_overflow(self):
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": f"p{i}", "order_index": i}
+            for i in range(20)
+        ]
+        stages = [{
+            "stage_id": 1,
+            "title": "主節",
+            "key_concepts": [f"kc{k}" for k in range(12)],
+            "source_chunk_ids": ["chunk_0000"],
+        }]
+        fixed = ensure_orphan_chunks_attached(stages, chunks)
+        max_chunks = max(len(s.get("source_chunk_ids") or []) for s in fixed)
+        self.assertLessEqual(max_chunks, ORPHAN_STAGE_MAX_CHUNKS)
+        overflow = [s for s in fixed if s.get("kind") == "follow_up_orphan"]
+        self.assertTrue(overflow)
+        for s in fixed:
+            self.assertLessEqual(len(s.get("key_concepts") or []), STAGE_MAX_KEY_CONCEPTS)
+
+    def test_trim_stage_key_concepts(self):
+        stages = [{"key_concepts": [f"c{i}" for i in range(12)]}]
+        trimmed = trim_stage_key_concepts(stages, max_kc=8)
+        self.assertEqual(len(trimmed[0]["key_concepts"]), 8)
 
 
 class TestMergeDuplicateStages(unittest.TestCase):
