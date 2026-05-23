@@ -155,6 +155,43 @@ def _build_follow_up_stages(
     return new_stages
 
 
+def _build_plan_b_stages(
+    all_candidates: list[dict],
+    source_chunks: list[dict],
+    sources_manifest: list[dict],
+    chunks_lookup: dict[str, str],
+) -> tuple[list[dict], dict]:
+    """Plan B: one region candidate → one stage; skip reducer LLM merge."""
+    primary_source = sources_manifest[0]["source_id"] if sources_manifest else "src_0"
+    primary_candidates = [c for c in all_candidates if c.get("source_id") == primary_source]
+    if not primary_candidates:
+        primary_candidates = list(all_candidates)
+        if primary_candidates:
+            primary_source = str(primary_candidates[0].get("source_id") or "src_0")
+    other_chunks = [
+        c for c in source_chunks
+        if c.get("source_id") != primary_source
+    ]
+    stages = outcomes_to_stages([
+        {
+            "outcome_id": f"lo_{i + 1:03d}",
+            "title": c.get("title", ""),
+            "teaching_goal": c.get("teaching_goal", ""),
+            "key_concepts": c.get("key_concepts") or [],
+            "primary_evidence": {
+                "source_id": primary_source,
+                "chunk_ids": c.get("source_chunk_ids") or [],
+            },
+            "supporting_evidence": [],
+            "merge_decision": "split",
+            "merge_confidence": 1.0,
+        }
+        for i, c in enumerate(primary_candidates)
+    ], chunks_lookup=chunks_lookup)
+    stages = attach_supporting_by_fuzzy_match(stages, other_chunks)
+    return stages, {"plan_b_active": True, "primary_source_id": primary_source}
+
+
 def _splitter_stages_to_candidates(stages: list[dict], region: dict) -> list[dict]:
     """Convert splitter stages → reducer candidates，過濾掉 region 邊界外的 chunk_id。
 
@@ -374,6 +411,7 @@ async def run_start_session_v2(
     }
 
     use_plan_b = os.getenv("CURRICULUM_V2_PLAN_B") == "1"
+    plan_b_active = False
     quality_warnings: dict | None = None
     stages: list[dict]
     reduce_metrics: dict = {
@@ -388,28 +426,12 @@ async def run_start_session_v2(
         quality_warnings = {"small_file_path": True, "reducer_skipped": True}
         reduce_metrics["outcome_count"] = len(all_candidates)
     elif use_plan_b:
-        primary_source = sources_manifest[0]["source_id"] if sources_manifest else "src_0"
-        primary_candidates = [c for c in all_candidates if c.get("source_id") == primary_source]
-        other_chunks = [
-            c for c in source_chunks
-            if c.get("source_id") != primary_source
-        ]
-        stages = outcomes_to_stages([
-            {
-                "outcome_id": f"lo_{i+1:03d}",
-                "title": c.get("title", ""),
-                "teaching_goal": c.get("teaching_goal", ""),
-                "key_concepts": c.get("key_concepts") or [],
-                "primary_evidence": {"source_id": primary_source, "chunk_ids": c.get("source_chunk_ids") or []},
-                "supporting_evidence": [],
-                "merge_decision": "split",
-                "merge_confidence": 1.0,
-            }
-            for i, c in enumerate(primary_candidates)
-        ], chunks_lookup=chunks_lookup)
-        stages = attach_supporting_by_fuzzy_match(stages, other_chunks)
-        quality_warnings = {"plan_b_active": True, "primary_source_id": primary_source}
-        reduce_metrics["outcome_count"] = len(primary_candidates)
+        stages, plan_b_qw = _build_plan_b_stages(
+            all_candidates, source_chunks, sources_manifest, chunks_lookup,
+        )
+        quality_warnings = plan_b_qw
+        reduce_metrics["outcome_count"] = len(all_candidates)
+        plan_b_active = True
     else:
         reducer = GlobalCurriculumReducerAgent(orch.splitter.llm, orch.splitter.token_counter)
         reducer_ctx = AgentContext(
@@ -455,6 +477,35 @@ async def run_start_session_v2(
             composer = StageComposerAgent()
             stages = composer.compose(outcomes, chunks_lookup=chunks_lookup)
 
+        from ..utils.curriculum_health import assess_reducer_health, should_auto_plan_b
+
+        pre_health = assess_reducer_health(
+            session_id=session_id,
+            candidate_count=reduce_metrics["candidate_count"],
+            outcome_count=reduce_metrics["outcome_count"],
+            stage_count=len(stages),
+            unsure_pair_count=reduce_metrics["unsure_pair_count"],
+            llm_outcome_count=reduce_metrics["llm_outcome_count"],
+            quality_warnings=quality_warnings,
+            plan_b_active=False,
+        )
+        if should_auto_plan_b() and pre_health.get("plan_b_recommended"):
+            _log.info(
+                "v2 auto Plan B fallback  session=%s  signals=%s",
+                session_id, pre_health.get("signals"),
+            )
+            stages, plan_b_qw = _build_plan_b_stages(
+                all_candidates, source_chunks, sources_manifest, chunks_lookup,
+            )
+            quality_warnings = {
+                **(quality_warnings or {}),
+                **plan_b_qw,
+                "plan_b_auto_fallback": True,
+                "plan_b_fallback_signals": pre_health.get("signals") or [],
+            }
+            reduce_metrics["outcome_count"] = len(all_candidates)
+            plan_b_active = True
+
     stages = normalize_stages_pre_verify(stages, source_chunks)
 
     from ..utils.curriculum_health import assess_reducer_health
@@ -467,7 +518,7 @@ async def run_start_session_v2(
         unsure_pair_count=reduce_metrics["unsure_pair_count"],
         llm_outcome_count=reduce_metrics["llm_outcome_count"],
         quality_warnings=quality_warnings,
-        plan_b_active=bool(use_plan_b),
+        plan_b_active=plan_b_active,
     )
     if health["signals"]:
         quality_warnings = {

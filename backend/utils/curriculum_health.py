@@ -1,12 +1,20 @@
-"""V2 curriculum pipeline health signals (monitoring; no auto Plan B switch)."""
+"""V2 curriculum pipeline health signals (monitoring; optional auto Plan B)."""
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from .reducer_constants import OUTCOME_RATIO_WARN
 
 _log = logging.getLogger("wl.orchestrator.v2.health")
+
+
+def should_auto_plan_b() -> bool:
+    """When true, auto-fallback to Plan B if reducer health recommends it."""
+    return os.getenv("CURRICULUM_V2_PLAN_B_AUTO", "1").strip().lower() in (
+        "1", "true", "yes",
+    )
 
 
 def assess_reducer_health(
@@ -22,7 +30,7 @@ def assess_reducer_health(
 ) -> dict[str, Any]:
     """
     Emit structured health signals for ops monitoring.
-    Does NOT auto-enable Plan B — operators review logs / quality_warnings.
+    Auto Plan B is controlled separately via should_auto_plan_b() + pipeline.
     """
     signals: list[str] = []
     qw = quality_warnings or {}
@@ -62,13 +70,19 @@ def assess_reducer_health(
     }
 
     if signals:
+        auto_hint = (
+            "auto Plan B enabled"
+            if should_auto_plan_b()
+            else "manual: CURRICULUM_V2_PLAN_B=1"
+        )
         _log.warning(
             "curriculum_health_alert  session=%s  signals=%s  metrics=%s  "
-            "plan_b_recommended=%s  (manual: CURRICULUM_V2_PLAN_B=1)",
+            "plan_b_recommended=%s  (%s)",
             session_id,
             signals,
             report["metrics"],
             report["plan_b_recommended"],
+            auto_hint,
         )
 
     return report

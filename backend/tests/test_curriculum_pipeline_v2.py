@@ -73,7 +73,14 @@ class TestInterimDedup(unittest.TestCase):
 
 
 class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
-    async def _run_v2(self, orch, *, env: dict | None = None, reducer_outcomes=None):
+    async def _run_v2(
+        self,
+        orch,
+        *,
+        env: dict | None = None,
+        reducer_outcomes=None,
+        reducer_result: dict | None = None,
+    ):
         captured = {"stages": None, "quality_warnings": None}
         events: list[str] = []
 
@@ -84,19 +91,21 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             captured["stages"] = kwargs["stages"]
             captured["quality_warnings"] = kwargs.get("quality_warnings")
 
-        if reducer_outcomes is None:
-            reducer_outcomes = [{
-                "outcome_id": "lo_001",
-                "title": "Stage 1",
-                "teaching_goal": "理解 alpha",
-                "key_concepts": ["alpha"],
-                "primary_evidence": {"source_id": "src_a", "chunk_ids": ["chunk_0000"]},
-                "supporting_evidence": [],
-                "merge_decision": "merged",
-                "merge_confidence": 0.9,
-            }]
+        if reducer_result is None:
+            if reducer_outcomes is None:
+                reducer_outcomes = [{
+                    "outcome_id": "lo_001",
+                    "title": "Stage 1",
+                    "teaching_goal": "理解 alpha",
+                    "key_concepts": ["alpha"],
+                    "primary_evidence": {"source_id": "src_a", "chunk_ids": ["chunk_0000"]},
+                    "supporting_evidence": [],
+                    "merge_decision": "merged",
+                    "merge_confidence": 0.9,
+                }]
+            reducer_result = {"outcomes": reducer_outcomes}
         reducer_mock = MagicMock()
-        reducer_mock.run = AsyncMock(return_value={"outcomes": reducer_outcomes})
+        reducer_mock.run = AsyncMock(return_value=reducer_result)
 
         env_patch = {
             "CURRICULUM_PIPELINE_V2": "1",
@@ -220,6 +229,34 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(captured["quality_warnings"].get("reducer_fallback_flat"))
         self.assertGreaterEqual(len(captured["stages"]), 1)
+
+    async def test_v2_auto_plan_b_on_reducer_no_llm_outcomes(self):
+        orch = _mk_orch_v2()
+        outcomes = [
+            {
+                "outcome_id": f"lo_{i + 1:03d}",
+                "title": f"Stage {i + 1}",
+                "teaching_goal": f"goal {i}",
+                "key_concepts": [f"kc{i}"],
+                "primary_evidence": {"source_id": "src_a", "chunk_ids": [f"chunk_{i:04d}"]},
+                "supporting_evidence": [],
+                "merge_decision": "split",
+                "merge_confidence": 1.0,
+            }
+            for i in range(3)
+        ]
+        captured, _ = await self._run_v2(
+            orch,
+            env={"CURRICULUM_V2_PLAN_B_AUTO": "1"},
+            reducer_result={
+                "outcomes": outcomes,
+                "unsure_pair_count": 4,
+                "llm_outcome_count": 0,
+            },
+        )
+        qw = captured["quality_warnings"] or {}
+        self.assertTrue(qw.get("plan_b_auto_fallback"))
+        self.assertTrue(qw.get("plan_b_active"))
 
     async def test_start_session_routes_to_v2(self):
         orch = _mk_orch_v2()

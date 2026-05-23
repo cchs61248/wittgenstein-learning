@@ -23,10 +23,14 @@ def build_source_chunks(text: str) -> list[dict]:
     # 嘗試按結構切
     if _has_wittgenstein_numbering(text):
         raw_chunks = _chunk_by_proposition(text)
-    elif _has_markdown_headers(text):
-        raw_chunks = _chunk_by_headers(text)
     elif _has_numbered_rules(text):
         raw_chunks = _chunk_by_numbered_rules(text)
+    elif _has_lesson_sections(text):
+        raw_chunks = _chunk_by_lessons(text)
+    elif _has_part_sections(text):
+        raw_chunks = _chunk_by_part_sections(text)
+    elif _has_markdown_headers(text):
+        raw_chunks = _chunk_by_headers(text)
     else:
         raw_chunks = _chunk_by_paragraphs(text)
         # 純散文走 paragraph 切分時，把 inline heading（短行、無句尾標點）
@@ -69,6 +73,11 @@ _RULE_LINE_RE = re.compile(
     re.MULTILINE,
 )
 _RULE_STANDALONE_RE = re.compile(r"^\s*法則\s*(\d+)\s*$", re.MULTILINE)
+_PART_LINE_RE = re.compile(
+    r"^\s*Part\s+(\d+)\s*(.*)?\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_LESSON_LINE_RE = re.compile(r"^第\s*(\d+)\s*堂\s*(.*)$")
 
 
 def _has_wittgenstein_numbering(text: str) -> bool:
@@ -89,6 +98,108 @@ def _has_numbered_rules(text: str) -> bool:
     for m in _RULE_STANDALONE_RE.finditer(text):
         numbers.add(m.group(1))
     return len(numbers) >= 10
+
+
+def _has_part_sections(text: str) -> bool:
+    """Detect Part N epub section structure (≥3 distinct parts with body)."""
+    return len(_part_boundary_starts(text)) >= 3
+
+
+def _part_boundary_starts(text: str) -> list[int]:
+    """Return char offsets where a Part N section begins (skip TOC-only stubs)."""
+    starts: list[int] = []
+    for m in _PART_LINE_RE.finditer(text):
+        pos = m.start()
+        window = text[pos : pos + 800]
+        inline = (m.group(2) or "").strip()
+        if inline and len(inline) >= 4:
+            starts.append(pos)
+        elif re.search(r"第\s*\d+\s*堂[^\n]+\n[^\n]{40,}", window):
+            starts.append(pos)
+        elif len(window.strip()) > 200:
+            starts.append(pos)
+    return sorted(set(starts))
+
+
+def _lesson_boundary_starts(text: str) -> list[int]:
+    """Return offsets where 第N堂 lesson sections begin (skip TOC title lists)."""
+    starts: list[int] = []
+    lines = text.splitlines(keepends=True)
+    cursor = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        m = _LESSON_LINE_RE.match(stripped)
+        if m:
+            inline_body = (m.group(2) or "").strip()
+            following = "".join(lines[i + 1 : i + 3])
+            has_body = len(inline_body) >= 4 or len(following.strip()) >= 40
+            if has_body:
+                starts.append(cursor)
+        cursor += len(line)
+    return sorted(set(starts))
+
+
+def _has_lesson_sections(text: str) -> bool:
+    """Detect 第N堂 lesson structure (≥12 lessons with body text)."""
+    return len(_lesson_boundary_starts(text)) >= 12
+
+
+def _chunk_by_lessons(text: str) -> list[str]:
+    """Split on 第N堂 boundaries; keep intro before first lesson intact."""
+    starts = _lesson_boundary_starts(text)
+    if not starts:
+        return _chunk_by_paragraphs(text)
+    segments: list[str] = []
+    if starts[0] > 0:
+        intro = text[: starts[0]].strip()
+        if intro:
+            segments.append(intro)
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(text)
+        seg = text[start:end].strip()
+        if seg:
+            segments.append(seg)
+    return segments if segments else [text]
+
+
+def _subsplit_by_lessons(segment: str, *, min_lessons: int = 3) -> list[str]:
+    """Split a long Part segment at 第N堂 boundaries."""
+    starts = _lesson_boundary_starts(segment)
+    if len(starts) < min_lessons:
+        return [segment]
+    parts: list[str] = []
+    if starts[0] > 0:
+        pre = segment[: starts[0]].strip()
+        if pre:
+            parts.append(pre)
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(segment)
+        piece = segment[start:end].strip()
+        if piece:
+            parts.append(piece)
+    return parts if parts else [segment]
+
+
+def _chunk_by_part_sections(text: str) -> list[str]:
+    """Split on Part N boundaries; sub-split long parts at 第N堂."""
+    starts = _part_boundary_starts(text)
+    if not starts:
+        return _chunk_by_paragraphs(text)
+    segments: list[str] = []
+    if starts[0] > 0:
+        intro = text[: starts[0]].strip()
+        if intro:
+            segments.append(intro)
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(text)
+        seg = text[start:end].strip()
+        if not seg:
+            continue
+        if len(seg) > 1500 and len(_lesson_boundary_starts(seg)) >= 3:
+            segments.extend(_subsplit_by_lessons(seg))
+        else:
+            segments.append(seg)
+    return segments if segments else [text]
 
 
 def _rule_boundary_starts(text: str) -> list[int]:
@@ -289,6 +400,24 @@ def _extract_section_title(text: str) -> Optional[str]:
     if not lines:
         return None
     first_line = lines[0]
+    for line in lines[:6]:
+        m_part = _PART_LINE_RE.match(line)
+        if m_part:
+            num = m_part.group(1)
+            subtitle = (m_part.group(2) or "").strip()
+            if subtitle:
+                return f"Part {num}：{subtitle[:60]}"
+            for follow in lines[lines.index(line) + 1 : lines.index(line) + 4]:
+                m_lesson = _LESSON_LINE_RE.match(follow)
+                if m_lesson and m_lesson.group(2):
+                    return f"Part {num}：{m_lesson.group(2).strip()[:50]}"
+            return f"Part {num}"
+        m_lesson = _LESSON_LINE_RE.match(line)
+        if m_lesson:
+            title = (m_lesson.group(2) or "").strip()
+            if title:
+                return f"第{m_lesson.group(1)}堂：{title[:60]}"
+            return f"第{m_lesson.group(1)}堂"
     if re.match(r"^#{1,4}\s+", first_line):
         return re.sub(r"^#{1,4}\s+", "", first_line).strip()
     if re.match(r"^\d+(\.\d+)+", first_line):
