@@ -21,7 +21,9 @@ from ..utils.region_planning import slice_region_chunks
 from ..utils.small_curriculum import (
     best_chunk_for_case,
     candidates_to_stages_flat,
+    ensure_orphan_chunks_attached,
     finalize_small_file_stages,
+    filter_false_verifier_misses,
     filter_missing_named_cases,
     is_small_file,
     normalize_case_name,
@@ -294,6 +296,20 @@ async def run_start_session_v2(
         # P1 (a)：V2 per-region splitter_verifier fail 時 reroll 1 次
         # （V1 path 有 2 次 reroll；V2 短期至少給 1 次以救 named case 漏切）
         if vresult and not vresult.get("aligned"):
+            filtered_missing = filter_false_verifier_misses(
+                vresult.get("missing_options") or [],
+                region_stages,
+                region_chunks,
+            )
+            if not filtered_missing:
+                _log.info(
+                    "v2 region verifier false positive filtered  region=%s",
+                    region.get("region_id"),
+                )
+                vresult = {**vresult, "aligned": True, "missing_options": []}
+            else:
+                vresult = {**vresult, "missing_options": filtered_missing}
+        if vresult and not vresult.get("aligned"):
             _log.warning(
                 "v2 region verifier failed  region=%s  missing=%s",
                 region.get("region_id"), vresult.get("missing_options"),
@@ -508,6 +524,14 @@ async def run_start_session_v2(
 
         if small_file:
             stages = finalize_small_file_stages(stages, source_chunks)
+        else:
+            orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
+            if orphan_check.get("orphan_chunk_ids"):
+                stages = ensure_orphan_chunks_attached(stages, source_chunks)
+                _log.info(
+                    "v2 full path orphan attach  session=%s  orphans=%d",
+                    session_id, len(orphan_check.get("orphan_chunk_ids") or []),
+                )
 
     new_concepts = sorted({c for s in stages for c in s.get("key_concepts", [])})
     if content_hash and new_concepts:

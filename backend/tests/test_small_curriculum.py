@@ -1,11 +1,14 @@
 """Small-file curriculum helpers — API Design.pdf regression."""
+import os
 import unittest
+from unittest.mock import patch
 
 from backend.agents.global_curriculum_verifier import verify_global_coverage
 from backend.orchestrator.curriculum_pipeline_v2 import _build_follow_up_stages
 from backend.utils.small_curriculum import (
     case_covered_in_stages,
     ensure_orphan_chunks_attached,
+    filter_false_verifier_misses,
     filter_missing_named_cases,
     finalize_small_file_stages,
     is_small_file,
@@ -74,6 +77,14 @@ def _api_design_reroll_stages() -> list[dict]:
 
 
 class TestSmallFileDetection(unittest.TestCase):
+    def setUp(self):
+        self._env_patch = patch.dict(
+            os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False,
+        )
+        self._env_patch.start()
+
+    def tearDown(self):
+        self._env_patch.stop()
     def test_four_chunks_is_small(self):
         self.assertTrue(is_small_file(_api_design_chunks()))
 
@@ -139,6 +150,55 @@ class TestFuzzyNamedCase(unittest.TestCase):
         )
         self.assertNotIn("Airbnb Booking (GraphQL/BFF 案例)", missing)
         self.assertIn("ChatGPT Tasks (混合架構案例)", missing)
+
+    def test_chinese_compound_case_matches_short_title(self):
+        chunks = [{"chunk_id": "chunk_0005", "text": "小雅與小蝶的抗壓性對比案例", "order_index": 5}]
+        stages = [{
+            "title": "案例：小雅與小蝶的抗壓性對比",
+            "key_concepts": ["抗壓性"],
+            "source_chunk_ids": ["chunk_0005"],
+        }]
+        missing = filter_missing_named_cases(
+            ["粉絲小雅與作家小蝶"],
+            stages,
+            chunks,
+        )
+        self.assertEqual(missing, [])
+
+    def test_topic_alias_credit_loan(self):
+        stages = [{
+            "title": "借錢方案（二）：信貸與房貸壓力",
+            "key_concepts": ["還債壓力"],
+            "source_chunk_ids": ["chunk_0008"],
+        }]
+        filtered = filter_false_verifier_misses(
+            ["股票質押", "信用貸款", "房屋貸款"],
+            stages,
+            [],
+        )
+        self.assertNotIn("信用貸款", filtered)
+        self.assertNotIn("房屋貸款", filtered)
+        self.assertIn("股票質押", filtered)
+
+    def test_slash_topic_covered(self):
+        stages = [
+            {
+                "title": "借錢方案（二）：信貸與房貸壓力",
+                "key_concepts": ["信用貸款"],
+                "source_chunk_ids": ["chunk_0017"],
+            },
+            {
+                "title": "零支付與風林火山節奏總結",
+                "key_concepts": ["零支付手法"],
+                "source_chunk_ids": ["chunk_0009"],
+            },
+        ]
+        filtered = filter_false_verifier_misses(
+            ["房貸/信貸無本分期策略"],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, [])
 
     def test_global_verifier_aligned_after_fuzzy(self):
         chunks = _api_design_chunks()

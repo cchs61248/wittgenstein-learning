@@ -15,6 +15,136 @@ DEFAULT_SMALL_FILE_CHUNK_THRESHOLD = 50
 DEFAULT_SMALL_FILE_TEXT_CHARS = 12_000
 CASE_MATCH_THRESHOLD = 0.72
 _PAREN_SUFFIX_RE = re.compile(r"\s*[\(（].*?[\)）]\s*$")
+_COMPOUND_SPLIT_RE = re.compile(r"[與和、/及／]")
+_TOPIC_ALIASES: dict[str, list[str]] = {
+    "信用貸款": ["信用貸款", "信貸"],
+    "信貸": ["信用貸款", "信貸"],
+    "房屋貸款": ["房屋貸款", "房貸"],
+    "房貸": ["房屋貸款", "房貸"],
+    "無本分期": ["無本分期", "零支付", "零支付手法"],
+    "零支付": ["零支付", "零支付手法", "無本分期"],
+}
+
+
+def _topic_tokens(topic: str) -> list[str]:
+    t = str(topic).strip()
+    if not t:
+        return []
+    tokens = [t]
+    for key, aliases in _TOPIC_ALIASES.items():
+        if t == key or t in aliases:
+            for alias in aliases:
+                if alias not in tokens:
+                    tokens.append(alias)
+            if key not in tokens:
+                tokens.append(key)
+    return tokens
+
+
+def _chinese_compound_suffixes(name: str) -> list[str]:
+    parts = [p.strip() for p in _COMPOUND_SPLIT_RE.split(name) if p.strip()]
+    if len(parts) < 2:
+        return []
+    suffixes: list[str] = []
+    for part in parts:
+        if len(part) >= 2:
+            suffixes.append(part[-2:])
+    return suffixes
+
+
+def _compound_name_covered(case_name: str, haystack: str) -> bool:
+    """「粉絲小雅與作家小蝶」可被「小雅與小蝶」覆蓋。"""
+    suffixes = _chinese_compound_suffixes(case_name)
+    return len(suffixes) >= 2 and all(s in haystack for s in suffixes)
+
+
+def _compound_topic_part_covered(part: str, stages: list[dict]) -> bool:
+    part = part.strip()
+    if not part:
+        return True
+    if topic_covered_in_stages(part, stages):
+        return True
+    loan_terms = ("信貸", "信用貸款", "房貸", "房屋貸款", "股票質押")
+    pay_terms = ("無本分期", "零支付", "零支付手法")
+    has_loan = any(t in part for t in loan_terms)
+    has_pay = any(t in part for t in pay_terms)
+    if has_loan and has_pay:
+        loan_ok = any(
+            topic_covered_in_stages(t, stages)
+            for t in loan_terms
+            if t in part or (t in ("信貸", "信用貸款") and "信貸" in part)
+            or (t in ("房貸", "房屋貸款") and "房貸" in part)
+        )
+        pay_ok = topic_covered_in_stages("無本分期", stages)
+        return loan_ok and pay_ok
+    return False
+
+
+def _slash_topics_covered(topic: str, stages: list[dict]) -> bool:
+    if "/" not in topic and "／" not in topic:
+        return False
+    parts = [p.strip() for p in re.split(r"[/／]", topic) if p.strip()]
+    if len(parts) < 2:
+        return False
+    return all(_compound_topic_part_covered(part, stages) for part in parts)
+
+
+def topic_covered_in_stage(
+    stage: dict,
+    topic: str,
+    *,
+    threshold: float = CASE_MATCH_THRESHOLD,
+) -> bool:
+    haystack = _stage_metadata_text(stage)
+    for token in _topic_tokens(topic):
+        if token in haystack:
+            return True
+        title = (stage.get("title") or "").strip()
+        if similarity(token, title) >= threshold:
+            return True
+        for concept in stage.get("key_concepts") or []:
+            cstr = str(concept)
+            if token in cstr or similarity(token, cstr) >= threshold:
+                return True
+    return False
+
+
+def topic_covered_in_stages(topic: str, stages: list[dict]) -> bool:
+    if _slash_topics_covered(topic, stages):
+        return True
+    return any(topic_covered_in_stage(s, topic) for s in stages)
+
+
+def verifier_miss_covered(
+    miss: str,
+    stages: list[dict],
+    source_chunks: list[dict],
+    *,
+    threshold: float = CASE_MATCH_THRESHOLD,
+) -> bool:
+    miss_str = str(miss).strip()
+    if not miss_str:
+        return True
+    if case_covered_in_stages(miss_str, stages, source_chunks, threshold=threshold):
+        return True
+    if topic_covered_in_stages(miss_str, stages):
+        return True
+    return False
+
+
+def filter_false_verifier_misses(
+    missing_options: list[str],
+    stages: list[dict],
+    source_chunks: list[dict],
+    *,
+    threshold: float = CASE_MATCH_THRESHOLD,
+) -> list[str]:
+    """Filter LLM verifier false positives (topic/case already present in stages)."""
+    return [
+        str(m)
+        for m in missing_options
+        if not verifier_miss_covered(str(m), stages, source_chunks, threshold=threshold)
+    ]
 
 
 def normalize_case_name(case_name: str) -> str:
@@ -134,6 +264,10 @@ def case_covered_in_stage(
                 return True
         if "案例" in title and token in title:
             return True
+    if _compound_name_covered(case_name, haystack):
+        return True
+    if topic_covered_in_stage(stage, case_name, threshold=threshold):
+        return True
     if _case_covered_via_case_stage_chunk(title, stage, chunks_by_id, case_name):
         return True
     return False
