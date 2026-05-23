@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（最後更新：2026-05-22，含 **Curriculum Pipeline V2** 強化：GlobalCurriculumReducer Step B/C（confidence&lt;0.8 保留 split）、`REDUCER_FAIL_MODE=hard` LLM 失敗 raise、`verify_global_coverage` duplicate 標題檢查、`curriculum_health` 監控信號（`plan_b_recommended` 不自動切 Plan B）、Go/No-Go mock CI + `pytest -m llm_live` 真 LLM 手動 gate；以及 macro region / per-region split、**dynamic max_stages**、**SPLITTER_FAIL_MODE fail-soft** + QualityWarningBanner、Migration 019 provenance、`CURRICULUM_PIPELINE_V2` feature flag；既有 retry/remediate、多來源、DriftVerifier 等（2026-05-19 前項從略）**）
+> 適用版本：2026-05 feature 分支（最後更新：2026-05-24，含 **Curriculum Pipeline V2** 強化：GlobalCurriculumReducer Step B/C（confidence&lt;0.8 保留 split）、`REDUCER_FAIL_MODE=hard` LLM 失敗 raise、`verify_global_coverage` duplicate 標題檢查、`curriculum_health` 監控信號（`plan_b_recommended` 不自動切 Plan B）、Go/No-Go mock CI + `pytest -m llm_live` 真 LLM 手動 gate；以及 macro region / per-region split、**dynamic max_stages**、**SPLITTER_FAIL_MODE fail-soft** + QualityWarningBanner、Migration 019 provenance、`CURRICULUM_PIPELINE_V2` feature flag；**mega-stage 防護三層**：`_dedupe_candidates` / reducer LLM merge / orphan attach 全部以 `MAX_MERGED_OUTCOME_CHUNKS=20` 為 cap（commit `b9759ce` / `4492dce`）；**splitter prompt 規則 11 / 12**：禁實體名稱（作者名、書名、章節編號、修辭性引用）作為 key_concept、stage 1 key_concepts 上限 5（commit `0029e16`）；**JSON fenced array 解析修補**：`_slice_json` 取最早 opener 為外層（commit `46e71dd`，修補 reducer LLM 對 `[{...},{...}]` 回應 parse 失敗 → 誤觸 Plan B 的 bug）；**Teacher prompt 維特根斯坦 anchor 移除 + 規則 7 禁外部理論體系包裝**（commit `70b84b8`，修補 DriftVerifier infinite false → QG gate 卡住）；既有 retry/remediate、多來源、DriftVerifier 等（2026-05-19 前項從略）**）
 
 ---
 
@@ -629,10 +629,17 @@ class WorkingMemory:
                         │     tier (b) 無 section_title → fixed-size 25 chunks 切
                         │     tier (c) `MACRO_REGION_USE_LLM=1` 或 payload `use_llm_refinement=True` 啟用 LLM metadata refinement（每 region 首尾 300 字 → 補 title / expected_stage_count / must_cover_topics；不重切邊界；LLM 失敗 fallback 為 tier-1/2）
                         ├── per-region ContentSplitter：context 含 region.must_cover_topics（tier-3 LLM 強約束 → splitter user_msg 加「【強約束】每概念對應獨立 stage」段，避免 mash-up）+ region SplitterVerifier
+                        │     splitter prompt 規則重點：R8 chunk 主軸對齊優先、R9 並列方案數量保留、R10 概念命名簡潔（≤ 8 字、禁子句式）、
+                        │     **R11 禁實體名稱作為 kc**（作者名 / 書名 / 章節編號 / 修辭性引用人物 — 避免污染 concept_mastery）、
+                        │     **R12 stage 1 不包山包海**（key_concepts ≤ 5，衍生概念分散到後續 stage）
+                        ├── `_splitter_stages_to_candidates`（per-region 後）：過濾掉不在 `region.chunk_ids` 範圍的 chunk_id，避免跨 region 重複正主
+                        ├── `_dedupe_candidates`（all regions 收齊後）：`concepts_match` 相似度 ≥ 0.85 合併同主題 candidate；
+                        │     **合併前計算 projected chunk total，超過 `MAX_MERGED_OUTCOME_CHUNKS=20` 拒絕合併**（防 cross-region mega candidate）
                         ├── GlobalCurriculumReducer
                         │     Step A：`rule_merge_candidates`（Union-Find，threshold 見 `reducer_constants.py`）
                         │     Step B：LLM 處理 unsure pairs（`MAX_UNSURE_PAIRS_LLM=20`）
                         │     Step C：confidence &lt; 0.8 → 保留 Step A split，不丟 stage
+                        │     **`integrate_llm_outcomes` chunk cap**：LLM merge 合併後超過 `MAX_MERGED_OUTCOME_CHUNKS=20` 即拒絕、保留 split
                         │     `REDUCER_FAIL_MODE=hard`：LLM 失敗 → `GlobalCurriculumReducerError`（session 中止）
                         │     conflict / comparison stage → **V2.1 deferred**（降級為 split + `conflict_deferred`）
                         ├── StageComposerAgent（prerequisites 推斷）
@@ -1484,6 +1491,15 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | split 準確率 min | 0.80 | 0.80 | negative cases，防 false merge |
 | unsure 率 max | 0.20 | 0.30 | LLM 有 unsure 但零 accepted outcome |
 | conflict 誤判率 | — | — | **V2.1 deferred** |
+
+**Mega-stage 防護 cap**：
+
+| cap | 預設 | 定義位置 | 作用位置 | 觸發行為 |
+|-----|------|---------|---------|---------|
+| `MAX_MERGED_OUTCOME_CHUNKS` | 20 | `reducer_constants.py` | `_dedupe_candidates`（跨 region 合併）/ `integrate_llm_outcomes`（LLM merge） | 合併後 chunk 數超過 → 拒絕合併、保留 split，並 WARNING log |
+| `MAX_UNSURE_PAIRS_LLM` | 20 | `reducer_constants.py` | reducer Step B LLM 輸入 | unsure pairs 過多時 truncate |
+| `STAGE_MAX_KEY_CONCEPTS` | 8 | `small_curriculum.py` | orphan attach 寫入 stage 時的 kc 上限 | 超過時新建 `kind=follow_up_orphan` overflow stage |
+| `ORPHAN_STAGE_MAX_CHUNKS` | 14 | `small_curriculum.py` | orphan attach 寫入 stage 時的 chunk 上限 | 超過時拆「補充段落（N）」overflow stage |
 
 > 預設 `pytest.ini` 排除 `llm_live`；一般 CI 不呼叫真 LLM。Nightly workflow 可選啟用。
 
