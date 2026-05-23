@@ -257,7 +257,9 @@ async def main(
     run_stage1: bool,
 ) -> None:
     from backend.db.database import init_db, close_db
+    from backend.utils.logger import setup_logging
 
+    setup_logging()
     await init_db(str(ROOT / "data" / "learning.db"))
 
     if cleanup_all:
@@ -275,7 +277,6 @@ async def main(
         await close_db()
         return
 
-    await init_db(str(ROOT / "data" / "learning.db"))
     try:
         await run_live_curriculum(
             source_path,

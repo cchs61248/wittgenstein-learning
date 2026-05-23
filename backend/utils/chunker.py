@@ -39,6 +39,8 @@ def build_source_chunks(text: str) -> list[dict]:
         raw_chunks = _chunk_by_headers(text)
     else:
         raw_chunks = _chunk_by_paragraphs(text)
+        # PDF 常把多個主題壓成超長單段；先拆結構邊界再 glue heading
+        raw_chunks = _split_dense_paragraphs(raw_chunks)
         # 純散文走 paragraph 切分時，把 inline heading（短行、無句尾標點）
         # 黏到後一段，避免標題與其段落被切到不同 chunk
         raw_chunks = _glue_inline_headings_to_next(raw_chunks)
@@ -412,6 +414,38 @@ def _chunk_by_paragraphs(text: str) -> list[str]:
     """按段落（連續換行）切分。"""
     paragraphs = re.split(r"\n{2,}", text)
     return [p.strip() for p in paragraphs if p.strip()]
+
+
+_DENSE_PARA_MIN_LEN = 800
+_DENSE_PARA_SPLIT_RE = re.compile(
+    r"(?="
+    r"第[一二三四五六七八九十百零\d]+步[：:]|"
+    r"Step\s+\d+[：:.]|"
+    r"Retrieval-Augmented Generation 是怎麼|"
+    r"RAG 在 Agentic Workflow|"
+    r"在簡單的傳統 RAG 中|"
+    r"有了 retrieval 步驟"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _split_dense_paragraphs(
+    paragraphs: list[str],
+    threshold: int = _DENSE_PARA_MIN_LEN,
+) -> list[str]:
+    """Split oversized PDF paragraphs at inline section markers (tech handbook)."""
+    result: list[str] = []
+    for para in paragraphs:
+        if len(para) <= threshold:
+            result.append(para)
+            continue
+        parts = [p.strip() for p in re.split(_DENSE_PARA_SPLIT_RE, para) if p.strip()]
+        if len(parts) >= 2:
+            result.extend(parts)
+        else:
+            result.append(para)
+    return result
 
 
 _HEADING_MAX_CHARS = 30  # inline heading 字數上限

@@ -76,7 +76,9 @@ def _check_probe(spec: GoldenSource, path: Path) -> RowResult:
 
 async def _run_llm_row(spec: GoldenSource, path: Path, *, full_v2: bool, run_stage1: bool) -> RowResult:
     from backend.db.database import init_db, close_db
+    from backend.utils.logger import setup_logging
 
+    setup_logging()
     await init_db(str(ROOT / "data" / "learning.db"))
     row = _check_probe(spec, path)
     if row.status == "fail":
@@ -130,6 +132,9 @@ async def main(
 ) -> int:
     if cleanup_all:
         from backend.db.database import init_db, close_db
+        from backend.utils.logger import setup_logging
+
+        setup_logging()
         await init_db(str(ROOT / "data" / "learning.db"))
         deleted = await cleanup_live_sessions()
         print(f"Cleaned up {len(deleted)} live test session(s)")

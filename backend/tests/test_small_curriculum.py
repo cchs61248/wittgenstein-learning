@@ -7,6 +7,7 @@ from backend.agents.global_curriculum_verifier import verify_global_coverage
 from backend.orchestrator.curriculum_pipeline_v2 import _build_follow_up_stages
 from backend.utils.small_curriculum import (
     case_covered_in_stages,
+    ensure_key_concept_chunk_coverage,
     ensure_orphan_chunks_attached,
     filter_false_verifier_misses,
     filter_missing_named_cases,
@@ -14,6 +15,7 @@ from backend.utils.small_curriculum import (
     is_small_file,
     merge_duplicate_topic_stages,
     merge_empty_chunk_stages,
+    normalize_stages_pre_verify,
     prune_intro_chunk_sharing,
     zero_region_overlaps,
 )
@@ -383,6 +385,76 @@ class TestIntroChunkPrune(unittest.TestCase):
         ]
         self.assertEqual(len(intro_refs), 1)
         self.assertIn("框架", intro_refs[0]["title"])
+
+
+def _data_pipeline_chunks() -> list[dict]:
+    return [
+        {
+            "chunk_id": "chunk_0000",
+            "text": "Data Pipeline 批量處理 ETL 選型框架 離線數倉",
+            "order_index": 0,
+            "source_id": "src_0",
+        },
+        {
+            "chunk_id": "chunk_0001",
+            "text": "串流處理 Kafka Flink 即時管線 低延遲",
+            "order_index": 1,
+            "source_id": "src_0",
+        },
+        {
+            "chunk_id": "chunk_0002",
+            "text": "Spark 批次調度 MapReduce 分散式運算 YARN",
+            "order_index": 2,
+            "source_id": "src_0",
+        },
+    ]
+
+
+class TestIntroStageKeyConceptCoverage(unittest.TestCase):
+    def test_intro_expands_contiguous_chunks_for_spark_kc(self):
+        """Data Pipeline regression: intro 選型 stage 須涵蓋 Spark/MapReduce chunk。"""
+        chunks = _data_pipeline_chunks()
+        stages = [{
+            "stage_id": 1,
+            "title": "Data Pipeline 核心選型：批量與串流",
+            "key_concepts": ["批量 ETL", "Spark", "MapReduce"],
+            "source_chunk_ids": ["chunk_0000", "chunk_0001", "chunk_0002"],
+        }]
+        normalized = normalize_stages_pre_verify(stages, chunks)
+        ids = normalized[0]["source_chunk_ids"]
+        self.assertIn("chunk_0000", ids)
+        self.assertIn("chunk_0002", ids)
+
+    def test_intro_stays_single_chunk_when_kc_covered(self):
+        chunks = [
+            {
+                "chunk_id": "chunk_0000",
+                "text": "API 風格選型框架 REST GraphQL",
+                "order_index": 0,
+            },
+            {
+                "chunk_id": "chunk_0001",
+                "text": "Webhook 案例實務",
+                "order_index": 1,
+            },
+        ]
+        stages = [{
+            "title": "API 風格選型框架",
+            "key_concepts": ["REST", "GraphQL"],
+            "source_chunk_ids": ["chunk_0000", "chunk_0001"],
+        }]
+        normalized = normalize_stages_pre_verify(stages, chunks)
+        self.assertEqual(normalized[0]["source_chunk_ids"], ["chunk_0000"])
+
+    def test_ensure_key_concept_chunk_coverage_attaches_neighbor(self):
+        chunks = _data_pipeline_chunks()
+        stages = [{
+            "title": "Spark 運算基礎",
+            "key_concepts": ["MapReduce"],
+            "source_chunk_ids": ["chunk_0001"],
+        }]
+        fixed = ensure_key_concept_chunk_coverage(stages, chunks)
+        self.assertIn("chunk_0002", fixed[0]["source_chunk_ids"])
 
 
 class TestOrphanAttach(unittest.TestCase):

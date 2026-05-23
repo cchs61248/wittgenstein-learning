@@ -884,11 +884,127 @@ def reassign_case_stage_chunks(
     return out
 
 
+_KC_ENGLISH_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+_INTRO_KC_MAX_FORWARD_SPAN = 4
+
+
+def _kc_covered_in_chunks(
+    kc: str,
+    chunk_ids: list[str],
+    by_id: dict[str, dict],
+) -> bool:
+    """Return True when key concept text or anchor terms appear in assigned chunks."""
+    if not kc:
+        return True
+    combined = " ".join(str(by_id.get(cid, {}).get("text") or "") for cid in chunk_ids)
+    if not combined:
+        return False
+    kc_stripped = kc.strip()
+    if kc_stripped and kc_stripped in combined:
+        return True
+    for term in _KC_ENGLISH_TERM_RE.findall(kc):
+        if term.lower() in combined.lower():
+            return True
+    cn = re.sub(r"[\s\(\)（）]", "", kc)
+    for n in (4, 3, 2):
+        if len(cn) >= n and cn[:n] in combined:
+            return True
+    return False
+
+
+def _minimal_contiguous_chunks_for_kc(
+    anchor_cid: str,
+    key_concepts: list[str],
+    source_chunks: list[dict],
+    *,
+    max_forward_span: int = _INTRO_KC_MAX_FORWARD_SPAN,
+) -> list[str]:
+    """Expand forward from anchor chunk until key_concepts are evidenced (contiguous span)."""
+    ordered = sorted(source_chunks, key=lambda c: c.get("order_index", 0))
+    ordered_ids = [c["chunk_id"] for c in ordered if c.get("chunk_id")]
+    if anchor_cid not in ordered_ids:
+        return [anchor_cid] if anchor_cid else []
+    by_id = chunks_lookup(source_chunks)
+    kcs = [kc for kc in (key_concepts or []) if kc]
+    start_idx = ordered_ids.index(anchor_cid)
+    end_idx = start_idx
+    for _ in range(max_forward_span):
+        span_ids = ordered_ids[start_idx : end_idx + 1]
+        if not kcs or all(_kc_covered_in_chunks(kc, span_ids, by_id) for kc in kcs):
+            break
+        if end_idx + 1 >= len(ordered_ids):
+            break
+        end_idx += 1
+    return ordered_ids[start_idx : end_idx + 1]
+
+
+def _attach_source_chunks_meta(stage: dict, chunk_ids: list[str], by_id: dict[str, dict]) -> dict:
+    s = dict(stage)
+    s["source_chunk_ids"] = chunk_ids
+    s["source_chunks"] = [
+        {
+            "chunk_id": cid,
+            "quote": by_id[cid].get("text") or "",
+            "note": by_id[cid].get("source_id") or "",
+        }
+        for cid in chunk_ids
+        if cid in by_id
+    ]
+    return s
+
+
+def ensure_key_concept_chunk_coverage(
+    stages: list[dict],
+    source_chunks: list[dict],
+    *,
+    max_neighbor_distance: int = 3,
+) -> list[dict]:
+    """Attach missing chunks when key_concepts only appear in unassigned source text."""
+    if not stages or not source_chunks:
+        return stages
+    by_id = chunks_lookup(source_chunks)
+    ordered_ids = [
+        c["chunk_id"]
+        for c in sorted(source_chunks, key=lambda x: x.get("order_index", 0))
+        if c.get("chunk_id")
+    ]
+    out: list[dict] = []
+    for stage in stages:
+        s = dict(stage)
+        ids = list(s.get("source_chunk_ids") or [])
+        kcs = [kc for kc in (s.get("key_concepts") or []) if kc]
+        for kc in kcs:
+            if _kc_covered_in_chunks(kc, ids, by_id):
+                continue
+            anchor_cid: str | None = None
+            for cid in ordered_ids:
+                if _kc_covered_in_chunks(kc, [cid], by_id):
+                    anchor_cid = cid
+                    break
+            if not anchor_cid or anchor_cid in ids:
+                continue
+            if ids:
+                stage_indices = [_chunk_order_index(cid, source_chunks) for cid in ids]
+                anchor_idx = _chunk_order_index(anchor_cid, source_chunks)
+                lo, hi = min(stage_indices), max(stage_indices)
+                if anchor_idx < lo:
+                    if lo - anchor_idx <= max_neighbor_distance:
+                        ids.insert(0, anchor_cid)
+                elif anchor_idx > hi:
+                    if anchor_idx - hi <= max_neighbor_distance:
+                        ids.append(anchor_cid)
+            else:
+                ids.append(anchor_cid)
+        ids = sorted(set(ids), key=lambda c: _chunk_order_index(c, source_chunks))
+        out.append(_attach_source_chunks_meta(s, ids, by_id))
+    return out
+
+
 def trim_intro_stage_first_chunk_only(
     stages: list[dict],
     source_chunks: list[dict],
 ) -> list[dict]:
-    """Framework/intro stage keeps only the first chunk (chunk_0000)."""
+    """Intro/framework stage anchors at first chunk; expand contiguously if kc need later chunks."""
     if not stages or not source_chunks:
         return stages
     ordered = sorted(source_chunks, key=lambda c: c.get("order_index", 0))
@@ -901,13 +1017,14 @@ def trim_intro_stage_first_chunk_only(
         s = dict(stage)
         title = s.get("title") or ""
         if _INTRO_TITLE_RE.search(title) and first_cid in (s.get("source_chunk_ids") or []):
-            s["source_chunk_ids"] = [first_cid]
-            s["source_chunks"] = [{
-                "chunk_id": first_cid,
-                "quote": by_id[first_cid].get("text") or "",
-                "note": by_id[first_cid].get("source_id") or "",
-            }]
-        out.append(s)
+            span_ids = _minimal_contiguous_chunks_for_kc(
+                first_cid,
+                s.get("key_concepts") or [],
+                source_chunks,
+            )
+            out.append(_attach_source_chunks_meta(s, span_ids, by_id))
+        else:
+            out.append(s)
     return out
 
 
@@ -917,6 +1034,7 @@ def normalize_stages_pre_verify(
 ) -> list[dict]:
     """Prune intro overlap, dedupe titles, reassign case chunks (before global verify)."""
     stages = trim_intro_stage_first_chunk_only(stages, source_chunks)
+    stages = ensure_key_concept_chunk_coverage(stages, source_chunks)
     stages = prune_intro_chunk_sharing(stages, source_chunks)
     stages = merge_duplicate_topic_stages(stages)
     stages = merge_empty_chunk_stages(stages)

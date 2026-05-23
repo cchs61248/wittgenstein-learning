@@ -11,6 +11,7 @@ import unittest
 from backend.utils.chunker import (
     build_source_chunks,
     _detect_inline_headings,
+    _split_dense_paragraphs,
 )
 
 
@@ -92,6 +93,25 @@ class TestChunkBoundaryRespectsHeading(unittest.TestCase):
         self.assertGreaterEqual(len(chunks), 1)
         for c in chunks:
             self.assertGreater(len(c["text"]), 0)
+
+
+class TestSplitDenseParagraphs(unittest.TestCase):
+    def test_splits_at_step_markers(self):
+        para = (
+            "成本效益說明。" * 80
+            + "RAG 在 Agentic Workflow 中的角色\n"
+            + "agent 編排說明。" * 40
+            + "Retrieval-Augmented Generation 是怎麼運作的？"
+            + "流程說明。" * 40
+        )
+        parts = _split_dense_paragraphs([para])
+        self.assertGreaterEqual(len(parts), 2)
+        self.assertTrue(any("Agentic Workflow" in p for p in parts))
+        self.assertTrue(any("是怎麼" in p for p in parts))
+
+    def test_short_paragraph_unchanged(self):
+        short = "短段落不拆分。"
+        self.assertEqual(_split_dense_paragraphs([short]), [short])
 
 
 if __name__ == "__main__":

@@ -538,6 +538,7 @@ async def run_start_session_v2(
     })
 
     gverify = verify_global_coverage(stages, source_chunks, required_outline)
+    initial_gverify = gverify
     if not gverify.get("aligned"):
         soft = os.getenv("SPLITTER_FAIL_MODE", "hard").strip().lower() == "soft"
         qw = {
@@ -580,17 +581,30 @@ async def run_start_session_v2(
                     "v2 global verifier post-process succeeded  session=%s", session_id,
                 )
 
-        if small_file:
-            stages = finalize_small_file_stages(stages, source_chunks)
-        else:
-            stages = normalize_stages_pre_verify(stages, source_chunks)
-            orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
-            if orphan_check.get("orphan_chunk_ids"):
-                stages = ensure_orphan_chunks_attached(stages, source_chunks)
-                _log.info(
-                    "v2 full path orphan attach  session=%s  orphans=%d",
-                    session_id, len(orphan_check.get("orphan_chunk_ids") or []),
-                )
+    if small_file:
+        stages = finalize_small_file_stages(stages, source_chunks)
+        gverify = verify_global_coverage(stages, source_chunks, required_outline)
+        if gverify.get("aligned") and not initial_gverify.get("aligned"):
+            _log.info(
+                "v2 small_file recovered after finalize  session=%s  orphans_before=%d",
+                session_id,
+                len(initial_gverify.get("orphan_chunk_ids") or []),
+            )
+        elif not gverify.get("aligned"):
+            _log.warning(
+                "v2 small_file still misaligned after finalize  session=%s  %s",
+                session_id,
+                gverify,
+            )
+    elif not initial_gverify.get("aligned"):
+        stages = normalize_stages_pre_verify(stages, source_chunks)
+        orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
+        if orphan_check.get("orphan_chunk_ids"):
+            stages = ensure_orphan_chunks_attached(stages, source_chunks)
+            _log.info(
+                "v2 full path orphan attach  session=%s  orphans=%d",
+                session_id, len(orphan_check.get("orphan_chunk_ids") or []),
+            )
 
     if is_listicle_source(source_chunks):
         stages = prune_toc_listicle_chunks(stages, source_chunks)

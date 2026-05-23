@@ -963,6 +963,7 @@ class LearningOrchestrator:
         # 故此處直接呼叫 _pack_and_store 種一筆基線。
         await _pack_and_store(session_id, stage["stage_id"], "")
 
+        explanation_grounded = True
         try:
             # 2. 串流講解（📖 + 🔗）
             ctx = AgentContext(
@@ -990,15 +991,25 @@ class LearningOrchestrator:
                 stages=stages,
                 adaptive_ctx=adaptive_ctx,
             )
-            if not explain_verify.get("aligned", False):
-                guidance = explain_verify.get("revision_hint") or "請僅依據 source_chunks 重寫，避免教材外推。"
+            max_explanation_rewrites = 2
+            rewrite_attempt = 0
+            while (
+                not explain_verify.get("aligned", False)
+                and rewrite_attempt < max_explanation_rewrites
+            ):
+                rewrite_attempt += 1
+                guidance = (
+                    explain_verify.get("revision_hint")
+                    or "請僅依據 source_chunks 重寫，避免教材外推。"
+                )
                 retry_ctx = AgentContext(
                     session_id=session_id,
                     user_id=user_id,
                     task_payload={
                         "stage": {
                             **stage,
-                            "content": stage.get("content", "") + f"\n\n（對齊修正要求：{guidance}）",
+                            "content": stage.get("content", "")
+                            + f"\n\n（對齊修正要求：{guidance}）",
                         },
                         "prev_stage_title": prev_stage["title"] if prev_stage else None,
                         "user_profile_summary": user_profile_summary,
@@ -1010,7 +1021,7 @@ class LearningOrchestrator:
                     full_explanation += chunk
                     await writer.update(full_explanation)
                 explanation_rewritten = True
-                post_rewrite_verify = await self._verify_grounding(
+                explain_verify = await self._verify_grounding(
                     session_id=session_id,
                     user_id=user_id,
                     stage=stage,
@@ -1019,13 +1030,16 @@ class LearningOrchestrator:
                     stages=stages,
                     adaptive_ctx=adaptive_ctx,
                 )
-                if not post_rewrite_verify.get("aligned", False):
-                    _log.warning(
-                        "Explanation still not aligned after rewrite  session=%s  "
-                        "stage_id=%s  issues=%s",
-                        session_id, stage.get("stage_id"),
-                        post_rewrite_verify.get("issues"),
-                    )
+            explanation_grounded = explain_verify.get("aligned", False)
+            if explanation_rewritten and not explanation_grounded:
+                _log.warning(
+                    "Explanation still not aligned after %d rewrite(s)  session=%s  "
+                    "stage_id=%s  issues=%s  blocking_qg=true",
+                    rewrite_attempt,
+                    session_id,
+                    stage.get("stage_id"),
+                    explain_verify.get("issues"),
+                )
             if explanation_rewritten:
                 await emit({"type": "explanation_reset", "payload": {}})
                 await emit({"type": "explanation_chunk", "payload": {"chunk": progress_md, "is_final": False}})
@@ -1043,33 +1057,10 @@ class LearningOrchestrator:
         teaching_intent = normalize_teaching_intent(raw_intent, stage)
         wm.current_teaching_intent = teaching_intent
 
-        # 4. 生成問題
-        q_ctx = AgentContext(
-            session_id=session_id,
-            user_id=user_id,
-            task_payload=build_qg_task_payload(
-                stage=stage,
-                full_explanation=full_explanation,
-                teaching_intent=teaching_intent,
-                adaptive_ctx=adaptive_ctx,
-                question_mode=question_mode,
-                attempt_number=1,
-            ),
-        )
-        q_result = await self.questioner.run(q_ctx)
-        questions: list[dict] = q_result.get("questions", [])
-        questions_verify = await self._verify_grounding(
-            session_id=session_id,
-            user_id=user_id,
-            stage=stage,
-            content_type="questions",
-            candidate_text=json.dumps(questions, ensure_ascii=False),
-            full_explanation=full_explanation,
-            stages=stages,
-            adaptive_ctx=adaptive_ctx,
-        )
-        if not questions_verify.get("aligned", False):
-            retry_q_ctx = AgentContext(
+        # 4. 生成問題（grounding 未對齊時阻擋 QG，避免漂移題目）
+        questions: list[dict] = []
+        if explanation_grounded:
+            q_ctx = AgentContext(
                 session_id=session_id,
                 user_id=user_id,
                 task_payload=build_qg_task_payload(
@@ -1079,29 +1070,59 @@ class LearningOrchestrator:
                     adaptive_ctx=adaptive_ctx,
                     question_mode=question_mode,
                     attempt_number=1,
-                    stage_content_suffix=(
-                        "\n\n" + self._build_question_retry_guidance(questions_verify)
-                    ),
                 ),
             )
-            q_result = await self.questioner.run(retry_q_ctx)
+            q_result = await self.questioner.run(q_ctx)
             questions = q_result.get("questions", [])
-            post_retry_verify = await self._verify_grounding(
-                session_id=session_id, user_id=user_id, stage=stage,
+            questions_verify = await self._verify_grounding(
+                session_id=session_id,
+                user_id=user_id,
+                stage=stage,
                 content_type="questions",
                 candidate_text=json.dumps(questions, ensure_ascii=False),
                 full_explanation=full_explanation,
                 stages=stages,
                 adaptive_ctx=adaptive_ctx,
             )
-            if not post_retry_verify.get("aligned", False):
-                unsupported = post_retry_verify.get("unsupported_claims") or []
-                tagged = self._tag_drifting_questions(questions, unsupported)
-                _log.warning(
-                    "Questions still drifting after retry  session=%s  stage_id=%s  "
-                    "tagged=%d  unsupported_sample=%s",
-                    session_id, stage["stage_id"], tagged, unsupported[:3],
+            if not questions_verify.get("aligned", False):
+                retry_q_ctx = AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload=build_qg_task_payload(
+                        stage=stage,
+                        full_explanation=full_explanation,
+                        teaching_intent=teaching_intent,
+                        adaptive_ctx=adaptive_ctx,
+                        question_mode=question_mode,
+                        attempt_number=1,
+                        stage_content_suffix=(
+                            "\n\n" + self._build_question_retry_guidance(questions_verify)
+                        ),
+                    ),
                 )
+                q_result = await self.questioner.run(retry_q_ctx)
+                questions = q_result.get("questions", [])
+                post_retry_verify = await self._verify_grounding(
+                    session_id=session_id, user_id=user_id, stage=stage,
+                    content_type="questions",
+                    candidate_text=json.dumps(questions, ensure_ascii=False),
+                    full_explanation=full_explanation,
+                    stages=stages,
+                    adaptive_ctx=adaptive_ctx,
+                )
+                if not post_retry_verify.get("aligned", False):
+                    unsupported = post_retry_verify.get("unsupported_claims") or []
+                    tagged = self._tag_drifting_questions(questions, unsupported)
+                    _log.warning(
+                        "Questions still drifting after retry  session=%s  stage_id=%s  "
+                        "tagged=%d  unsupported_sample=%s",
+                        session_id, stage["stage_id"], tagged, unsupported[:3],
+                    )
+        else:
+            _log.warning(
+                "Question generation blocked  session=%s  stage_id=%s  reason=explanation_not_grounded",
+                session_id, stage["stage_id"],
+            )
         wm.pending_questions = questions
         await session_memory.store_stage_questions(session_id, stage["stage_id"], questions)
 
