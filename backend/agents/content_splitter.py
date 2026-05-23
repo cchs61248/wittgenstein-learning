@@ -1,10 +1,54 @@
 import json
+import logging
+import re
 from typing import Any
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import LLMMessage, MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
 from ..utils.small_curriculum import merge_duplicate_topic_stages
+
+
+_log = logging.getLogger("wl.agents.splitter")
+
+# kc 通常以「案例：/實務：/範例：」前綴 dup 原概念，要 dedupe 前綴版
+_KC_CASE_PREFIX_RE = re.compile(r"^(案例|實務|實例|範例|案例分析|案例研究)[：:]")
+
+
+def _sanitize_key_concepts(raw_kc: list, stage_title: str) -> list[str]:
+    """過濾 R10 (d) 違規的 key_concept：
+    (a) kc 與 stage title 字面相同 → 刪除（title 是「教學單元名稱」，不是 kc）
+    (b) kc 含中文「：」或全形破折號「—」分隔符 → 通常是 title 變種，刪除
+    (c) kc 以「案例：/實務：/範例：」開頭 + 同 stage 其他 kc 已含同主題 → 去前綴後 dedupe
+    """
+    title_norm = stage_title.strip()
+    out: list[str] = []
+    seen_norm: set[str] = set()
+    for c in raw_kc:
+        if not isinstance(c, (str, int, float)):
+            continue
+        cs = str(c).strip()
+        if not cs:
+            continue
+        # (a)
+        if cs == title_norm:
+            _log.warning("splitter kc title-leak dropped: %r (= stage title)", cs)
+            continue
+        # (b)
+        if "：" in cs or "—" in cs:
+            _log.warning("splitter kc title-leak dropped: %r (contains separator)", cs)
+            continue
+        # (c)
+        stripped = _KC_CASE_PREFIX_RE.sub("", cs).strip()
+        norm = stripped.lower()
+        if norm in seen_norm:
+            _log.warning(
+                "splitter kc dup dropped: %r (case-prefix variant of existing)", cs
+            )
+            continue
+        seen_norm.add(norm)
+        out.append(cs)
+    return out
 
 
 def _format_chunks_with_sources(source_chunks: list[dict]) -> str:
@@ -94,18 +138,17 @@ class ContentSplitterAgent(BaseAgent):
                 ]
                 valid_ids = [c["chunk_id"] for c in fallback_chunks]
 
+            stage_title = str(s.get("title", f"階段 {idx + 1}"))
             normalized_stages.append(
                 {
                     "stage_id": int(s.get("stage_id", idx + 1)),
                     "node_id": node_id,
-                    "title": str(s.get("title", f"階段 {idx + 1}")),
+                    "title": stage_title,
                     "source_chunk_ids": valid_ids,
                     "source_chunks": source_chunks,
-                    "key_concepts": [
-                        str(c)
-                        for c in (s.get("key_concepts") or [])
-                        if isinstance(c, (str, int, float))
-                    ],
+                    "key_concepts": _sanitize_key_concepts(
+                        s.get("key_concepts") or [], stage_title
+                    ),
                     "prerequisites": [
                         str(c)
                         for c in (s.get("prerequisites") or [])
