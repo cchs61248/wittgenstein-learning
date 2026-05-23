@@ -28,8 +28,10 @@ from ..utils.small_curriculum import (
     is_small_file,
     normalize_case_name,
     normalize_small_file_stages,
+    prune_toc_listicle_chunks,
     zero_region_overlaps,
 )
+from ..utils.region_planning import is_listicle_source
 from ..utils.stage_budget import compute_dynamic_max_stages
 
 if TYPE_CHECKING:
@@ -532,6 +534,12 @@ async def run_start_session_v2(
                     "v2 full path orphan attach  session=%s  orphans=%d",
                     session_id, len(orphan_check.get("orphan_chunk_ids") or []),
                 )
+
+    if is_listicle_source(source_chunks):
+        stages = prune_toc_listicle_chunks(stages, source_chunks)
+        orphan_after = verify_global_coverage(stages, source_chunks, required_outline)
+        if orphan_after.get("orphan_chunk_ids"):
+            stages = ensure_orphan_chunks_attached(stages, source_chunks)
 
     new_concepts = sorted({c for s in stages for c in s.get("key_concepts", [])})
     if content_hash and new_concepts:

@@ -47,6 +47,18 @@ class TestListicleRegionPlanning(unittest.TestCase):
         regions = plan_macro_regions(chunks, chunks_per_region=3)
         self.assertLess(len(regions), len(chunks))
 
+    def test_listicle_regions_carry_must_cover_topics(self):
+        text = RULE_BOOK_SAMPLE
+        for n in range(4, 15):
+            text += f"\n\n法則{n}\n標題{n}\n" + ("內容。" * 50) + "\n"
+        chunks = build_source_chunks(text)
+        for i, c in enumerate(chunks):
+            c["chunk_id"] = f"chunk_{i:04d}"
+        regions = plan_macro_regions(chunks, chunks_per_region=4)
+        rule_regions = [r for r in regions if r.get("must_cover_topics")]
+        self.assertTrue(rule_regions)
+        self.assertTrue(any("法則" in t for r in rule_regions for t in r["must_cover_topics"]))
+
 
 if __name__ == "__main__":
     unittest.main()

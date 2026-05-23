@@ -632,6 +632,55 @@ def finalize_small_file_stages(
     return stages
 
 
+_TOC_RULE_LINE_RE = re.compile(r"^\s*法則\s*\d+")
+
+
+def is_toc_listicle_chunk(chunk: dict) -> bool:
+    """目次 chunk：多行「法則 N」標題、無 section_title、缺正文段落。"""
+    if (chunk.get("section_title") or "").strip():
+        return False
+    text = str(chunk.get("text") or "")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 5:
+        return False
+    rule_lines = sum(1 for ln in lines if _TOC_RULE_LINE_RE.match(ln))
+    return rule_lines >= 5 and rule_lines / len(lines) >= 0.35
+
+
+def prune_toc_listicle_chunks(
+    stages: list[dict],
+    source_chunks: list[dict],
+) -> list[dict]:
+    """Remove TOC-only listicle chunks from stages (avoid duplicate 目次 stages)."""
+    toc_ids = {
+        c["chunk_id"]
+        for c in source_chunks
+        if c.get("chunk_id") and is_toc_listicle_chunk(c)
+    }
+    if not toc_ids:
+        return stages
+
+    by_id = chunks_lookup(source_chunks)
+    out: list[dict] = []
+    for stage in stages:
+        s = dict(stage)
+        ids = [cid for cid in (s.get("source_chunk_ids") or []) if cid not in toc_ids]
+        if not ids:
+            continue
+        s["source_chunk_ids"] = ids
+        s["source_chunks"] = [
+            {
+                "chunk_id": cid,
+                "quote": by_id[cid].get("text") or "",
+                "note": by_id[cid].get("source_id") or "",
+            }
+            for cid in ids
+            if cid in by_id
+        ]
+        out.append(s)
+    return out if out else stages
+
+
 def candidates_to_stages_flat(
     candidates: list[dict],
     chunks_lookup_text: dict[str, str],

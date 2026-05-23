@@ -27,6 +27,20 @@ def _listicle_rule_ratio(chunks: list[dict]) -> float:
     return rule_count / len(chunks)
 
 
+def _listicle_must_cover_topics(group: list[dict], *, max_topics: int = 8) -> list[str]:
+    topics: list[str] = []
+    for c in group:
+        title = (c.get("section_title") or "").strip()
+        if _is_numbered_rule_title(title) and title not in topics:
+            topics.append(title)
+    return topics[:max_topics]
+
+
+def is_listicle_source(source_chunks: list[dict]) -> bool:
+    """True when ≥40% chunks carry 法則 N section titles (numbered-rule books)."""
+    return _listicle_rule_ratio(source_chunks) >= 0.4
+
+
 def _group_key(chunk: dict) -> tuple:
     return (
         chunk.get("source_id") or chunk.get("source_index", 0),
@@ -114,16 +128,20 @@ def plan_macro_regions(
                 continue
             chunk_ids = [c["chunk_id"] for c in group]
             overlap = overlap_chunk_count(len(group))
+            cover_topics = _listicle_must_cover_topics(group) if listicle else []
+            expected = max(1, min(8, math.ceil(len(group) / 3)))
+            if cover_topics:
+                expected = max(expected, min(len(cover_topics), 8))
             regions.append({
                 "region_id": f"region_{region_idx:03d}",
                 "source_id": str(source_id),
                 "chunk_id_range": [chunk_ids[0], chunk_ids[-1]],
                 "chunk_ids": chunk_ids,
                 "title": (group[0].get("section_title") or f"區塊 {region_idx + 1}").strip(),
-                "expected_stage_count": max(1, min(8, math.ceil(len(group) / 3))),
+                "expected_stage_count": expected,
                 "overlap_before": overlap,
                 "overlap_after": overlap,
-                "must_cover_topics": [],
+                "must_cover_topics": cover_topics,
             })
             region_idx += 1
 
