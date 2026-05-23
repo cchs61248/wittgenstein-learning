@@ -34,6 +34,8 @@ _TOPIC_ALIASES: dict[str, list[str]] = {
 _PAREN_INNER_RE = re.compile(r"[\(（]([^\)）]+)[\)）]")
 _COLON_SUFFIX_RE = re.compile(r"^.+?[：:]\s*(.+)$")
 _GRADE_MISS_RE = re.compile(r"([SAB])\s*級")
+_CASE_PREFIX_RE = re.compile(r"^案例\s*實務?[：:]\s*|^案例[：:]\s*", re.IGNORECASE)
+_VS_SPLIT_RE = re.compile(r"\s+vs\s+", re.IGNORECASE)
 
 
 def _topic_tokens(topic: str) -> list[str]:
@@ -133,6 +135,36 @@ def _slash_topics_covered(topic: str, stages: list[dict]) -> bool:
     if len(parts) < 2:
         return False
     return all(_compound_topic_part_covered(part, stages) for part in parts)
+
+
+def _vs_parallel_covered(label: str, stages: list[dict]) -> bool:
+    """「無風險資產 vs 有風險資產」— 兩側主題皆已在 stages 中。"""
+    base = _PAREN_INNER_RE.sub("", label).strip()
+    parts = _VS_SPLIT_RE.split(base)
+    if len(parts) != 2:
+        return False
+    return all(_compound_topic_part_covered(p.strip(), stages) for p in parts)
+
+
+def _及_compound_covered(label: str, stages: list[dict]) -> bool:
+    """「高股息及高收益商品」— 任一侧已在 stages 即視為覆蓋。"""
+    if "及" not in label:
+        return False
+    parts = [p.strip() for p in label.split("及") if len(p.strip()) >= 2]
+    return len(parts) >= 2 and any(topic_covered_in_stages(p, stages) for p in parts)
+
+
+def _case_entities_covered(case_name: str, stages: list[dict]) -> bool:
+    """「荷蘭皇家石油與殼牌石油」— 與/和 兩側實體皆出現在 stage 即視為覆蓋。"""
+    core = _CASE_PREFIX_RE.sub("", str(case_name).strip())
+    core = _PAREN_INNER_RE.sub("", core).strip()
+    parts = [p.strip() for p in re.split(r"[與和]", core) if len(p.strip()) >= 3]
+    if len(parts) < 2:
+        return False
+    return all(
+        any(part in _stage_metadata_text(s) for s in stages)
+        for part in parts[:2]
+    )
 
 
 def topic_covered_in_stage(
@@ -279,6 +311,12 @@ def verifier_miss_covered(
         return True
     if topic_covered_in_stages(miss_str, stages):
         return True
+    if _vs_parallel_covered(miss_str, stages):
+        return True
+    if _及_compound_covered(miss_str, stages):
+        return True
+    if _case_entities_covered(miss_str, stages):
+        return True
     if _paren_enumeration_covered(miss_str, stages):
         return True
     if _paren_alias_covered(miss_str, stages):
@@ -349,6 +387,13 @@ def _case_tokens(case_name: str) -> list[str]:
             grade = f"{m.group(1)}級"
             if grade not in tokens:
                 tokens.append(grade)
+    for part in re.split(r"[與和]", main):
+        part = part.strip()
+        if len(part) >= 3 and part not in tokens:
+            tokens.append(part)
+    exp = re.sub(r"(實驗|案例|研究)$", "", main).strip()
+    if len(exp) >= 4 and exp not in tokens:
+        tokens.append(exp)
     return tokens
 
 
@@ -442,6 +487,8 @@ def case_covered_in_stage(
             return True
     if _compound_name_covered(case_name, haystack):
         return True
+    if _case_entities_covered(case_name, [stage]):
+        return True
     if topic_covered_in_stage(stage, case_name, threshold=threshold):
         return True
     if _case_covered_via_case_stage_chunk(title, stage, chunks_by_id, case_name):
@@ -517,9 +564,15 @@ def zero_region_overlaps(regions: list[dict]) -> None:
 
 _INTRO_TITLE_RE = re.compile(
     r"框架|選型|導論|概述|總覽|introduction|overview|framework|"
-    r"前言|序言|導言|緒論|投資心法|富人思維",
+    r"前言|序言|導言|緒論|投資心法|富人思維|行為財務學|決策偏誤",
     re.IGNORECASE,
 )
+
+
+def _normalize_title_for_merge(title: str) -> str:
+    t = _CASE_PREFIX_RE.sub("", (title or "").strip())
+    t = _PAREN_SUFFIX_RE.sub("", t).strip()
+    return " ".join(t.lower().split())
 
 
 def _renumber_stages(stages: list[dict]) -> list[dict]:
@@ -579,15 +632,57 @@ def merge_duplicate_topic_stages(
             continue
 
         merged = False
+        norm_title = _normalize_title_for_merge(title)
         for existing in result:
             existing_title = (existing.get("title") or "").strip()
-            if existing_title and similarity(title, existing_title) >= threshold:
+            norm_existing = _normalize_title_for_merge(existing_title)
+            title_match = (
+                existing_title
+                and (
+                    similarity(title, existing_title) >= threshold
+                    or (
+                        norm_title
+                        and norm_existing
+                        and (
+                            norm_title == norm_existing
+                            or similarity(norm_title, norm_existing) >= threshold
+                        )
+                    )
+                )
+            )
+            if title_match:
                 _merge_stage_into(existing, stage)
                 merged = True
                 break
         if not merged:
             result.append(dict(stage))
     return _renumber_stages(result)
+
+
+def merge_empty_chunk_stages(stages: list[dict]) -> list[dict]:
+    """Merge stages with no source_chunk_ids into adjacent stage (avoid empty stages)."""
+    if not stages:
+        return stages
+    out: list[dict] = []
+    pending: dict | None = None
+    for stage in stages:
+        s = dict(stage)
+        if s.get("source_chunk_ids"):
+            if pending:
+                _merge_stage_into(s, pending)
+                pending = None
+            out.append(s)
+            continue
+        if out:
+            _merge_stage_into(out[-1], s)
+        else:
+            pending = s
+    if pending:
+        if out:
+            _merge_stage_into(out[0], pending)
+        else:
+            out.append(pending)
+    return _renumber_stages(out)
 
 
 def prune_intro_chunk_sharing(
@@ -822,6 +917,7 @@ def normalize_stages_pre_verify(
     stages = trim_intro_stage_first_chunk_only(stages, source_chunks)
     stages = prune_intro_chunk_sharing(stages, source_chunks)
     stages = merge_duplicate_topic_stages(stages)
+    stages = merge_empty_chunk_stages(stages)
     stages = reassign_case_stage_chunks(stages, source_chunks)
     return stages
 

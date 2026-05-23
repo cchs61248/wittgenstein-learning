@@ -13,6 +13,7 @@ from backend.utils.small_curriculum import (
     finalize_small_file_stages,
     is_small_file,
     merge_duplicate_topic_stages,
+    merge_empty_chunk_stages,
     prune_intro_chunk_sharing,
     zero_region_overlaps,
 )
@@ -262,6 +263,94 @@ class TestFuzzyNamedCase(unittest.TestCase):
         }]
         filtered = filter_false_verifier_misses(
             ["夏、秋、冬、春四大戰術（風林火山四戰術）"],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, [])
+
+    def test_ltcm_case_prefix_merge(self):
+        stages = [
+            {
+                "stage_id": 1,
+                "title": "案例：長期資本管理公司 (LTCM)",
+                "key_concepts": ["LTCM"],
+                "source_chunk_ids": ["chunk_0001", "chunk_0002"],
+            },
+            {
+                "stage_id": 2,
+                "title": "長期資本管理公司",
+                "key_concepts": ["低成本ETF"],
+                "source_chunk_ids": ["chunk_0001"],
+            },
+        ]
+        merged = merge_duplicate_topic_stages(stages)
+        self.assertEqual(len(merged), 1)
+        self.assertIn("chunk_0002", merged[0]["source_chunk_ids"])
+
+    def test_merge_empty_chunk_stage_into_neighbor(self):
+        stages = [
+            {
+                "stage_id": 1,
+                "title": "行為財務學",
+                "key_concepts": ["行為財務學"],
+                "source_chunk_ids": ["chunk_0000"],
+            },
+            {
+                "stage_id": 2,
+                "title": "複利優勢與長期投資",
+                "key_concepts": ["複利", "長期投資"],
+                "source_chunk_ids": [],
+            },
+        ]
+        merged = merge_empty_chunk_stages(stages)
+        self.assertEqual(len(merged), 1)
+        self.assertIn("複利", merged[0]["key_concepts"])
+
+    def test_case_entities_dutch_shell_covered(self):
+        stages = [{
+            "title": "案例：荷蘭皇家石油與殼牌的連體嬰股價",
+            "key_concepts": ["連體嬰股價"],
+            "source_chunk_ids": ["chunk_0017"],
+        }]
+        filtered = filter_false_verifier_misses(
+            ["荷蘭皇家石油與殼牌石油 (連體嬰公司案例)"],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, [])
+
+    def test_vs_parallel_asset_classes(self):
+        stages = [
+            {
+                "title": "資產配置概論",
+                "key_concepts": ["無風險資產", "有風險資產"],
+                "source_chunk_ids": ["chunk_0100"],
+            },
+            {
+                "title": "區域配置",
+                "key_concepts": ["國內資產", "國外資產"],
+                "source_chunk_ids": ["chunk_0101"],
+            },
+        ]
+        filtered = filter_false_verifier_misses(
+            [
+                "無風險資產 vs 有風險資產 (資產大類並列)",
+                "國內資產 vs 國外資產 (配置比例並列)",
+            ],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, [])
+
+    def test_product_list_enumeration(self):
+        stages = [
+            {"title": "股票與債券", "key_concepts": ["股票", "債券"], "source_chunk_ids": ["c1"]},
+            {"title": "主題式與高股息", "key_concepts": ["主題式基金", "高股息"], "source_chunk_ids": ["c2"]},
+            {"title": "衍生商品", "key_concepts": ["期貨與選擇權"], "source_chunk_ids": ["c3"]},
+            {"title": "房地產", "key_concepts": ["房地產"], "source_chunk_ids": ["c4"]},
+        ]
+        filtered = filter_false_verifier_misses(
+            ["股票", "債券", "主題式基金與 ETF", "高股息及高收益商品", "期貨與選擇權", "房地產"],
             stages,
             [],
         )
