@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from ..utils.fuzzy_match import concept_overlap_score, similarity
 from .reducer_constants import (
     FUZZY_ATTACH_THRESHOLD,
+    MAX_MERGED_OUTCOME_CHUNKS,
     MERGE_CONFIDENCE_MIN,
     RULE_MERGE_KC_THRESHOLD,
     RULE_MERGE_TG_SIM,
@@ -15,6 +17,8 @@ from .reducer_constants import (
     UNSURE_TG_SIM,
     UNSURE_TITLE_SIM,
 )
+
+_log = logging.getLogger("wl.reducer")
 
 # V2.1: comparison / conflict stages not implemented; LLM conflict output is downgraded.
 CONFLICT_SUPPORTED = False
@@ -207,6 +211,23 @@ def integrate_llm_outcomes(
             continue
 
         merge_set = set(merge_indices)
+        # chunk cap：LLM 不知道每個 candidate 的 chunk 數，可能 merge 後產生
+        # 45+ chunks 的 mega-stage（sess_live_b0fb06cd stage 7）。超過 cap 拒絕該合併。
+        merged_chunks = {
+            cid
+            for i in merge_set
+            for cid in (candidates[i].get("source_chunk_ids") or [])
+        }
+        if len(merged_chunks) > MAX_MERGED_OUTCOME_CHUNKS:
+            _log.warning(
+                "reducer reject merge: chunks=%d > cap=%d  outcome_id=%s  indices=%s",
+                len(merged_chunks),
+                MAX_MERGED_OUTCOME_CHUNKS,
+                llm_o.get("outcome_id", "?"),
+                sorted(merge_set),
+            )
+            continue
+
         outcomes = [
             o for o in outcomes
             if not set(o.get("_source_indices") or []).issubset(merge_set)
