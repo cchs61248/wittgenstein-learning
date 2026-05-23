@@ -17,6 +17,7 @@ from ..memory import session_memory
 from ..utils.canonicalize_apply import apply_canonical_mappings
 from ..utils.curriculum_reducer import attach_supporting_by_fuzzy_match, outcomes_to_stages
 from ..utils.fuzzy_match import concepts_match
+from ..utils.reducer_constants import MAX_MERGED_OUTCOME_CHUNKS
 from ..utils.region_planning import (
     enrich_regions_with_outline_topics,
     is_listicle_source,
@@ -46,9 +47,17 @@ _log = logging.getLogger("wl.orchestrator.v2")
 
 
 def _dedupe_candidates(candidates: list[dict], threshold: float = 0.85) -> list[dict]:
+    """合併 kc 相似 candidate；合併後 chunk 數超過 cap 則拒絕合併、保留獨立 candidate。
+
+    chunk cap 來自 sess_live_049d39ce stage 2 案例：region_001/002/005 splitter 各出
+    「房屋貸款」相關 candidate，dedupe 把跨 region chunks 全併入單一 candidate，
+    產生 25-chunk mega candidate (region 邊界外的 chunk_0119, 0120 也被吸進來)。
+    cap 與 [[reducer-chunk-cap]] / MAX_MERGED_OUTCOME_CHUNKS 一致，避免超大 stage 過載 Teacher。
+    """
     merged: list[dict] = []
     for c in candidates:
         placed = False
+        incoming_ids = c.get("source_chunk_ids") or []
         for m in merged:
             if concepts_match(
                 [str(x) for x in m.get("key_concepts") or []],
@@ -56,7 +65,19 @@ def _dedupe_candidates(candidates: list[dict], threshold: float = 0.85) -> list[
                 threshold=threshold,
             ):
                 m_ids = m.setdefault("source_chunk_ids", [])
-                for cid in c.get("source_chunk_ids") or []:
+                projected_total = len({*m_ids, *incoming_ids})
+                if projected_total > MAX_MERGED_OUTCOME_CHUNKS:
+                    _log.warning(
+                        "dedupe reject merge: chunks=%d > cap=%d  m_region=%s  c_region=%s  m_title=%s  c_title=%s",
+                        projected_total,
+                        MAX_MERGED_OUTCOME_CHUNKS,
+                        m.get("region_id"),
+                        c.get("region_id"),
+                        m.get("title"),
+                        c.get("title"),
+                    )
+                    continue
+                for cid in incoming_ids:
                     if cid not in m_ids:
                         m_ids.append(cid)
                 placed = True

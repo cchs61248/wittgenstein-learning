@@ -71,6 +71,42 @@ class TestInterimDedup(unittest.TestCase):
         self.assertIn("c1", chunk_ids)
         self.assertIn("c2", chunk_ids)
 
+    def test_dedupe_rejects_merge_exceeding_chunk_cap(self):
+        # sess_live_049d39ce 案例：region_001/002/005 splitter 各出
+        # 「房屋貸款」相關 candidate，dedupe 將跨 region 25 chunks 全併入單一 candidate。
+        # 預期：合併後超過 MAX_MERGED_OUTCOME_CHUNKS=20 → 拒絕合併，保留獨立 candidate。
+        def chunks(prefix: str, n: int) -> list[str]:
+            return [f"{prefix}_{i:03d}" for i in range(n)]
+        candidates = [
+            {"region_id": "region_001", "title": "房屋貸款（一）",
+             "key_concepts": ["房屋貸款", "中信融資型房貸"],
+             "source_chunk_ids": chunks("r1", 12)},
+            {"region_id": "region_002", "title": "房屋貸款（二）",
+             "key_concepts": ["房屋貸款", "理財型房貸"],
+             "source_chunk_ids": chunks("r2", 12)},
+        ]
+        merged = _dedupe_candidates(candidates)
+        # 12 + 12 = 24 > cap=20 → 拒絕合併，保留 2 個 candidate
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(len(merged[0]["source_chunk_ids"]), 12)
+        self.assertEqual(len(merged[1]["source_chunk_ids"]), 12)
+
+    def test_dedupe_accepts_merge_within_chunk_cap(self):
+        # 5 + 5 = 10 ≤ cap → 允許合併
+        def chunks(prefix: str, n: int) -> list[str]:
+            return [f"{prefix}_{i:03d}" for i in range(n)]
+        candidates = [
+            {"region_id": "region_001", "title": "A",
+             "key_concepts": ["alpha", "beta"],
+             "source_chunk_ids": chunks("r1", 5)},
+            {"region_id": "region_002", "title": "B",
+             "key_concepts": ["alpha", "beta"],
+             "source_chunk_ids": chunks("r2", 5)},
+        ]
+        merged = _dedupe_candidates(candidates)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(len(merged[0]["source_chunk_ids"]), 10)
+
 
 class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
     async def _run_v2(
