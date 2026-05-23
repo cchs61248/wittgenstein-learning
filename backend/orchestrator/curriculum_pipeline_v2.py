@@ -26,6 +26,7 @@ from ..utils.region_planning import (
 from ..utils.small_curriculum import (
     best_chunk_for_case,
     candidates_to_stages_flat,
+    dedupe_key_concept_aliases,
     ensure_orphan_chunks_attached,
     finalize_small_file_stages,
     filter_false_verifier_misses,
@@ -35,7 +36,10 @@ from ..utils.small_curriculum import (
     merge_duplicate_topic_stages,
     normalize_case_name,
     normalize_stages_pre_verify,
+    prune_phantom_key_concepts,
     prune_toc_listicle_chunks,
+    split_oversized_stages,
+    trim_stage_key_concepts,
     zero_region_overlaps,
 )
 from ..utils.stage_budget import compute_dynamic_max_stages
@@ -623,6 +627,10 @@ async def run_start_session_v2(
         orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
         if orphan_check.get("orphan_chunk_ids"):
             stages = ensure_orphan_chunks_attached(stages, source_chunks)
+            stages = split_oversized_stages(stages, source_chunks)
+            stages = dedupe_key_concept_aliases(stages)
+            stages = prune_phantom_key_concepts(stages, source_chunks)
+            stages = trim_stage_key_concepts(stages)
             _log.info(
                 "v2 full path orphan attach  session=%s  orphans=%d",
                 session_id, len(orphan_check.get("orphan_chunk_ids") or []),
@@ -633,6 +641,8 @@ async def run_start_session_v2(
         orphan_after = verify_global_coverage(stages, source_chunks, required_outline)
         if orphan_after.get("orphan_chunk_ids"):
             stages = ensure_orphan_chunks_attached(stages, source_chunks)
+            stages = split_oversized_stages(stages, source_chunks)
+            stages = trim_stage_key_concepts(stages)
 
     new_concepts = sorted({c for s in stages for c in s.get("key_concepts", [])})
     if content_hash and new_concepts:

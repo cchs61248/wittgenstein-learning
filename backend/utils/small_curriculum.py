@@ -787,6 +787,132 @@ def _attach_chunk_to_stage(stage: dict, chunk_id: str, by_id: dict[str, dict]) -
     return s
 
 
+def _kc_base_name(kc: str) -> str:
+    """「巴菲特 (Warren Buffett)」→「巴菲特」— 括號別名 dedupe 用。"""
+    return _PAREN_SUFFIX_RE.sub("", str(kc).strip()).strip()
+
+
+def dedupe_key_concept_aliases(stages: list[dict]) -> list[dict]:
+    """同 stage 內合併括號別名 kc（如「中信金」/「中信金 (2891)」保留較短者）。"""
+    out: list[dict] = []
+    for stage in stages:
+        s = dict(stage)
+        kcs = [str(kc).strip() for kc in (s.get("key_concepts") or []) if kc]
+        if len(kcs) <= 1:
+            out.append(s)
+            continue
+        best_by_base: dict[str, str] = {}
+        for kc in kcs:
+            base = _kc_base_name(kc)
+            if not base:
+                continue
+            prev = best_by_base.get(base)
+            if prev is None:
+                best_by_base[base] = kc
+                continue
+            prefer_new = (
+                len(kc) < len(prev)
+                or ("(" not in kc and "（" not in kc and ("(" in prev or "（" in prev))
+            )
+            if prefer_new:
+                best_by_base[base] = kc
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for kc in kcs:
+            base = _kc_base_name(kc)
+            chosen = best_by_base.get(base, kc)
+            if chosen not in seen:
+                ordered.append(chosen)
+                seen.add(chosen)
+        s["key_concepts"] = ordered
+        out.append(s)
+    return out
+
+
+def prune_phantom_key_concepts(
+    stages: list[dict],
+    source_chunks: list[dict],
+) -> list[dict]:
+    """移除 stage 指派 chunks 中無文字證據的 key_concept（如 outline 幻覺「台塑四寶案例」）。"""
+    if not stages:
+        return stages
+    by_id = chunks_lookup(source_chunks)
+    out: list[dict] = []
+    for stage in stages:
+        s = dict(stage)
+        ids = list(s.get("source_chunk_ids") or [])
+        kcs = [str(kc).strip() for kc in (s.get("key_concepts") or []) if kc]
+        if not kcs or not ids:
+            out.append(s)
+            continue
+        kept = [kc for kc in kcs if _kc_covered_in_chunks(kc, ids, by_id)]
+        if kept:
+            s["key_concepts"] = kept
+        elif len(kcs) == 1:
+            s["key_concepts"] = kcs
+        else:
+            s["key_concepts"] = []
+        out.append(s)
+    return out
+
+
+def split_oversized_stages(
+    stages: list[dict],
+    source_chunks: list[dict],
+    *,
+    max_chunks: int = ORPHAN_STAGE_MAX_CHUNKS,
+) -> list[dict]:
+    """將 chunk 數超過上限的 stage 分批為 follow-up 節點（含 reducer mega-stage）。"""
+    if max_chunks <= 0 or not stages:
+        return stages
+    by_id = chunks_lookup(source_chunks)
+    out: list[dict] = []
+    split_batch = 0
+    for stage in stages:
+        s = dict(stage)
+        ids = sorted(
+            list(s.get("source_chunk_ids") or []),
+            key=lambda cid: _chunk_order_index(cid, source_chunks),
+        )
+        if len(ids) <= max_chunks:
+            out.append(s)
+            continue
+        title = (s.get("title") or "補充段落").strip()
+        base_kcs = list(s.get("key_concepts") or [])[:STAGE_MAX_KEY_CONCEPTS]
+        for batch_idx in range(0, len(ids), max_chunks):
+            batch = ids[batch_idx : batch_idx + max_chunks]
+            batch_num = batch_idx // max_chunks + 1
+            chunk_meta = [
+                {
+                    "chunk_id": cid,
+                    "quote": by_id[cid].get("text") or "",
+                    "note": by_id[cid].get("source_id") or "",
+                }
+                for cid in batch
+                if cid in by_id
+            ]
+            if batch_num == 1:
+                part = dict(s)
+                part["source_chunk_ids"] = batch
+                part["source_chunks"] = chunk_meta
+                out.append(part)
+            else:
+                split_batch += 1
+                out.append({
+                    "stage_id": s.get("stage_id"),
+                    "node_id": f"{s.get('node_id', 'x')}.split{split_batch}",
+                    "title": f"{title}（續 {batch_num}）",
+                    "key_concepts": base_kcs or ["章節補充"],
+                    "source_chunk_ids": batch,
+                    "source_chunks": chunk_meta,
+                    "prerequisites": list(s.get("prerequisites") or []),
+                    "estimated_questions": int(s.get("estimated_questions", 2) or 2),
+                    "teaching_goal": s.get("teaching_goal") or f"續：{title}",
+                    "kind": s.get("kind") or "follow_up_orphan",
+                })
+    return _renumber_stages(out)
+
+
 def trim_stage_key_concepts(
     stages: list[dict],
     max_kc: int = STAGE_MAX_KEY_CONCEPTS,
@@ -1125,6 +1251,9 @@ def normalize_stages_pre_verify(
     """Prune intro overlap, dedupe titles, reassign case chunks (before global verify)."""
     stages = trim_intro_stage_first_chunk_only(stages, source_chunks)
     stages = ensure_key_concept_chunk_coverage(stages, source_chunks)
+    stages = prune_phantom_key_concepts(stages, source_chunks)
+    stages = dedupe_key_concept_aliases(stages)
+    stages = split_oversized_stages(stages, source_chunks)
     stages = prune_intro_chunk_sharing(stages, source_chunks)
     stages = merge_duplicate_topic_stages(stages)
     stages = merge_empty_chunk_stages(stages)
@@ -1147,6 +1276,9 @@ def finalize_small_file_stages(
     """Full post-compose normalization including orphan attach."""
     stages = normalize_small_file_stages(stages, source_chunks)
     stages = ensure_orphan_chunks_attached(stages, source_chunks)
+    stages = split_oversized_stages(stages, source_chunks)
+    stages = dedupe_key_concept_aliases(stages)
+    stages = prune_phantom_key_concepts(stages, source_chunks)
     return trim_stage_key_concepts(stages)
 
 

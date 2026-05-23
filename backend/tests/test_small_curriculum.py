@@ -7,6 +7,7 @@ from backend.agents.global_curriculum_verifier import verify_global_coverage
 from backend.orchestrator.curriculum_pipeline_v2 import _build_follow_up_stages
 from backend.utils.small_curriculum import (
     case_covered_in_stages,
+    dedupe_key_concept_aliases,
     ensure_key_concept_chunk_coverage,
     ensure_orphan_chunks_attached,
     filter_false_verifier_misses,
@@ -18,6 +19,8 @@ from backend.utils.small_curriculum import (
     merge_empty_chunk_stages,
     normalize_stages_pre_verify,
     prune_intro_chunk_sharing,
+    prune_phantom_key_concepts,
+    split_oversized_stages,
     trim_stage_key_concepts,
     zero_region_overlaps,
     ORPHAN_STAGE_MAX_CHUNKS,
@@ -514,6 +517,56 @@ class TestOrphanAttach(unittest.TestCase):
         stages = [{"key_concepts": [f"c{i}" for i in range(12)]}]
         trimmed = trim_stage_key_concepts(stages, max_kc=8)
         self.assertEqual(len(trimmed[0]["key_concepts"]), 8)
+
+
+class TestStageChunkCapAndKcHygiene(unittest.TestCase):
+    def test_split_oversized_stages(self):
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": f"p{i}", "order_index": i}
+            for i in range(20)
+        ]
+        stages = [{
+            "stage_id": 17,
+            "node_id": "6.1",
+            "title": "肥羊派波浪理論",
+            "key_concepts": [f"kc{k}" for k in range(6)],
+            "source_chunk_ids": [f"chunk_{i:04d}" for i in range(20)],
+        }]
+        fixed = split_oversized_stages(stages, chunks)
+        max_chunks = max(len(s.get("source_chunk_ids") or []) for s in fixed)
+        self.assertLessEqual(max_chunks, ORPHAN_STAGE_MAX_CHUNKS)
+        self.assertGreater(len(fixed), 1)
+        all_ids = {cid for s in fixed for cid in (s.get("source_chunk_ids") or [])}
+        self.assertEqual(len(all_ids), 20)
+
+    def test_dedupe_key_concept_aliases(self):
+        stages = [{
+            "key_concepts": [
+                "巴菲特",
+                "巴菲特 (Warren Buffett)",
+                "中信金",
+                "中信金 (2891)",
+                "風林火山",
+            ],
+        }]
+        out = dedupe_key_concept_aliases(stages)
+        kcs = out[0]["key_concepts"]
+        self.assertEqual(kcs, ["巴菲特", "中信金", "風林火山"])
+
+    def test_prune_phantom_key_concepts(self):
+        chunks = [
+            {"chunk_id": "chunk_0001", "text": "投資心法與富人思維", "order_index": 1},
+        ]
+        stages = [{
+            "title": "投資心法",
+            "key_concepts": ["投資心法", "台塑四寶案例", "富人思維"],
+            "source_chunk_ids": ["chunk_0001"],
+        }]
+        out = prune_phantom_key_concepts(stages, chunks)
+        kcs = out[0]["key_concepts"]
+        self.assertNotIn("台塑四寶案例", kcs)
+        self.assertIn("投資心法", kcs)
+        self.assertIn("富人思維", kcs)
 
 
 class TestMergeDuplicateStages(unittest.TestCase):

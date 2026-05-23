@@ -13,7 +13,7 @@ MERGE_CONFIDENCE_MIN = 0.8
 MAX_UNSURE_PAIRS_LLM = 20
 # Reducer LLM 過度 merge 防護：合併後總 chunk 數超過此 cap 即拒絕該合併、保留 split
 # (sess_live_b0fb06cd stage 7 = 45 chunks 觸發此規則)
-MAX_MERGED_OUTCOME_CHUNKS = 20
+MAX_MERGED_OUTCOME_CHUNKS = 14
 
 # Plan B fuzzy attach (reuse Phase 3 interim dedup threshold)
 FUZZY_ATTACH_THRESHOLD = 0.85

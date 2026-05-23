@@ -70,7 +70,7 @@ class TestReducerStepC(unittest.TestCase):
 
     def test_merge_rejected_when_exceeds_chunk_cap(self):
         # sess_live_b0fb06cd 觸發 mega-stage (45 chunks)：3 candidates 每個 8 chunks
-        # → 合併後 24 chunks > MAX_MERGED_OUTCOME_CHUNKS=20，應拒絕合併、保留 split
+        # → 合併後 24 chunks > MAX_MERGED_OUTCOME_CHUNKS=14，應拒絕合併、保留 split
         def make_chunks(prefix: str, n: int) -> list[str]:
             return [f"{prefix}_{i:03d}" for i in range(n)]
 
@@ -98,13 +98,13 @@ class TestReducerStepC(unittest.TestCase):
         self.assertTrue(all(o.get("merge_decision") == "split" for o in final))
 
     def test_merge_accepted_when_within_chunk_cap(self):
-        # 3 candidates 每個 5 chunks → 合併後 15 chunks < cap，應允許合併
+        # 3 candidates 每個 4 chunks → 合併後 12 chunks ≤ cap=14，應允許合併
         def make_chunks(prefix: str, n: int) -> list[str]:
             return [f"{prefix}_{i:03d}" for i in range(n)]
 
         candidates = [
             {"title": f"案例 {i}", "teaching_goal": "同主題教學", "key_concepts": [f"kc_{i}"],
-             "source_chunk_ids": make_chunks(f"d{i}", 5)}
+             "source_chunk_ids": make_chunks(f"d{i}", 4)}
             for i in range(3)
         ]
         groups, unsure = rule_merge_candidates(candidates)
@@ -121,10 +121,10 @@ class TestReducerStepC(unittest.TestCase):
             "supporting_evidence": [],
         }]
         final = integrate_llm_outcomes(candidates, step_a, llm_merge, unsure)
-        # 應合併成 1 個 outcome，含全部 15 chunks
+        # 應合併成 1 個 outcome，含全部 12 chunks
         merged = [o for o in final if o.get("merge_decision") == "merged"]
         self.assertEqual(len(merged), 1)
-        self.assertEqual(len(merged[0].get("primary_evidence", {}).get("chunk_ids", [])), 5)
+        self.assertEqual(len(merged[0].get("primary_evidence", {}).get("chunk_ids", [])), 4)
         # supporting_evidence 含其他 2 個 candidate
         self.assertEqual(len(merged[0].get("supporting_evidence") or []), 2)
 

@@ -5,9 +5,14 @@ NOT collected by pytest. Do not import from backend/tests.
 Run (requires API keys in backend/.env):
 
     $env:RUN_LLM_TESTS="1"
-    .\\backend\\.venv\\Scripts\\python.exe backend\\tools\\live_small_file_curriculum_test.py [path]
+    .\\backend\\.venv\\Scripts\\python.exe backend\\tools\\live_small_file_curriculum_test.py [path ...]
 
-Stage 1 (teacher + MC questions) after start_session:
+    Multi-source (same session, mirrors frontend sources[]):
+
+    .\\backend\\.venv\\Scripts\\python.exe backend\\tools\\live_small_file_curriculum_test.py `
+      ch1.txt ch2.txt ch3.txt --full-v2 --run-stage1 --keep
+
+    Stage 1 (teacher + MC questions) after start_session:
 
     .\\backend\\.venv\\Scripts\\python.exe backend\\tools\\live_small_file_curriculum_test.py [path] --full-v2 --run-stage1
 
@@ -62,6 +67,7 @@ class ChunkProbeResult:
 class LiveRunResult:
     session_id: str
     chunk_count: int
+    source_count: int
     stage_count: int
     global_aligned: bool
     explanation_chars: int = 0
@@ -69,44 +75,70 @@ class LiveRunResult:
     deleted: bool = True
 
 
-def probe_source_chunks(source_path: Path) -> tuple[list[dict], ChunkProbeResult]:
-    from backend.utils.text_extractor import extract_text
-    from backend.utils.chunker import build_source_chunks
+def _chunk_probe(source_chunks: list[dict]) -> ChunkProbeResult:
     from backend.utils.small_curriculum import (
         is_small_file,
         is_toc_cn_epub_chunk,
         is_toc_listicle_chunk,
     )
 
-    raw_bytes = source_path.read_bytes()
-    text = extract_text(source_path.name, raw_bytes)
-    source_id = hashlib.sha256(source_path.name.encode()).hexdigest()[:12]
-    source_chunks: list[dict] = []
-    for i, c in enumerate(build_source_chunks(text)):
-        source_chunks.append({
-            **c,
-            "chunk_id": f"chunk_{i:04d}",
-            "order_index": i,
-            "source_label": source_path.name,
-            "source_index": 0,
-            "source_id": source_id,
-        })
     toc_n = sum(
         1 for c in source_chunks
         if is_toc_cn_epub_chunk(c) or is_toc_listicle_chunk(c)
     )
     titled = sum(1 for c in source_chunks if (c.get("section_title") or "").strip())
-    probe = ChunkProbeResult(
+    return ChunkProbeResult(
         chunk_count=len(source_chunks),
         section_title_count=titled,
         toc_chunk_count=toc_n,
         small_file=is_small_file(source_chunks),
     )
-    return source_chunks, probe
+
+
+def probe_source_chunks(source_path: Path) -> tuple[list[dict], ChunkProbeResult]:
+    chunks, _ = probe_multi_source_chunks([source_path])
+    return chunks, _chunk_probe(chunks)
+
+
+def probe_multi_source_chunks(
+    source_paths: list[Path],
+) -> tuple[list[dict], list[dict]]:
+    """Merge multiple files into one chunk list (same logic as main._build_source_chunks)."""
+    from backend.utils.text_extractor import extract_text
+    from backend.utils.chunker import build_source_chunks
+
+    if not source_paths:
+        return [], []
+
+    all_chunks: list[dict] = []
+    per_source: list[dict] = []
+    global_offset = 0
+
+    for idx, source_path in enumerate(source_paths):
+        label = source_path.name
+        source_id = hashlib.sha256(f"{label}:{idx}".encode()).hexdigest()[:12]
+        raw_bytes = source_path.read_bytes()
+        text = extract_text(source_path.name, raw_bytes)
+        chunks = build_source_chunks(text)
+        n = 0
+        for c in chunks:
+            all_chunks.append({
+                **c,
+                "chunk_id": f"chunk_{global_offset:04d}",
+                "order_index": global_offset,
+                "source_label": label,
+                "source_index": idx,
+                "source_id": source_id,
+            })
+            global_offset += 1
+            n += 1
+        per_source.append({"label": label, "index": idx, "chunks": n})
+
+    return all_chunks, per_source
 
 
 async def run_live_curriculum(
-    source_path: Path,
+    source_paths: list[Path],
     *,
     full_v2: bool,
     keep: bool,
@@ -115,12 +147,15 @@ async def run_live_curriculum(
 ) -> LiveRunResult:
     if full_v2:
         os.environ["SMALL_FILE_CHUNK_THRESHOLD"] = "0"
-    source_chunks, probe = probe_source_chunks(source_path)
+    source_chunks, per_source = probe_multi_source_chunks(source_paths)
+    probe = _chunk_probe(source_chunks)
     print(
-        f"file={source_path.name}  chunks={probe.chunk_count}  "
+        f"sources={len(source_paths)}  chunks={probe.chunk_count}  "
         f"titled={probe.section_title_count}  toc={probe.toc_chunk_count}  "
         f"full_v2={full_v2}",
     )
+    for s in per_source:
+        print(f"  [{s['index']}] {s['label'][:60]}  chunks={s['chunks']}")
 
     events: list[dict] = []
 
@@ -209,6 +244,7 @@ async def run_live_curriculum(
     return LiveRunResult(
         session_id=session_id,
         chunk_count=probe.chunk_count,
+        source_count=len(source_paths),
         stage_count=stage_count,
         global_aligned=global_aligned,
         explanation_chars=explanation_chars,
@@ -249,7 +285,7 @@ async def cleanup_live_sessions(user_id: str = DEFAULT_USER_ID) -> list[str]:
 
 
 async def main(
-    source_path: Path | None,
+    source_paths: list[Path],
     *,
     full_v2: bool,
     keep: bool,
@@ -272,14 +308,16 @@ async def main(
 
     _require_live_llm_opt_in()
 
-    if source_path is None or not source_path.exists():
-        print("File missing:", source_path)
+    missing = [p for p in source_paths if not p.exists()]
+    if missing:
+        for p in missing:
+            print("File missing:", p)
         await close_db()
         return
 
     try:
         await run_live_curriculum(
-            source_path,
+            source_paths,
             full_v2=full_v2,
             keep=keep,
             run_stage1=run_stage1,
@@ -291,10 +329,10 @@ async def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Live V2 curriculum test")
     parser.add_argument(
-        "source",
-        nargs="?",
-        default=str(DEFAULT_PDF),
-        help="Path to PDF/txt/epub extract (default: API Design.pdf)",
+        "sources",
+        nargs="*",
+        default=[str(DEFAULT_PDF)],
+        help="One or more paths (PDF/txt/epub); multi-path = same session",
     )
     parser.add_argument(
         "--full-v2",
@@ -317,8 +355,9 @@ if __name__ == "__main__":
         help="Delete all sess_live_* sessions for the test user, then exit",
     )
     args = parser.parse_args()
+    paths = sorted(Path(p) for p in args.sources)
     asyncio.run(main(
-        Path(args.source) if args.source else None,
+        paths,
         full_v2=args.full_v2,
         keep=args.keep,
         cleanup_all=args.cleanup_all,
