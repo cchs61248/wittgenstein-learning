@@ -5,6 +5,8 @@ import math
 import re
 from typing import Any
 
+from .small_curriculum import _case_tokens
+
 _RULE_SECTION_RE = re.compile(r"^法則\s*\d+", re.IGNORECASE)
 
 
@@ -172,3 +174,49 @@ def slice_region_chunks(
         key=lambda c: c.get("order_index", 0),
     )
     return ordered
+
+
+def enrich_regions_with_outline_topics(
+    regions: list[dict],
+    required_outline: dict | None,
+    source_chunks: list[dict],
+    *,
+    max_topics_per_region: int = 8,
+) -> list[dict]:
+    """將 content outline 的 named_cases / titles 依 chunk 歸屬注入 region must_cover_topics。"""
+    if not regions or not required_outline:
+        return regions
+
+    by_id = {c["chunk_id"]: c for c in source_chunks if c.get("chunk_id")}
+    topics: list[str] = []
+    for key in ("named_cases", "required_stage_titles"):
+        for item in required_outline.get(key) or []:
+            label = str(item).strip()
+            if label and label not in topics:
+                topics.append(label)
+    if not topics:
+        return regions
+
+    for region in regions:
+        region_ids = set(region.get("chunk_ids") or [])
+        region_text = " ".join(
+            str(by_id[cid].get("text") or "")
+            for cid in region_ids
+            if cid in by_id
+        )
+        if not region_text:
+            continue
+        assigned = list(region.get("must_cover_topics") or [])
+        for topic in topics:
+            if topic in assigned:
+                continue
+            tokens = _case_tokens(topic) or [topic]
+            if any(t in region_text for t in tokens if len(t) >= 2):
+                assigned.append(topic)
+        if assigned:
+            region["must_cover_topics"] = assigned[:max_topics_per_region]
+            region["expected_stage_count"] = max(
+                int(region.get("expected_stage_count") or 1),
+                min(len(assigned), max_topics_per_region),
+            )
+    return regions

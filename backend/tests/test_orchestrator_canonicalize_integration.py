@@ -250,6 +250,10 @@ class TestOrchestratorCanonicalizeIntegration(unittest.IsolatedAsyncioTestCase):
         ), patch(
             "backend.orchestrator.learning_orchestrator.longterm_memory.get_concept_canonical_pool",
             new=AsyncMock(return_value=[]),
+        ), patch.dict(
+            "os.environ",
+            {"CURRICULUM_PIPELINE_V2": "0"},
+            clear=False,
         ):
             await orch.start_session(
                 session_id="s1", user_id="u1",

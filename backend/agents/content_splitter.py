@@ -4,6 +4,7 @@ from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import LLMMessage, MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
+from ..utils.small_curriculum import merge_duplicate_topic_stages
 
 
 def _format_chunks_with_sources(source_chunks: list[dict]) -> str:
@@ -121,7 +122,7 @@ class ContentSplitterAgent(BaseAgent):
         if preserve_thin_stages:
             # 方案 C：outline / repair_plan 已明確要求具名案例拆開。
             # 這時單一 chunk 支撐多個案例 stage 是合理的；只合併多來源產生的同主題重複 stage。
-            normalized_stages = self._merge_duplicate_topic_stages(normalized_stages)
+            normalized_stages = merge_duplicate_topic_stages(normalized_stages)
         else:
             normalized_stages = self._merge_thin_stages(normalized_stages)
 

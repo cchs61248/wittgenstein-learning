@@ -17,7 +17,11 @@ from ..memory import session_memory
 from ..utils.canonicalize_apply import apply_canonical_mappings
 from ..utils.curriculum_reducer import attach_supporting_by_fuzzy_match, outcomes_to_stages
 from ..utils.fuzzy_match import concepts_match
-from ..utils.region_planning import slice_region_chunks
+from ..utils.region_planning import (
+    enrich_regions_with_outline_topics,
+    is_listicle_source,
+    slice_region_chunks,
+)
 from ..utils.small_curriculum import (
     best_chunk_for_case,
     candidates_to_stages_flat,
@@ -26,12 +30,12 @@ from ..utils.small_curriculum import (
     filter_false_verifier_misses,
     filter_missing_named_cases,
     is_small_file,
+    merge_duplicate_topic_stages,
     normalize_case_name,
-    normalize_small_file_stages,
+    normalize_stages_pre_verify,
     prune_toc_listicle_chunks,
     zero_region_overlaps,
 )
-from ..utils.region_planning import is_listicle_source
 from ..utils.stage_budget import compute_dynamic_max_stages
 
 if TYPE_CHECKING:
@@ -241,6 +245,7 @@ async def run_start_session_v2(
         )
     )
     regions = regions.get("regions") or []
+    regions = enrich_regions_with_outline_topics(regions, required_outline, source_chunks)
     small_file = is_small_file(source_chunks)
     if small_file:
         zero_region_overlaps(regions)
@@ -450,8 +455,7 @@ async def run_start_session_v2(
             composer = StageComposerAgent()
             stages = composer.compose(outcomes, chunks_lookup=chunks_lookup)
 
-    if small_file:
-        stages = normalize_small_file_stages(stages, source_chunks)
+    stages = normalize_stages_pre_verify(stages, source_chunks)
 
     from ..utils.curriculum_health import assess_reducer_health
 
@@ -510,6 +514,7 @@ async def run_start_session_v2(
         )
         if follow_up:
             stages.extend(follow_up)
+            stages = merge_duplicate_topic_stages(stages)
             _log.info(
                 "v2 global verifier post-process  session=%s  added_stages=%d  total=%d",
                 session_id, len(follow_up), len(stages),
@@ -527,6 +532,7 @@ async def run_start_session_v2(
         if small_file:
             stages = finalize_small_file_stages(stages, source_chunks)
         else:
+            stages = normalize_stages_pre_verify(stages, source_chunks)
             orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
             if orphan_check.get("orphan_chunk_ids"):
                 stages = ensure_orphan_chunks_attached(stages, source_chunks)

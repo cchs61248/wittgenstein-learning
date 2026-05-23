@@ -103,6 +103,7 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             "CURRICULUM_V2_PLAN_B": "0",
             "REDUCER_FAIL_MODE": "hard",
             "SPLITTER_FAIL_MODE": "hard",
+            "SMALL_FILE_CHUNK_THRESHOLD": "0",
         }
         if env:
             env_patch.update(env)
@@ -188,7 +189,11 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             "backend.orchestrator.curriculum_pipeline_v2.GlobalCurriculumReducerAgent",
         ) as reducer_cls, patch.dict(
             "os.environ",
-            {"CURRICULUM_V2_PLAN_B": "1", "SPLITTER_FAIL_MODE": "hard"},
+            {
+                "CURRICULUM_V2_PLAN_B": "1",
+                "SPLITTER_FAIL_MODE": "hard",
+                "SMALL_FILE_CHUNK_THRESHOLD": "0",
+            },
             clear=False,
         ):
             await run_start_session_v2(

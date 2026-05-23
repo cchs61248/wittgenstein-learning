@@ -1,7 +1,12 @@
 """Tests for macro region planning."""
 import unittest
 
-from backend.utils.region_planning import overlap_chunk_count, plan_macro_regions, slice_region_chunks
+from backend.utils.region_planning import (
+    enrich_regions_with_outline_topics,
+    overlap_chunk_count,
+    plan_macro_regions,
+    slice_region_chunks,
+)
 
 
 class TestRegionPlanning(unittest.TestCase):
@@ -45,6 +50,18 @@ class TestRegionPlanning(unittest.TestCase):
         ]
         regions = plan_macro_regions(chunks, chunks_per_region=25, max_group_size=40)
         self.assertEqual(len(regions), 1)
+
+    def test_enrich_regions_assigns_outline_topics_by_chunk_text(self):
+        chunks = [
+            {"chunk_id": "c0", "order_index": 0, "source_id": "s1", "text": "永豐金 A級案例 零成本"},
+            {"chunk_id": "c1", "order_index": 1, "source_id": "s1", "text": "結尾總結"},
+        ]
+        regions = plan_macro_regions(chunks, chunks_per_region=25)
+        outline = {"named_cases": ["永豐金 (A級案例)", "無關案例XYZ"]}
+        enriched = enrich_regions_with_outline_topics(regions, outline, chunks)
+        topics = enriched[0].get("must_cover_topics") or []
+        self.assertIn("永豐金 (A級案例)", topics)
+        self.assertNotIn("無關案例XYZ", topics)
 
 
 if __name__ == "__main__":

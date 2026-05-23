@@ -14,7 +14,9 @@ from .fuzzy_match import similarity
 DEFAULT_SMALL_FILE_CHUNK_THRESHOLD = 50
 DEFAULT_SMALL_FILE_TEXT_CHARS = 12_000
 CASE_MATCH_THRESHOLD = 0.72
+DUPLICATE_TITLE_THRESHOLD = 0.92
 _PAREN_SUFFIX_RE = re.compile(r"\s*[\(（].*?[\)）]\s*$")
+_GRADE_LABEL_RE = re.compile(r"[\(（]?\s*[AB]級[^\)）]*[\)）]?")
 _RULE_MISS_RE = re.compile(r"法則\s*(\d+)")
 _RULE_RANGE_RE = re.compile(r"法則\s*(\d+)\s*[-–—~～]\s*(\d+)")
 _COMPOUND_SPLIT_RE = re.compile(r"[與和、/及／]")
@@ -25,7 +27,13 @@ _TOPIC_ALIASES: dict[str, list[str]] = {
     "房貸": ["房屋貸款", "房貸"],
     "無本分期": ["無本分期", "零支付", "零支付手法"],
     "零支付": ["零支付", "零支付手法", "無本分期"],
+    "風林火山": ["風林火山", "肥羊波浪", "波浪理論", "蛛網交易"],
+    "肥羊派流買法": ["肥羊派流", "肥羊派流買法", "流買法"],
+    "股票質押": ["股票質押", "質押"],
 }
+_PAREN_INNER_RE = re.compile(r"[\(（]([^\)）]+)[\)）]")
+_COLON_SUFFIX_RE = re.compile(r"^.+?[：:]\s*(.+)$")
+_GRADE_MISS_RE = re.compile(r"([SAB])\s*級")
 
 
 def _topic_tokens(topic: str) -> list[str]:
@@ -40,6 +48,9 @@ def _topic_tokens(topic: str) -> list[str]:
                     tokens.append(alias)
             if key not in tokens:
                 tokens.append(key)
+    for key in _TOPIC_ALIASES:
+        if key in t and key not in tokens:
+            tokens.extend(x for x in _topic_tokens(key) if x not in tokens)
     return tokens
 
 
@@ -150,6 +161,108 @@ def topic_covered_in_stages(topic: str, stages: list[dict]) -> bool:
     return any(topic_covered_in_stage(s, topic) for s in stages)
 
 
+def _paren_enumeration_covered(label: str, stages: list[dict]) -> bool:
+    """括號內 a、b、c 列舉 — 各子項已在 stages 中即視為覆蓋。"""
+    for m in _PAREN_INNER_RE.finditer(label):
+        parts = [
+            p.strip()
+            for p in re.split(r"[、,，/／]", m.group(1))
+            if len(p.strip()) >= 2
+        ]
+        if len(parts) >= 2 and all(topic_covered_in_stages(p, stages) for p in parts):
+            return True
+    return False
+
+
+def _paren_alias_covered(label: str, stages: list[dict]) -> bool:
+    """括號內別名（如 風林火山四戰術）出現在 stage 即視為覆蓋。"""
+    for m in _PAREN_INNER_RE.finditer(label):
+        alias = m.group(1).strip()
+        if len(alias) < 3:
+            continue
+        probes = [alias] + _topic_tokens(alias)
+        for probe in probes:
+            if len(probe) < 2:
+                continue
+            if topic_covered_in_stages(probe, stages):
+                return True
+            for stage in stages:
+                hay = _stage_metadata_text(stage)
+                if probe in hay or (len(probe) >= 4 and probe[:4] in hay):
+                    return True
+    return False
+
+
+def _colon_suffix_covered(label: str, stages: list[dict]) -> bool:
+    """「炒股方式 1：一次全買」→ 檢查冒號後子標題。"""
+    m = _COLON_SUFFIX_RE.match(label.strip())
+    if not m:
+        return False
+    suffix = m.group(1).strip()
+    return len(suffix) >= 2 and topic_covered_in_stages(suffix, stages)
+
+
+def _grade_bucket_covered(label: str, stages: list[dict]) -> bool:
+    """「S級金控（中信金、玉山金…）」— 等級 + 多數具名標的已覆蓋。"""
+    gm = _GRADE_MISS_RE.search(label)
+    if not gm:
+        return False
+    grade = gm.group(1)
+    grade_ok = any(
+        f"{grade}級" in _stage_metadata_text(s)
+        or f"{grade} 級" in (s.get("title") or "")
+        for s in stages
+    )
+    if not grade_ok:
+        return False
+    inner = _PAREN_INNER_RE.search(label)
+    if not inner:
+        return True
+    names = [
+        n.strip()
+        for n in re.split(r"[、,，]", inner.group(1))
+        if len(n.strip()) >= 2
+    ]
+    if not names:
+        return True
+    hits = sum(1 for n in names if topic_covered_in_stages(n, stages))
+    return hits >= max(1, (len(names) + 1) // 2)
+
+
+def _miss_decomposition_tokens(miss: str) -> list[str]:
+    """拆解 verifier miss label 為可逐一比對的子 token。"""
+    miss = str(miss).strip()
+    if not miss:
+        return []
+    tokens: list[str] = []
+    for t in _case_tokens(miss):
+        if t not in tokens:
+            tokens.append(t)
+    for t in _topic_tokens(miss):
+        if t not in tokens:
+            tokens.append(t)
+    base = _PAREN_INNER_RE.sub("", miss).strip()
+    base = re.sub(r"\s*\d+\s*種.*$", "", base).strip()
+    if base and base not in tokens:
+        tokens.append(base)
+    m = _COLON_SUFFIX_RE.match(miss)
+    if m:
+        suffix = m.group(1).strip()
+        if suffix and suffix not in tokens:
+            tokens.append(suffix)
+    for m in _PAREN_INNER_RE.finditer(miss):
+        for part in re.split(r"[、,，/／]", m.group(1)):
+            part = part.strip()
+            if len(part) >= 2 and part not in tokens:
+                tokens.append(part)
+    gm = _GRADE_MISS_RE.search(miss)
+    if gm:
+        grade = f"{gm.group(1)}級"
+        if grade not in tokens:
+            tokens.append(grade)
+    return tokens
+
+
 def verifier_miss_covered(
     miss: str,
     stages: list[dict],
@@ -166,6 +279,19 @@ def verifier_miss_covered(
         return True
     if topic_covered_in_stages(miss_str, stages):
         return True
+    if _paren_enumeration_covered(miss_str, stages):
+        return True
+    if _paren_alias_covered(miss_str, stages):
+        return True
+    if _colon_suffix_covered(miss_str, stages):
+        return True
+    if _grade_bucket_covered(miss_str, stages):
+        return True
+    for token in _miss_decomposition_tokens(miss_str):
+        if topic_covered_in_stages(token, stages):
+            return True
+        if case_covered_in_stages(token, stages, source_chunks, threshold=threshold):
+            return True
     return False
 
 
@@ -215,6 +341,14 @@ def _case_tokens(case_name: str) -> list[str]:
             part = part.strip()
             if len(part) >= 3 and part not in tokens:
                 tokens.append(part)
+    if _GRADE_LABEL_RE.search(case_str):
+        base = _GRADE_LABEL_RE.sub("", case_str).strip()
+        if base and base not in tokens:
+            tokens.append(base)
+        for m in re.finditer(r"([AB])級", case_str):
+            grade = f"{m.group(1)}級"
+            if grade not in tokens:
+                tokens.append(grade)
     return tokens
 
 
@@ -382,9 +516,78 @@ def zero_region_overlaps(regions: list[dict]) -> None:
 
 
 _INTRO_TITLE_RE = re.compile(
-    r"框架|選型|導論|概述|總覽|introduction|overview|framework",
+    r"框架|選型|導論|概述|總覽|introduction|overview|framework|"
+    r"前言|序言|導言|緒論|投資心法|富人思維",
     re.IGNORECASE,
 )
+
+
+def _renumber_stages(stages: list[dict]) -> list[dict]:
+    for j, stage in enumerate(stages):
+        stage["stage_id"] = j + 1
+        chapter = (j // 3) + 1
+        section = (j % 3) + 1
+        stage["node_id"] = f"{chapter}.{section}"
+    return stages
+
+
+def _merge_stage_into(target: dict, incoming: dict) -> None:
+    existing_ids = set(target.get("source_chunk_ids") or [])
+    new_ids = [
+        cid for cid in (incoming.get("source_chunk_ids") or [])
+        if cid not in existing_ids
+    ]
+    target["source_chunk_ids"] = list(target.get("source_chunk_ids") or []) + new_ids
+
+    existing_chunk_ids = {
+        sc.get("chunk_id") for sc in (target.get("source_chunks") or [])
+    }
+    target["source_chunks"] = list(target.get("source_chunks") or []) + [
+        sc for sc in (incoming.get("source_chunks") or [])
+        if sc.get("chunk_id") not in existing_chunk_ids
+    ]
+    target["key_concepts"] = list(dict.fromkeys(
+        list(target.get("key_concepts") or []) +
+        list(incoming.get("key_concepts") or [])
+    ))
+    target["prerequisites"] = list(dict.fromkeys(
+        list(target.get("prerequisites") or []) +
+        list(incoming.get("prerequisites") or [])
+    ))
+    target["estimated_questions"] = max(
+        int(target.get("estimated_questions", 2) or 2),
+        int(incoming.get("estimated_questions", 2) or 2),
+    )
+    if incoming.get("teaching_goal") and not target.get("teaching_goal"):
+        target["teaching_goal"] = incoming["teaching_goal"]
+
+
+def merge_duplicate_topic_stages(
+    stages: list[dict],
+    *,
+    threshold: float = DUPLICATE_TITLE_THRESHOLD,
+) -> list[dict]:
+    """合併標題相同或高度相似的 stage（對齊 global verifier duplicate check）。"""
+    if len(stages) <= 1:
+        return stages
+
+    result: list[dict] = []
+    for stage in stages:
+        title = (stage.get("title") or "").strip()
+        if not title:
+            result.append(dict(stage))
+            continue
+
+        merged = False
+        for existing in result:
+            existing_title = (existing.get("title") or "").strip()
+            if existing_title and similarity(title, existing_title) >= threshold:
+                _merge_stage_into(existing, stage)
+                merged = True
+                break
+        if not merged:
+            result.append(dict(stage))
+    return _renumber_stages(result)
 
 
 def prune_intro_chunk_sharing(
@@ -611,15 +814,24 @@ def trim_intro_stage_first_chunk_only(
     return out
 
 
+def normalize_stages_pre_verify(
+    stages: list[dict],
+    source_chunks: list[dict],
+) -> list[dict]:
+    """Prune intro overlap, dedupe titles, reassign case chunks (before global verify)."""
+    stages = trim_intro_stage_first_chunk_only(stages, source_chunks)
+    stages = prune_intro_chunk_sharing(stages, source_chunks)
+    stages = merge_duplicate_topic_stages(stages)
+    stages = reassign_case_stage_chunks(stages, source_chunks)
+    return stages
+
+
 def normalize_small_file_stages(
     stages: list[dict],
     source_chunks: list[dict],
 ) -> list[dict]:
-    """Prune overlap + reassign case chunks (safe before global verify)."""
-    stages = trim_intro_stage_first_chunk_only(stages, source_chunks)
-    stages = prune_intro_chunk_sharing(stages, source_chunks)
-    stages = reassign_case_stage_chunks(stages, source_chunks)
-    return stages
+    """Alias for normalize_stages_pre_verify (small + full V2 paths)."""
+    return normalize_stages_pre_verify(stages, source_chunks)
 
 
 def finalize_small_file_stages(

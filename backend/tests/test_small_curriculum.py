@@ -12,6 +12,7 @@ from backend.utils.small_curriculum import (
     filter_missing_named_cases,
     finalize_small_file_stages,
     is_small_file,
+    merge_duplicate_topic_stages,
     prune_intro_chunk_sharing,
     zero_region_overlaps,
 )
@@ -213,6 +214,59 @@ class TestFuzzyNamedCase(unittest.TestCase):
         )
         self.assertEqual(filtered, [])
 
+    def test_colon_suffix_numbered_buy_method(self):
+        stages = [{
+            "title": "現金買進的三種方案對比",
+            "key_concepts": ["一次全買", "定期定額買進", "肥羊派流買法"],
+            "source_chunk_ids": ["chunk_0093"],
+        }]
+        misses = [
+            "炒股方式 1：一次全買",
+            "炒股方式 2：定期定額買進",
+            "炒股方式 3：肥羊派流買法",
+        ]
+        filtered = filter_false_verifier_misses(misses, stages, [])
+        self.assertEqual(filtered, [])
+
+    def test_grade_bucket_s_tier_banks(self):
+        stages = [{
+            "title": "金控評比（一）：S 級龍頭標的",
+            "key_concepts": ["中信金參考價", "玉山金教訓", "富邦金龍頭"],
+            "source_chunk_ids": ["chunk_0056"],
+        }]
+        filtered = filter_false_verifier_misses(
+            ["S級金控（中信金、玉山金、富邦金）"],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, [])
+
+    def test_paren_enumeration_cash_buy_methods(self):
+        stages = [{
+            "title": "現金買進的三種方案對比",
+            "key_concepts": ["一次全買", "定期定額買進", "肥羊派流買法"],
+            "source_chunk_ids": ["chunk_0093"],
+        }]
+        filtered = filter_false_verifier_misses(
+            ["現金買進 3 種方式（一次全買、定期定額、肥羊派流買法）"],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, [])
+
+    def test_paren_alias_fenglinhuoshan(self):
+        stages = [{
+            "title": "肥羊派波浪理論與操作實務",
+            "key_concepts": ["肥羊波浪理論", "蛛網交易"],
+            "source_chunk_ids": ["chunk_0083"],
+        }]
+        filtered = filter_false_verifier_misses(
+            ["夏、秋、冬、春四大戰術（風林火山四戰術）"],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, [])
+
     def test_global_verifier_aligned_after_fuzzy(self):
         chunks = _api_design_chunks()
         stages = _api_design_reroll_stages()
@@ -265,6 +319,73 @@ class TestOrphanAttach(unittest.TestCase):
             for cid in (s.get("source_chunk_ids") or [])
         }
         self.assertEqual(referenced, {c["chunk_id"] for c in chunks})
+
+
+class TestMergeDuplicateStages(unittest.TestCase):
+    def test_exact_duplicate_titles_merge(self):
+        stages = [
+            {
+                "stage_id": 1,
+                "node_id": "1.1",
+                "title": "投資心法與富人思維",
+                "key_concepts": ["心法"],
+                "source_chunk_ids": ["chunk_0000"],
+                "source_chunks": [{"chunk_id": "chunk_0000", "quote": "a"}],
+            },
+            {
+                "stage_id": 12,
+                "node_id": "4.3",
+                "title": "投資心法與富人思維",
+                "key_concepts": ["富人思維"],
+                "source_chunk_ids": ["chunk_0010"],
+                "source_chunks": [{"chunk_id": "chunk_0010", "quote": "b"}],
+            },
+        ]
+        merged = merge_duplicate_topic_stages(stages)
+        self.assertEqual(len(merged), 1)
+        self.assertIn("chunk_0000", merged[0]["source_chunk_ids"])
+        self.assertIn("chunk_0010", merged[0]["source_chunk_ids"])
+        self.assertEqual(merged[0]["stage_id"], 1)
+
+    def test_global_verifier_passes_after_merge(self):
+        chunks = [
+            {"chunk_id": "chunk_0000", "text": "x", "order_index": 0},
+            {"chunk_id": "chunk_0010", "text": "y", "order_index": 10},
+        ]
+        stages = merge_duplicate_topic_stages([
+            {
+                "title": "投資心法與富人思維",
+                "key_concepts": ["心法"],
+                "source_chunk_ids": ["chunk_0000"],
+            },
+            {
+                "title": "投資心法與富人思維",
+                "key_concepts": ["富人思維"],
+                "source_chunk_ids": ["chunk_0010"],
+            },
+        ])
+        result = verify_global_coverage(stages, chunks)
+        self.assertFalse(result["duplicate_titles"])
+        self.assertTrue(result["aligned"])
+
+
+class TestGradeCaseTokens(unittest.TestCase):
+    def test_yongfeng_grade_case_covered(self):
+        chunks = [
+            {
+                "chunk_id": "chunk_0050",
+                "text": "永豐金控 A級案例 零成本買股",
+                "order_index": 50,
+            },
+        ]
+        stages = [{
+            "title": "案例：永豐金",
+            "key_concepts": ["永豐金"],
+            "source_chunk_ids": ["chunk_0050"],
+        }]
+        self.assertFalse(
+            filter_missing_named_cases(["永豐金 (A級案例)"], stages, chunks)
+        )
 
 
 class TestPostProcessDedupe(unittest.TestCase):
