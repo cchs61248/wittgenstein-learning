@@ -2,14 +2,25 @@ import re
 
 
 def _slice_json(text: str) -> str | None:
-    """從任意文字中擷取最外層 JSON object/array。"""
+    """從任意文字中擷取最外層 JSON object/array。
+
+    對 `[{...},{...}]` 這類「以 array 為外層、object 為元素」的回應，
+    必須選擇最早出現的開口字元作為外層，否則會剝掉外層 `[ ]`、回傳
+    `{...},{...}` 形式的破損 JSON（reducer LLM array 回應全失的根因）。
+    """
+    candidates: list[tuple[int, int]] = []
     for start_char, end_char in [('{', '}'), ('[', ']')]:
         idx = text.find(start_char)
-        if idx != -1:
-            last_idx = text.rfind(end_char)
-            if last_idx > idx:
-                return text[idx:last_idx + 1].strip()
-    return None
+        if idx == -1:
+            continue
+        last_idx = text.rfind(end_char)
+        if last_idx > idx:
+            candidates.append((idx, last_idx))
+    if not candidates:
+        return None
+    # 最早出現的開口字元 = 最外層結構
+    idx, last_idx = min(candidates, key=lambda x: x[0])
+    return text[idx:last_idx + 1].strip()
 
 
 def extract_json(text: str) -> str:
