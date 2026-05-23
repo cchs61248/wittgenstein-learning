@@ -4,6 +4,10 @@ from __future__ import annotations
 from typing import Any
 
 from ..utils.fuzzy_match import similarity
+from ..utils.small_curriculum import (
+    filter_missing_named_cases,
+    is_small_file,
+)
 
 
 def _duplicate_titles(stages: list[dict], threshold: float = 0.92) -> list[str]:
@@ -29,18 +33,11 @@ def verify_global_coverage(
             referenced.add(cid)
     all_ids = {c["chunk_id"] for c in source_chunks}
     orphans = sorted(all_ids - referenced)
-    missing_cases: list[str] = []
     outline = required_outline or {}
-    for case in outline.get("named_cases") or []:
-        case_str = str(case)
-        if not any(
-            case_str in (s.get("title") or "")
-            or case_str in " ".join(s.get("key_concepts") or [])
-            for s in stages
-        ):
-            missing_cases.append(case_str)
+    named_cases = [str(c) for c in outline.get("named_cases") or []]
+    missing_cases = filter_missing_named_cases(named_cases, stages, source_chunks)
     duplicate_titles = _duplicate_titles(stages)
-    orphan_limit = max(5, len(all_ids) // 20)
+    orphan_limit = 0 if is_small_file(source_chunks) else max(5, len(all_ids) // 20)
     aligned = (
         not missing_cases
         and not duplicate_titles

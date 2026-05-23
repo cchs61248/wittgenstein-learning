@@ -18,6 +18,16 @@ from ..utils.canonicalize_apply import apply_canonical_mappings
 from ..utils.curriculum_reducer import attach_supporting_by_fuzzy_match, outcomes_to_stages
 from ..utils.fuzzy_match import concepts_match
 from ..utils.region_planning import slice_region_chunks
+from ..utils.small_curriculum import (
+    best_chunk_for_case,
+    candidates_to_stages_flat,
+    finalize_small_file_stages,
+    filter_missing_named_cases,
+    is_small_file,
+    normalize_case_name,
+    normalize_small_file_stages,
+    zero_region_overlaps,
+)
 from ..utils.stage_budget import compute_dynamic_max_stages
 
 if TYPE_CHECKING:
@@ -75,15 +85,20 @@ def _build_follow_up_stages(
     for case_name in missing_options:
         if len(stages) + len(new_stages) >= max_total_stages:
             break
-        case_main = case_name.split("(")[0].strip()
+        case_main = normalize_case_name(case_name)
         if not case_main:
             continue
-        matched_chunk_id: str | None = None
-        for cid, chunk in chunks_by_id.items():
-            text = str(chunk.get("text") or "")
-            if case_main in text:
-                matched_chunk_id = cid
-                break
+        if not filter_missing_named_cases([case_name], stages + new_stages, source_chunks):
+            continue
+        matched_chunk_id = best_chunk_for_case(
+            case_name,
+            chunks_by_id,
+            prefer_unclaimed=set(covered_chunks),
+            intro_chunk_id=(
+                sorted(source_chunks, key=lambda c: c.get("order_index", 0))[0].get("chunk_id")
+                if source_chunks else None
+            ),
+        )
         if not matched_chunk_id:
             continue
         chunk = chunks_by_id[matched_chunk_id]
@@ -106,7 +121,8 @@ def _build_follow_up_stages(
         next_stage_id += 1
 
     remaining_orphans = [cid for cid in orphan_chunk_ids if cid not in covered_chunks and cid in chunks_by_id]
-    if remaining_orphans and len(stages) + len(new_stages) < max_total_stages:
+    # 大量 orphan 留給 finalize_small_file_stages 分散到鄰近 stage，避免單一「垃圾 stage」
+    if remaining_orphans and len(remaining_orphans) <= 3 and len(stages) + len(new_stages) < max_total_stages:
         orphan_meta = [
             {
                 "chunk_id": cid,
@@ -221,6 +237,10 @@ async def run_start_session_v2(
         )
     )
     regions = regions.get("regions") or []
+    small_file = is_small_file(source_chunks)
+    if small_file:
+        zero_region_overlaps(regions)
+        _log.info("v2 small_file path  session=%s  chunks=%d", session_id, len(source_chunks))
     await emit({
         "type": "region_done",
         "payload": {"session_id": session_id, "region_count": len(regions)},
@@ -340,7 +360,11 @@ async def run_start_session_v2(
         "llm_outcome_count": 0,
     }
 
-    if use_plan_b:
+    if small_file:
+        stages = candidates_to_stages_flat(all_candidates, chunks_lookup)
+        quality_warnings = {"small_file_path": True, "reducer_skipped": True}
+        reduce_metrics["outcome_count"] = len(all_candidates)
+    elif use_plan_b:
         primary_source = sources_manifest[0]["source_id"] if sources_manifest else "src_0"
         primary_candidates = [c for c in all_candidates if c.get("source_id") == primary_source]
         other_chunks = [
@@ -408,6 +432,9 @@ async def run_start_session_v2(
             composer = StageComposerAgent()
             stages = composer.compose(outcomes, chunks_lookup=chunks_lookup)
 
+    if small_file:
+        stages = normalize_small_file_stages(stages, source_chunks)
+
     from ..utils.curriculum_health import assess_reducer_health
 
     health = assess_reducer_health(
@@ -451,10 +478,15 @@ async def run_start_session_v2(
             _log.warning("v2 global verifier failed  session=%s  %s", session_id, gverify)
 
         # P1 (b)：補建 follow-up stages 救 missing named case + orphan chunk
+        truly_missing = filter_missing_named_cases(
+            gverify.get("missing_options") or [],
+            stages,
+            source_chunks,
+        )
         follow_up = _build_follow_up_stages(
             stages=stages,
             source_chunks=source_chunks,
-            missing_options=gverify.get("missing_options") or [],
+            missing_options=truly_missing,
             orphan_chunk_ids=gverify.get("orphan_chunk_ids") or [],
             max_total_stages=int(len(stages) * 1.5) + 2,
         )
@@ -473,6 +505,9 @@ async def run_start_session_v2(
                 _log.info(
                     "v2 global verifier post-process succeeded  session=%s", session_id,
                 )
+
+        if small_file:
+            stages = finalize_small_file_stages(stages, source_chunks)
 
     new_concepts = sorted({c for s in stages for c in s.get("key_concepts", [])})
     if content_hash and new_concepts:

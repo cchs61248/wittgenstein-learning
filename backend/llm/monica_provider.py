@@ -1,13 +1,13 @@
 import os
 from typing import Optional
 from openai import AsyncOpenAI
-from .base_provider import LLMMessage, MessageRole
+from .base_provider import BaseLLMProvider, LLMMessage, MessageRole
 from .openai_provider import OpenAIProvider
 
 
 class MonicaProvider(OpenAIProvider):
     def __init__(self, model: str = "claude-4.6-sonnet", temperature: float = 0.7, max_tokens: int = 4096):
-        super().__init__(model, temperature, max_tokens)
+        BaseLLMProvider.__init__(self, model, temperature, max_tokens)
         base_url = os.getenv("MONICA_BASE_URL", "http://localhost:8001/v1")
         api_key = os.getenv("MONICA_API_KEY", "monica")
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
