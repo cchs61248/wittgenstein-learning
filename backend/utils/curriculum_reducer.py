@@ -280,7 +280,7 @@ def outcomes_to_stages(
                     chunk_ids.append(cid)
                     source_chunks_meta.append({
                         "chunk_id": cid,
-                        "quote": (lookup.get(cid) or "")[:500],
+                        "quote": lookup.get(cid) or "",
                         "note": ev.get("source_id", ""),
                     })
         stages.append({
