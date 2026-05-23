@@ -1,4 +1,16 @@
-"""Live integration: V2 curriculum pipeline with Monica gemini-3-flash."""
+"""Live integration: V2 curriculum pipeline with real LLM (manual only).
+
+NOT collected by pytest. Do not import from backend/tests.
+
+Run (requires API keys in backend/.env):
+
+    $env:RUN_LLM_TESTS="1"
+    .\\backend\\.venv\\Scripts\\python.exe backend\\tools\\live_small_file_curriculum_test.py [path]
+
+Cleanup sess_live_* without LLM:
+
+    .\\backend\\.venv\\Scripts\\python.exe backend\\tools\\live_small_file_curriculum_test.py --cleanup-all
+"""
 from __future__ import annotations
 
 import argparse
@@ -27,6 +39,18 @@ if _env_path.exists():
 DEFAULT_PDF = Path(r"C:\Users\dqaiot\Downloads\API Design.pdf")
 DEFAULT_USER_ID = "326ba07e-46ae-498d-8935-5085e66ecc9d"
 LIVE_SESSION_PREFIX = "sess_live_"
+
+
+def _require_live_llm_opt_in() -> None:
+    if os.getenv("RUN_LLM_TESTS") == "1":
+        return
+    print(
+        "Refusing to call live LLM: set RUN_LLM_TESTS=1\n"
+        "  PowerShell: $env:RUN_LLM_TESTS=\"1\"\n"
+        "  (--cleanup-all does not need this flag)",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 
 async def cleanup_live_sessions(user_id: str = DEFAULT_USER_ID) -> list[str]:
@@ -66,6 +90,8 @@ async def main(
             print(f"  deleted {sid}")
         await close_db()
         return
+
+    _require_live_llm_opt_in()
 
     if source_path is None or not source_path.exists():
         print("File missing:", source_path)
