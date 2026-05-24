@@ -654,6 +654,54 @@ class TestPostProcessDedupe(unittest.TestCase):
         self.assertIn("ChatGPT", case_follow_ups[0]["title"])
         self.assertLessEqual(len(stages) + len(follow_up), 6)
 
+    def test_orphan_excludes_chunks_used_by_follow_up_case(self):
+        """sess_live_e106b1a4 (Rate Limiter md) 觸發：
+        missing_options 補出的 case stage（如「滑動窗口計數器」）用到 chunk_0006，
+        若 chunk_0006 同時在 orphan_chunk_ids，原本會被 follow_up_orphan stage 重複抓進去
+        → 同 chunk 在 stage 16 與 stage 17 各被講解一次。
+        Fix：build_follow_up_stages 計算 remaining_orphans 前要把 new_stages 用的
+        chunks 也加進 covered_chunks。
+        """
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": f"段落 {i}", "order_index": i,
+             "source_id": "src_a", "source_index": 0}
+            for i in range(10)
+        ]
+        # chunk_0005 含「滑動窗口日誌」、chunk_0006 含「滑動窗口計數器」
+        chunks[5]["text"] = "滑動窗口日誌算法詳解"
+        chunks[6]["text"] = "滑動窗口計數器演算法"
+        # existing stages 沒覆蓋 chunk_0005/0006
+        stages = [{
+            "stage_id": 1, "node_id": "1.1", "title": "限流框架",
+            "key_concepts": ["限流"], "source_chunk_ids": ["chunk_0000"],
+        }]
+        follow_up = _build_follow_up_stages(
+            stages=stages,
+            source_chunks=chunks,
+            missing_options=["滑動窗口日誌", "滑動窗口計數器"],
+            orphan_chunk_ids=["chunk_0005", "chunk_0006", "chunk_0009"],
+            max_total_stages=10,
+        )
+        case_stages = [s for s in follow_up if s.get("kind") == "follow_up_case"]
+        orphan_stages = [s for s in follow_up if s.get("kind") == "follow_up_orphan"]
+        # 兩個 case stage 應該分別吃 chunk_0005、chunk_0006
+        case_chunks = set()
+        for s in case_stages:
+            case_chunks.update(s.get("source_chunk_ids") or [])
+        self.assertIn("chunk_0005", case_chunks)
+        self.assertIn("chunk_0006", case_chunks)
+        # orphan stage 不可重複抓 chunk_0005/0006
+        for s in orphan_stages:
+            stage_chunks = set(s.get("source_chunk_ids") or [])
+            self.assertNotIn(
+                "chunk_0005", stage_chunks,
+                "chunk_0005 已被 follow_up_case 用，不該再進 follow_up_orphan",
+            )
+            self.assertNotIn(
+                "chunk_0006", stage_chunks,
+                "chunk_0006 已被 follow_up_case 用，不該再進 follow_up_orphan",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

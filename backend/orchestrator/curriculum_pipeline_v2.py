@@ -154,6 +154,13 @@ def _build_follow_up_stages(
         })
         next_stage_id += 1
 
+    # bug fix (sess_live_e106b1a4)：covered_chunks 只反映 input stages，
+    # 不含本次 follow_up_case stages 已用的 chunks。
+    # 若 missing_options 補建的 case stage 用到的 chunk_id 也出現在 orphan_chunk_ids，
+    # 會被重複包進 follow_up_orphan stage（造成同 chunk 兩 stage 重複講解）。
+    for s in new_stages:
+        covered_chunks.update(s.get("source_chunk_ids") or [])
+
     remaining_orphans = [cid for cid in orphan_chunk_ids if cid not in covered_chunks and cid in chunks_by_id]
     # 大量 orphan 留給 finalize_small_file_stages 分散到鄰近 stage，避免單一「垃圾 stage」
     if remaining_orphans and len(remaining_orphans) <= 3 and len(stages) + len(new_stages) < max_total_stages:
