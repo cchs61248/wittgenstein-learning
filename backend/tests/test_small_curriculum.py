@@ -241,6 +241,27 @@ class TestFuzzyNamedCase(unittest.TestCase):
         self.assertNotIn("房屋貸款", filtered)
         self.assertIn("股票質押", filtered)
 
+    def test_enum_label_miss_not_filtered_when_title_gap(self):
+        """Rate Limiter R9: （二）漏切時 miss 不可因 kc 含漏桶而被 false-positive 濾掉。"""
+        stages = [
+            {
+                "title": "限流算法（一）：令牌桶",
+                "key_concepts": ["令牌桶"],
+                "source_chunk_ids": ["c0"],
+            },
+            {
+                "title": "限流算法（三）：固定窗口",
+                "key_concepts": ["漏桶算法"],
+                "source_chunk_ids": ["c1"],
+            },
+        ]
+        filtered = filter_false_verifier_misses(
+            ["限流算法（二）：漏桶算法"],
+            stages,
+            [],
+        )
+        self.assertEqual(filtered, ["限流算法（二）：漏桶算法"])
+
     def test_slash_topic_covered(self):
         stages = [
             {

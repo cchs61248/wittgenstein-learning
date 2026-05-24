@@ -37,6 +37,7 @@ from ..utils.small_curriculum import (
     merge_duplicate_topic_stages,
     normalize_case_name,
     normalize_stages_pre_verify,
+    pending_enum_label_misses,
     prune_phantom_key_concepts,
     source_count as count_sources,
     use_per_source_split_path,
@@ -321,7 +322,17 @@ async def _run_single_split(
             vresult.get("missing_options") or [], stages, source_chunks,
         )
         if not filtered:
-            _log.info("v2 small_file verifier false positive filtered  session=%s", session_id)
+            enum_left = pending_enum_label_misses(
+                vresult.get("missing_options") or [], stages,
+            )
+            if enum_left:
+                filtered = enum_left
+                _log.warning(
+                    "v2 small_file verifier enum gap reroll  session=%s  misses=%s",
+                    session_id, enum_left,
+                )
+            else:
+                _log.info("v2 small_file verifier false positive filtered  session=%s", session_id)
         else:
             _log.warning(
                 "v2 small_file verifier failed  session=%s  missing=%s",

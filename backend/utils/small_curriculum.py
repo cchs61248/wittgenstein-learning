@@ -41,6 +41,7 @@ _TOPIC_ALIASES: dict[str, list[str]] = {
     "股票質押": ["股票質押", "質押"],
 }
 _PAREN_INNER_RE = re.compile(r"[\(（]([^\)）]+)[\)）]")
+_CN_ENUM_LABEL_RE = re.compile(r"[（(][一二三四五六七八九十百千万\d]+[）)]")
 _COLON_SUFFIX_RE = re.compile(r"^.+?[：:]\s*(.+)$")
 _GRADE_MISS_RE = re.compile(r"([SAB])\s*級")
 _CASE_PREFIX_RE = re.compile(r"^案例\s*實務?[：:]\s*|^案例[：:]\s*", re.IGNORECASE)
@@ -304,6 +305,15 @@ def _miss_decomposition_tokens(miss: str) -> list[str]:
     return tokens
 
 
+def _enum_label_miss_requires_title_match(miss: str, stages: list[dict]) -> bool:
+    """R9: 並列編號 miss 須 stage title 含相同（N）標記，不可僅靠 kc 模糊覆蓋。"""
+    m = _CN_ENUM_LABEL_RE.search(str(miss))
+    if not m:
+        return False
+    label = m.group(0)
+    return not any(label in (s.get("title") or "") for s in stages)
+
+
 def verifier_miss_covered(
     miss: str,
     stages: list[dict],
@@ -314,6 +324,8 @@ def verifier_miss_covered(
     miss_str = str(miss).strip()
     if not miss_str:
         return True
+    if _enum_label_miss_requires_title_match(miss_str, stages):
+        return False
     if case_covered_in_stages(miss_str, stages, source_chunks, threshold=threshold):
         return True
     if any(_numbered_rule_covered(miss_str, _stage_metadata_text(s)) for s in stages):
@@ -354,6 +366,15 @@ def filter_false_verifier_misses(
         str(m)
         for m in missing_options
         if not verifier_miss_covered(str(m), stages, source_chunks, threshold=threshold)
+    ]
+
+
+def pending_enum_label_misses(missing_options: list[str], stages: list[dict]) -> list[str]:
+    """R9 enum gaps that must trigger reroll even when other misses are false positives."""
+    return [
+        str(m)
+        for m in missing_options
+        if _enum_label_miss_requires_title_match(str(m), stages)
     ]
 
 
