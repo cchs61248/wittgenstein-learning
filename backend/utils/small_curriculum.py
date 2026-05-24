@@ -768,6 +768,64 @@ def _chunk_order_index(chunk_id: str, source_chunks: list[dict]) -> int:
     return 0
 
 
+def _stage_min_chunk_order(stage: dict, source_chunks: list[dict]) -> int:
+    ids = stage.get("source_chunk_ids") or []
+    if not ids:
+        return 10**9
+    return min(_chunk_order_index(cid, source_chunks) for cid in ids)
+
+
+def sort_stages_by_chunk_order(
+    stages: list[dict],
+    source_chunks: list[dict],
+) -> list[dict]:
+    """Deterministic re-sort by earliest assigned chunk order_index (small + large paths)."""
+    if len(stages) <= 1:
+        return stages
+    ordered = sorted(
+        [dict(s) for s in stages],
+        key=lambda s: (_stage_min_chunk_order(s, source_chunks), s.get("stage_id") or 0),
+    )
+    return _renumber_stages(ordered)
+
+
+_SUMMARY_KC_FALLBACK = "章節總結"
+
+
+def ensure_empty_key_concepts(stages: list[dict]) -> list[dict]:
+    """When prune drops all kc but stage still has chunks, inject minimal teachable kc."""
+    out: list[dict] = []
+    for stage in stages:
+        s = dict(stage)
+        kcs = [str(kc).strip() for kc in (s.get("key_concepts") or []) if kc]
+        if kcs or not (s.get("source_chunk_ids") or []):
+            out.append(s)
+            continue
+        title = (s.get("title") or "").strip()
+        kind = s.get("kind") or ""
+        if kind in ("follow_up_orphan", "summary") or any(
+            h in title for h in _SUMMARY_HINTS
+        ):
+            s["key_concepts"] = [_SUMMARY_KC_FALLBACK]
+            s.setdefault("kind", "summary")
+        elif title:
+            s["key_concepts"] = [title[:8]]
+        else:
+            s["key_concepts"] = [_SUMMARY_KC_FALLBACK]
+        out.append(s)
+    return out
+
+
+def finalize_curriculum_stages(
+    stages: list[dict],
+    source_chunks: list[dict],
+) -> list[dict]:
+    """Common post-pipeline finalize: chunk-order sort + empty-kc fallback (all paths)."""
+    stages = sort_stages_by_chunk_order(stages, source_chunks)
+    stages = ensure_empty_key_concepts(stages)
+    return stages
+
+
 def _attach_chunk_to_stage(stage: dict, chunk_id: str, by_id: dict[str, dict]) -> dict:
     s = dict(stage)
     ids = list(s.get("source_chunk_ids") or [])
@@ -1279,6 +1337,7 @@ def finalize_small_file_stages(
     stages = split_oversized_stages(stages, source_chunks)
     stages = dedupe_key_concept_aliases(stages)
     stages = prune_phantom_key_concepts(stages, source_chunks)
+    stages = ensure_empty_key_concepts(stages)
     return trim_stage_key_concepts(stages)
 
 

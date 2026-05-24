@@ -13,6 +13,9 @@ from backend.utils.small_curriculum import (
     filter_false_verifier_misses,
     filter_missing_named_cases,
     finalize_small_file_stages,
+    ensure_empty_key_concepts,
+    finalize_curriculum_stages,
+    sort_stages_by_chunk_order,
     is_compact_curriculum,
     is_small_file,
     merge_duplicate_topic_stages,
@@ -567,6 +570,99 @@ class TestStageChunkCapAndKcHygiene(unittest.TestCase):
         self.assertNotIn("台塑四寶案例", kcs)
         self.assertIn("投資心法", kcs)
         self.assertIn("富人思維", kcs)
+
+
+class TestSortStagesByChunkOrder(unittest.TestCase):
+    def test_large_path_disordered_stages_reordered(self):
+        """Reducer/composer 可能把 intro chunks 排到後段 stage — sort 應還原文本順序。"""
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": f"c{i}", "order_index": i}
+            for i in range(5)
+        ]
+        stages = [
+            {
+                "stage_id": 13,
+                "node_id": "5.1",
+                "title": "錯位 intro",
+                "key_concepts": ["intro"],
+                "source_chunk_ids": ["chunk_0000", "chunk_0001", "chunk_0002"],
+            },
+            {
+                "stage_id": 1,
+                "node_id": "1.1",
+                "title": "後段主題",
+                "key_concepts": ["later"],
+                "source_chunk_ids": ["chunk_0004"],
+            },
+            {
+                "stage_id": 2,
+                "node_id": "1.2",
+                "title": "中段",
+                "key_concepts": ["mid"],
+                "source_chunk_ids": ["chunk_0003"],
+            },
+        ]
+        out = sort_stages_by_chunk_order(stages, chunks)
+        self.assertEqual(out[0]["source_chunk_ids"][0], "chunk_0000")
+        self.assertEqual(out[0]["stage_id"], 1)
+        self.assertEqual(out[0]["node_id"], "1.1")
+        self.assertEqual(out[-1]["source_chunk_ids"], ["chunk_0004"])
+        self.assertEqual(out[-1]["stage_id"], 3)
+
+    def test_finalize_curriculum_stages_applies_sort_and_kc_fallback(self):
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": "正文段落", "order_index": i}
+            for i in range(20)
+        ]
+        stages = [
+            {
+                "stage_id": 9,
+                "node_id": "3.3",
+                "title": "章節總結與補充內容",
+                "key_concepts": [],
+                "source_chunk_ids": ["chunk_0017", "chunk_0018", "chunk_0019"],
+                "kind": "follow_up_orphan",
+            },
+            {
+                "stage_id": 1,
+                "node_id": "1.1",
+                "title": "開頭",
+                "key_concepts": ["限流器"],
+                "source_chunk_ids": ["chunk_0000"],
+            },
+        ]
+        out = finalize_curriculum_stages(stages, chunks)
+        self.assertEqual(out[0]["source_chunk_ids"], ["chunk_0000"])
+        self.assertEqual(out[1]["key_concepts"], ["章節總結"])
+
+
+class TestEnsureEmptyKeyConcepts(unittest.TestCase):
+    def test_orphan_summary_stage_gets_fallback_kc(self):
+        stages = [{
+            "title": "章節總結與補充內容",
+            "key_concepts": [],
+            "source_chunk_ids": ["chunk_0017", "chunk_0018", "chunk_0019"],
+            "kind": "follow_up_orphan",
+        }]
+        out = ensure_empty_key_concepts(stages)
+        self.assertEqual(out[0]["key_concepts"], ["章節總結"])
+        self.assertEqual(out[0]["kind"], "follow_up_orphan")
+
+    def test_prune_then_ensure_restores_summary_kc(self):
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": "正文", "order_index": i}
+            for i in range(17, 20)
+        ]
+        stages = [{
+            "title": "章節總結與補充內容",
+            "key_concepts": ["章節總結", "補充內容"],
+            "source_chunk_ids": ["chunk_0017", "chunk_0018", "chunk_0019"],
+            "kind": "follow_up_orphan",
+        }]
+        pruned = prune_phantom_key_concepts(stages, chunks)
+        self.assertEqual(pruned[0]["key_concepts"], [])
+        restored = ensure_empty_key_concepts(pruned)
+        self.assertEqual(restored[0]["key_concepts"], ["章節總結"])
 
 
 class TestMergeDuplicateStages(unittest.TestCase):
