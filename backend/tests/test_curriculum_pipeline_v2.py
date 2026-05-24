@@ -253,6 +253,7 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             orch.content_outliner.run.await_count, 0,
             "small_file 應 bypass ContentOutline",
         )
+        self.assertEqual(captured["quality_warnings"].get("curriculum_llm_calls"), 2)
 
     async def test_v2_multi_source_small_file_per_source_split(self):
         """2 sources × 10 chunks：per-source split，各 1 次 splitter，無 outline/reducer。"""
@@ -287,6 +288,7 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(qw.get("source_count"), 2)
         self.assertTrue(qw.get("reducer_skipped"))
         self.assertIn("region_done", events)
+        self.assertEqual(captured["quality_warnings"].get("curriculum_llm_calls"), 4)
 
     async def test_v2_plan_b_skips_reducer(self):
         orch = _mk_orch_v2()

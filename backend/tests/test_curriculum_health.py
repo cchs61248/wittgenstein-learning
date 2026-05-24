@@ -3,6 +3,11 @@ import unittest
 from unittest.mock import patch
 
 from backend.utils.curriculum_health import assess_reducer_health
+from backend.utils.curriculum_llm_meter import (
+    CurriculumLlmMeter,
+    assess_curriculum_cost,
+    curriculum_tier,
+)
 
 
 class TestCurriculumHealth(unittest.TestCase):
@@ -52,6 +57,50 @@ class TestCurriculumHealth(unittest.TestCase):
             "os.environ", {"CURRICULUM_V2_PLAN_B_AUTO": "0"}, clear=False,
         ):
             self.assertFalse(should_auto_plan_b())
+
+
+class TestCurriculumLlmMeter(unittest.TestCase):
+    def _chunks(self, n: int, source_id: str = "s1") -> list[dict]:
+        return [{"chunk_id": f"c{i}", "source_id": source_id} for i in range(n)]
+
+    def test_tier_small_single(self):
+        with patch.dict("os.environ", {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            self.assertEqual(curriculum_tier(self._chunks(10)), "small")
+
+    def test_tier_small_multi(self):
+        chunks = [
+            {"chunk_id": "a", "source_id": "s1"},
+            {"chunk_id": "b", "source_id": "s2"},
+        ]
+        with patch.dict("os.environ", {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            self.assertEqual(curriculum_tier(chunks), "small_multi")
+
+    def test_over_budget_triggers_cost_alert(self):
+        meter = CurriculumLlmMeter()
+        for _ in range(5):
+            meter.record("ContentSplitterAgent")
+            meter.record("SplitterVerifierAgent")
+        chunks = [{"chunk_id": "c0", "source_id": "only"}]
+        with patch.dict("os.environ", {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            with patch("backend.utils.curriculum_llm_meter._log") as mock_log:
+                qw = assess_curriculum_cost(
+                    session_id="s1", meter=meter, source_chunks=chunks,
+                )
+        self.assertTrue(qw["curriculum_llm_over_budget"])
+        mock_log.warning.assert_called_once()
+
+    def test_under_budget_no_alert(self):
+        meter = CurriculumLlmMeter()
+        meter.record("ContentSplitterAgent")
+        meter.record("SplitterVerifierAgent")
+        chunks = [{"chunk_id": "c0", "source_id": "only"}]
+        with patch.dict("os.environ", {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            with patch("backend.utils.curriculum_llm_meter._log") as mock_log:
+                qw = assess_curriculum_cost(
+                    session_id="s1", meter=meter, source_chunks=chunks,
+                )
+        self.assertFalse(qw["curriculum_llm_over_budget"])
+        mock_log.warning.assert_not_called()
 
 
 if __name__ == "__main__":

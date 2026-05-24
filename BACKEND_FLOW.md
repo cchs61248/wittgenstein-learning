@@ -650,6 +650,7 @@ class WorkingMemory:
                         │     conflict / comparison stage → **V2.1 deferred**（降級為 split + `conflict_deferred`）
                         ├── StageComposerAgent（prerequisites 推斷）
                         ├── `assess_reducer_health` → log `curriculum_health_alert` + 可選寫入 `quality_warnings.health_signals`
+                        ├── `CurriculumLlmMeter`：每次 curriculum agent `run()` 後 `meter.record`；session 結束寫入 `quality_warnings.curriculum_llm_calls` / `curriculum_tier` / `curriculum_llm_over_budget`；超 tier budget 時 `curriculum_cost_alert` WARNING
                         ├── `verify_global_coverage`（named_cases + orphan chunks + duplicate titles）
                         ├── Plan B（**手動** `CURRICULUM_V2_PLAN_B=1`）：主 source 骨架 + fuzzy attach；`plan_b_recommended` 僅告警
                         └── WS：`region_done` / `reduce_done`（含 health）/ `composer_done`

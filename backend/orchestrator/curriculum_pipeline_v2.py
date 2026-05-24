@@ -47,6 +47,7 @@ from ..utils.small_curriculum import (
     zero_region_overlaps,
 )
 from ..utils.stage_budget import compute_dynamic_max_stages
+from ..utils.curriculum_llm_meter import CurriculumLlmMeter, assess_curriculum_cost
 
 if TYPE_CHECKING:
     from .learning_orchestrator import LearningOrchestrator
@@ -272,6 +273,7 @@ async def _run_single_split(
     max_stages: int,
     required_outline: dict | None,
     emit,
+    meter: CurriculumLlmMeter | None = None,
 ) -> tuple[list[dict], str]:
     """small_file path：一次 splitter call 處理整檔（bypass MacroRegion + per-region loop）。
 
@@ -294,6 +296,8 @@ async def _run_single_split(
     )
     try:
         split_result = await orch.splitter.run(ctx)
+        if meter:
+            meter.record("ContentSplitterAgent")
     except Exception as e:
         _log.warning("v2 small_file split failed  session=%s  err=%s", session_id, e)
         return [], ""
@@ -307,6 +311,8 @@ async def _run_single_split(
     vresult: dict | None = None
     try:
         vresult = await orch.splitter_verifier.run(verify_ctx)
+        if meter:
+            meter.record("SplitterVerifierAgent")
     except Exception as e:
         _log.warning("v2 small_file verifier error  session=%s  err=%s", session_id, e)
 
@@ -341,6 +347,8 @@ async def _run_single_split(
             )
             try:
                 rerolled = await orch.splitter.run(reroll_ctx)
+                if meter:
+                    meter.record("ContentSplitterAgent")
                 rerolled_stages = rerolled.get("stages") or []
                 if rerolled_stages:
                     stages = rerolled_stages
@@ -387,6 +395,7 @@ async def _run_per_source_split(
     max_stages: int,
     required_outline: dict | None,
     emit,
+    meter: CurriculumLlmMeter | None = None,
 ) -> tuple[list[dict], str]:
     """multi-source small_file：每 source 各跑 single-split，再合併 candidates。"""
     n_sources = len(sources_manifest) or 1
@@ -421,6 +430,7 @@ async def _run_per_source_split(
             max_stages=per_source_max,
             required_outline=required_outline,
             emit=emit,
+            meter=meter,
         )
         all_candidates.extend(candidates)
         if summary:
@@ -445,6 +455,7 @@ async def run_start_session_v2(
 ) -> None:
     content_hash = compute_content_hash(source_chunks)
     sources_manifest = _build_sources_manifest(source_chunks)
+    meter = CurriculumLlmMeter()
 
     _log.info(
         "start_session_v2  session=%s  chunks=%d  sources=%d",
@@ -478,6 +489,7 @@ async def run_start_session_v2(
         )
         try:
             required_outline = await orch.content_outliner.run(outline_ctx)
+            meter.record("ContentOutlineAgent")
             _log.info(
                 "v2 outline done  session=%s  cases=%d  titles=%d",
                 session_id,
@@ -515,6 +527,7 @@ async def run_start_session_v2(
             max_stages=max_stages,
             required_outline=required_outline,
             emit=emit,
+            meter=meter,
         )
         all_candidates.extend(single_candidates)
         if single_summary:
@@ -535,6 +548,7 @@ async def run_start_session_v2(
             max_stages=max_stages,
             required_outline=required_outline,
             emit=emit,
+            meter=meter,
         )
         all_candidates.extend(per_candidates)
         if per_summary:
@@ -550,6 +564,7 @@ async def run_start_session_v2(
                 task_payload={"source_chunks": source_chunks},
             )
         )
+        meter.record("MacroRegionPlannerAgent")
         regions = regions_result.get("regions") or []
         regions = enrich_regions_with_outline_topics(
             regions, required_outline, source_chunks,
@@ -581,6 +596,7 @@ async def run_start_session_v2(
         )
         try:
             split_result = await orch.splitter.run(ctx)
+            meter.record("ContentSplitterAgent")
         except Exception as e:
             _log.warning("v2 region split failed  region=%s  err=%s", region.get("region_id"), e)
             continue
@@ -594,6 +610,7 @@ async def run_start_session_v2(
         vresult: dict | None = None
         try:
             vresult = await orch.splitter_verifier.run(verify_ctx)
+            meter.record("SplitterVerifierAgent")
         except Exception as e:
             _log.warning("v2 region verifier error  region=%s  err=%s", region.get("region_id"), e)
 
@@ -638,6 +655,7 @@ async def run_start_session_v2(
             )
             try:
                 reroll_result = await orch.splitter.run(reroll_ctx)
+                meter.record("ContentSplitterAgent")
                 rerolled_stages = reroll_result.get("stages") or []
                 if rerolled_stages:
                     region_stages = rerolled_stages
@@ -704,6 +722,7 @@ async def run_start_session_v2(
         )
         try:
             reduce_result = await reducer.run(reducer_ctx)
+            meter.record("GlobalCurriculumReducerAgent")
             outcomes = reduce_result.get("outcomes") or []
             reduce_metrics["outcome_count"] = len(outcomes)
             reduce_metrics["unsure_pair_count"] = reduce_result.get("unsure_pair_count") or 0
@@ -895,6 +914,7 @@ async def run_start_session_v2(
                 task_payload={"new_concepts": new_concepts, "historical_pool": historical_pool},
             )
             canon_result = await orch.canonicalizer.run(canon_ctx)
+            meter.record("ConceptCanonicalizeAgent")
             stages = apply_canonical_mappings(stages, canon_result["mappings"])
         except Exception as e:
             _log.warning("v2 canonicalize failed  session=%s  err=%s", session_id, e)
@@ -911,6 +931,11 @@ async def run_start_session_v2(
         "summary": summary,
         "question_mode": question_mode,
     }
+
+    cost_qw = assess_curriculum_cost(
+        session_id=session_id, meter=meter, source_chunks=source_chunks,
+    )
+    quality_warnings = {**(quality_warnings or {}), **cost_qw}
 
     await session_memory.create_pending_session(
         session_id=session_id,
