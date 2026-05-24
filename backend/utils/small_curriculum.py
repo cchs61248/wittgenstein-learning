@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from typing import Any
 
 from .fuzzy_match import similarity
@@ -983,6 +984,28 @@ def sort_stages_by_chunk_order(
 
 
 _SUMMARY_KC_FALLBACK = "章節總結"
+_META_ONLY_KC = frozenset({"章節總結", "本章重點", "總結", "重點", "補充內容", "本章"})
+
+
+def _normalize_kc_text(text: str) -> str:
+    """NFKC：PDF 相容字（如 ⾯）與標準字（面）統一後再比對。"""
+    return unicodedata.normalize("NFKC", text or "")
+
+
+def _summary_kc_from_title(title: str) -> str:
+    """Summary stage 無 kc 時，從 title 抽可教學概念，避免一律 meta「章節總結」。"""
+    title = (title or "").strip()
+    if not title:
+        return _SUMMARY_KC_FALLBACK
+    for sep in ("與", "及", "和", "：", "—", "-"):
+        if sep in title:
+            head = title.split(sep, 1)[0].strip()
+            if head and head not in _META_ONLY_KC and len(head) >= 2:
+                return head[:8]
+    cleaned = title[:8]
+    if cleaned in _META_ONLY_KC or cleaned.startswith("章節總結"):
+        return _SUMMARY_KC_FALLBACK
+    return cleaned
 
 
 def ensure_empty_key_concepts(stages: list[dict]) -> list[dict]:
@@ -999,7 +1022,7 @@ def ensure_empty_key_concepts(stages: list[dict]) -> list[dict]:
         if kind in ("follow_up_orphan", "summary") or any(
             h in title for h in _SUMMARY_HINTS
         ):
-            s["key_concepts"] = [_SUMMARY_KC_FALLBACK]
+            s["key_concepts"] = [_summary_kc_from_title(title)]
             s.setdefault("kind", "summary")
         elif title:
             s["key_concepts"] = [title[:8]]
@@ -1392,6 +1415,12 @@ def reassign_case_stage_chunks(
 
 
 _KC_ENGLISH_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+# 中文 KC 子串 → chunk 內常見英文 anchor（PDF 常只抽英文術語）
+_KC_CN_EN_ANCHORS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("路由層", ("routing layer",)),
+    ("架構決策", ("managed database", "partition ownership", "rebalancing", "infrastructure-heavy")),
+    ("面試", ("interview",)),
+)
 _INTRO_KC_MAX_FORWARD_SPAN = 4
 
 
@@ -1403,19 +1432,26 @@ def _kc_covered_in_chunks(
     """Return True when key concept text or anchor terms appear in assigned chunks."""
     if not kc:
         return True
-    combined = " ".join(str(by_id.get(cid, {}).get("text") or "") for cid in chunk_ids)
-    if not combined:
+    combined_raw = " ".join(str(by_id.get(cid, {}).get("text") or "") for cid in chunk_ids)
+    if not combined_raw:
         return False
-    kc_stripped = kc.strip()
+    combined = _normalize_kc_text(combined_raw)
+    combined_lower = combined.lower()
+    kc_stripped = _normalize_kc_text(kc.strip())
     if kc_stripped and kc_stripped in combined:
         return True
     for term in _KC_ENGLISH_TERM_RE.findall(kc):
-        if term.lower() in combined.lower():
+        if term.lower() in combined_lower:
             return True
-    cn = re.sub(r"[\s\(\)（）]", "", kc)
+    cn = re.sub(r"[\s\(\)（）]", "", kc_stripped)
     for n in (4, 3, 2):
         if len(cn) >= n and cn[:n] in combined:
             return True
+    for cn_key, en_phrases in _KC_CN_EN_ANCHORS:
+        if _normalize_kc_text(cn_key) in cn:
+            for phrase in en_phrases:
+                if phrase.lower() in combined_lower:
+                    return True
     return False
 
 

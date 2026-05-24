@@ -751,6 +751,42 @@ class TestStageChunkCapAndKcHygiene(unittest.TestCase):
         self.assertIn("投資心法", kcs)
         self.assertIn("富人思維", kcs)
 
+    def test_prune_keeps_kc_with_nfkc_pdf_variant(self):
+        """PDF 相容字 ⾯（U+2F8F）與標準面（U+9762）應視為同一 anchor。"""
+        chunks = [{
+            "chunk_id": "chunk_0009",
+            "text": "⾯試怎麼講\nrouting layer Infrastructure-heavy",
+            "order_index": 9,
+        }]
+        stages = [{
+            "title": "面試實戰與系統設計框架",
+            "key_concepts": ["面試應答", "路由層設計", "架構決策"],
+            "source_chunk_ids": ["chunk_0009"],
+            "kind": "summary",
+        }]
+        out = prune_phantom_key_concepts(stages, chunks)
+        kcs = out[0]["key_concepts"]
+        self.assertIn("面試應答", kcs)
+        self.assertIn("路由層設計", kcs)
+        self.assertIn("架構決策", kcs)
+
+    def test_prune_then_ensure_uses_title_kc_for_interview_summary(self):
+        chunks = [{
+            "chunk_id": "chunk_0009",
+            "text": "⾯試怎麼講 routing layer",
+            "order_index": 9,
+        }]
+        stages = [{
+            "title": "面試實戰與系統設計框架",
+            "key_concepts": ["幽靈概念A", "幽靈概念B"],
+            "source_chunk_ids": ["chunk_0009"],
+            "kind": "summary",
+        }]
+        pruned = prune_phantom_key_concepts(stages, chunks)
+        self.assertEqual(pruned[0]["key_concepts"], [])
+        restored = ensure_empty_key_concepts(pruned)
+        self.assertEqual(restored[0]["key_concepts"], ["面試實戰"])
+
 
 class TestSortStagesByChunkOrder(unittest.TestCase):
     def test_large_path_disordered_stages_reordered(self):
@@ -843,6 +879,16 @@ class TestEnsureEmptyKeyConcepts(unittest.TestCase):
         self.assertEqual(pruned[0]["key_concepts"], [])
         restored = ensure_empty_key_concepts(pruned)
         self.assertEqual(restored[0]["key_concepts"], ["章節總結"])
+
+    def test_interview_summary_title_extracts_teachable_kc(self):
+        stages = [{
+            "title": "面試實戰與系統設計框架",
+            "key_concepts": [],
+            "source_chunk_ids": ["chunk_0009"],
+            "kind": "summary",
+        }]
+        out = ensure_empty_key_concepts(stages)
+        self.assertEqual(out[0]["key_concepts"], ["面試實戰"])
 
 
 class TestMergeDuplicateStages(unittest.TestCase):

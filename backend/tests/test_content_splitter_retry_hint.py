@@ -31,6 +31,12 @@ class TestContentSplitterPromptHasRetryHintRule(unittest.TestCase):
         self.assertIn("repair_plan", prompt)
         self.assertIn("forbidden_mixes", prompt)
 
+    def test_prompt_has_summary_stage_kc_anchor_rule(self):
+        prompt = SYSTEM_PROMPTS["content_splitter"]
+        self.assertIn("summary / 面試 / 總結 stage", prompt)
+        self.assertIn("章節總結", prompt)
+        self.assertIn("routing layer", prompt)
+
 
 # ── L2: user message 注入 ──────────────────────────────────────
 

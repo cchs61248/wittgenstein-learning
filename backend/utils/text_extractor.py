@@ -7,12 +7,29 @@ from pathlib import Path
 
 # PDF 垂直水印常拆成單字元行（如 Notion/BuildMoat 匯出的 grow.tao 側欄）
 _PDF_GLYPH_NOISE_LINE = re.compile(r"^[\.\-a-z]{1,2}$")
+# 側欄水印插入中文詞內：不l均、分散i式、加入時u會、簡單m。
+_PDF_CJK_INLINE_ASCII = re.compile(r"([\u4e00-\u9fff])([a-z])([\u4e00-\u9fff])")
+# 中文後多一個 ascii（簡單m、加入時u）再接標點/空白/中文
+_PDF_CJK_TRAILING_ASCII = re.compile(
+    r"([\u4e00-\u9fff])([a-z])(?=[\u4e00-\u9fff。，、；：！？\.\s\n]|$)"
+)
+# 可能是.幾百萬
+_PDF_CJK_DOT_CJK = re.compile(r"([\u4e00-\u9fff])\.([\u4e00-\u9fff])")
+# 規則很簡單： l
+_PDF_COLON_STRAY_ASCII = re.compile(r"([：:])\s*[a-z](?=\s*(?:\n|[1-9]|$))")
+# 英文詞後多餘字母：cache ring t、16384 t
+_PDF_EN_TRAILING_T = re.compile(r"(\w)\s+t(?=\s*(?:\n|->|$))")
+# Cluster r就是
+_PDF_EN_R_BEFORE_CJK = re.compile(r"([A-Za-z]{2,})\s+r([\u4e00-\u9fff])")
+# 行首 orphan l user_id
+_PDF_LINE_LEADING_ASCII = re.compile(r"(?m)^[a-z]\s+(?=[a-z_])")
 _PDF_INLINE_FIXES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"hash\(ukey\)", re.I), "hash(key)"),
     (re.compile(r"\bhashd\b", re.I), "hash"),
     (re.compile(r"\bhbash\b", re.I), "hash"),
     (re.compile(r"\bhashinog\b", re.I), "hashing"),
     (re.compile(r"\bmodurlo\b", re.I), "modulo"),
+    (re.compile(r"\bhotu\b", re.I), "hot"),
     (re.compile(r"grow\.tao", re.I), ""),
 )
 
@@ -90,11 +107,27 @@ def _clean_pdf_text(text: str) -> str:
 
     merged = "\n".join(kept)
     merged = re.sub(r"\n{3,}", "\n\n", merged)
+    merged = _fix_inline_watermark_chars(merged)
 
     for pattern, replacement in _PDF_INLINE_FIXES:
         merged = pattern.sub(replacement, merged)
     merged = re.sub(r"  +", " ", merged)
     return merged.strip()
+
+
+def _fix_inline_watermark_chars(text: str) -> str:
+    """第二輪：移除側欄水印插入中文/英文詞內的孤立 ascii。"""
+    prev = None
+    while prev != text:
+        prev = text
+        text = _PDF_CJK_INLINE_ASCII.sub(r"\1\3", text)
+        text = _PDF_CJK_TRAILING_ASCII.sub(r"\1", text)
+    text = _PDF_CJK_DOT_CJK.sub(r"\1\2", text)
+    text = _PDF_COLON_STRAY_ASCII.sub(r"\1", text)
+    text = _PDF_EN_TRAILING_T.sub(r"\1", text)
+    text = _PDF_EN_R_BEFORE_CJK.sub(r"\1 \2", text)
+    text = _PDF_LINE_LEADING_ASCII.sub("", text)
+    return text
 
 
 def _extract_docx(raw: bytes) -> str:

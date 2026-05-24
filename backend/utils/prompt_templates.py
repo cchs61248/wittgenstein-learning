@@ -56,7 +56,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
 規則 1-12 按主題分為 3 組：
 **A 切分結構（規則 1-6）** — stage 怎麼形成（granularity、相依、教材完整性）
 **B chunk 分配（規則 7-9）** — chunk 怎麼分到 stage（主軸對齊、並列方案）
-**C key_concepts 命名（規則 10-12）** — kc 命名收斂與防漂移
+**C key_concepts 命名（規則 10-13）** — kc 命名收斂與防漂移
 
 ═══ A 切分結構（規則 1-6）═══
 1. 每個階段必須是一個完整的「語言遊戲單元」——可以獨立理解
@@ -130,7 +130,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
    判別標準：若兩個帶連續編號的 stage 的 key_concepts overlap ≥ 60% 或標題核心名詞
    完全相同（如都含「信用貸款」），應合併為單一 stage，**不可保留兩個編號**。
 
-═══ C key_concepts 命名（規則 10-12）═══
+═══ C key_concepts 命名（規則 10-13）═══
 10. **概念命名簡潔優先（讓跨 session 個人化過濾實質生效）**：每個 stage 的 key_concept
     命名必須遵守以下規則：
     (a) **字數上限 8 字**（含中英數）：超過 8 字必須濃縮命名，例：「健保制度對醫師的薪資保障」
@@ -189,6 +189,14 @@ SYSTEM_PROMPTS: dict[str, str] = {
                             '政府信任', '通貨膨脹']（8 kc，後 4 個分散到 stage 2-N 更合適）
     範例（正確）：stage 1 = ['金融股', '零支付', '借錢炒股']（3 kc，純框架）；
                  「抄底時機」歸 stage N（抄底心法）、「通貨膨脹」歸 stage M（數字本位）。
+13. **summary / 面試 / 總結 stage 的 key_concepts 必須 anchor 到 chunk 字面**：
+    面試話術、Checklist、本章重點等收尾 stage 的 kc **禁止**使用 meta 標籤作為唯一概念
+    （如「章節總結」「本章重點」「補充內容」）——這些是 stage 分類標籤，不是可遷移概念。
+    每個 kc 必須能在該 stage 的 source_chunk_ids 原文中找到字面或同義 anchor：
+    - chunk 有「面試怎麼講」→ kc「面試答題框架」或「面試應答」（不可寫「章節總結」）
+    - chunk 有「routing layer」→ kc「路由層設計」
+    - chunk 有「managed database / partition ownership」→ kc「架構選型」或「系統分區判斷」
+    動機：summary stage 若 kc 全是 meta，QG 無法出有意義的測驗題、concept_mastery 也會被污染。
 
 【跨來源聚合原則（多來源時必須執行）】
 若教材標示了多個來源（以「=== 來源 N：標題 ===」區隔），請特別注意：
