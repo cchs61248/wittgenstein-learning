@@ -232,6 +232,11 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             orch.splitter.run.await_count, 1,
             "small_file 應只跑 1 次 splitter (mock verifier 永遠 aligned，無 reroll)",
         )
+        # outline 也應被 skip（C）
+        self.assertEqual(
+            orch.content_outliner.run.await_count, 0,
+            "small_file 應 bypass ContentOutline",
+        )
 
     async def test_v2_plan_b_skips_reducer(self):
         orch = _mk_orch_v2()

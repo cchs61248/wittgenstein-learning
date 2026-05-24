@@ -403,8 +403,11 @@ async def run_start_session_v2(
         await session_memory.purge_source_uploads(session_id, source_file_ids)
     await emit({"type": "session_generating", "payload": {"session_id": session_id}})
 
+    # early detect: small_file 跳過 ContentOutline（C）+ MacroRegionPlanner（A）
+    small_file = is_small_file(source_chunks)
+
     required_outline: dict | None = None
-    if source_chunks:
+    if source_chunks and not small_file:
         outline_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -421,7 +424,7 @@ async def run_start_session_v2(
         except Exception as e:
             _log.warning("v2 content_outline failed  session=%s  err=%s", session_id, e)
 
-    small_file = is_small_file(source_chunks)
+    # small_file 已在前面 early-detect（line 407）— 不重複偵測
     source_count = len(sources_manifest) or 1
     max_stages = compute_dynamic_max_stages(
         source_chunks, source_count=source_count, required_outline=required_outline,
