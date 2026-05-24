@@ -90,6 +90,7 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
   openai: [
     { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini — 穩定/成本平衡' },
     { id: 'gpt-5.4',      label: 'GPT-5.4 — 品質優先' },
+    { id: 'gpt-5.5',      label: 'GPT-5.5 — 最新' },
   ],
   gemini: [
     { id: 'gemini-3-flash-preview',        label: 'Gemini 3 Flash Preview — 預設' },
@@ -103,6 +104,7 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
     { id: 'claude-4.5-haiku',      label: 'Claude 4.5 Haiku — 快速' },
     { id: 'claude-4-sonnet',       label: 'Claude 4 Sonnet' },
     { id: 'claude-4-sonnet-think', label: 'Claude 4 Sonnet Think — 深度思考' },
+    { id: 'gpt-5.5',               label: 'GPT-5.5' },
     { id: 'gpt-5.4',               label: 'GPT-5.4' },
     { id: 'gpt-5.3-codex',         label: 'GPT-5.3 Codex' },
     { id: 'gpt-5.3',               label: 'GPT-5.3' },
