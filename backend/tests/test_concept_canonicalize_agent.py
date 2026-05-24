@@ -138,7 +138,11 @@ class TestCanonicalizeAgentFallback(unittest.IsolatedAsyncioTestCase):
         agent = _make_agent(llm)
         ctx = AgentContext(
             session_id="s1", user_id="u1",
-            task_payload={"new_concepts": ["A", "B"], "historical_pool": []},
+            task_payload={
+                "new_concepts": ["A", "B"],
+                "historical_pool": [{"concept_name": "X",
+                                     "total_exposures": 1, "last_tested": ""}],
+            },
         )
         result = await agent.run(ctx)
         decisions = {m["new_name"]: m["decision"] for m in result["mappings"]}
@@ -194,7 +198,11 @@ class TestCanonicalizeAgentFallback(unittest.IsolatedAsyncioTestCase):
         agent = _make_agent(llm)
         ctx = AgentContext(
             session_id="s1", user_id="u1",
-            task_payload={"new_concepts": ["A"], "historical_pool": []},
+            task_payload={
+                "new_concepts": ["A"],
+                "historical_pool": [{"concept_name": "X",
+                                     "total_exposures": 1, "last_tested": ""}],
+            },
         )
         result = await agent.run(ctx)
         self.assertEqual(result["mappings"][0]["decision"], "unsure")
@@ -209,10 +217,42 @@ class TestCanonicalizeAgentFallback(unittest.IsolatedAsyncioTestCase):
         agent = _make_agent(_BadLLM())
         ctx = AgentContext(
             session_id="s1", user_id="u1",
-            task_payload={"new_concepts": ["A"], "historical_pool": []},
+            task_payload={
+                "new_concepts": ["A"],
+                "historical_pool": [{"concept_name": "X",
+                                     "total_exposures": 1, "last_tested": ""}],
+            },
         )
         with self.assertRaises(Exception):
             await agent.run(ctx)
+
+
+class TestCanonicalizeAgentEarlyExit(unittest.IsolatedAsyncioTestCase):
+    """歷史空時直接 return all=new, 不呼叫 LLM (省 1 次 LLM call)."""
+
+    async def test_empty_historical_pool_skips_llm(self):
+        llm_called = {"count": 0}
+
+        class _Resp:
+            content = '{"mappings": []}'
+
+        class _LLM:
+            async def chat(self, messages, system_prompt=None):
+                llm_called["count"] += 1
+                return _Resp()
+
+        agent = _make_agent(_LLM())
+        ctx = AgentContext(
+            session_id="s1", user_id="u1",
+            task_payload={"new_concepts": ["A", "B", "C"], "historical_pool": []},
+        )
+        result = await agent.run(ctx)
+        self.assertEqual(llm_called["count"], 0, "歷史空時不該呼叫 LLM")
+        self.assertEqual(len(result["mappings"]), 3)
+        for m in result["mappings"]:
+            self.assertEqual(m["decision"], "new")
+            self.assertIsNone(m["canonical"])
+            self.assertEqual(m["reason"], "no historical pool")
 
 
 if __name__ == "__main__":

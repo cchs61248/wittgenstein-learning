@@ -28,6 +28,19 @@ class ConceptCanonicalizeAgent(BaseAgent):
             historical_count=len(historical_pool),
         )
 
+        # 早退：沒歷史就沒對齊對象，所有 new_concepts 直接標 decision=new，
+        # 不必呼叫 LLM。對首次學該教材的 session（multi-source 與 small_file 常見場景）
+        # 可省 1 次 LLM call。
+        if not historical_pool:
+            validated = [
+                {"new_name": name, "decision": "new", "canonical": None,
+                 "reason": "no historical pool"}
+                for name in new_concepts
+            ]
+            self._log_end(ctx, t0, {"mapped": 0, "new": len(validated), "unsure": 0,
+                                    "skipped": True})
+            return {"mappings": validated}
+
         self._add_message(
             MessageRole.USER,
             f"new_concepts={json.dumps(new_concepts, ensure_ascii=False)}\n\n"
