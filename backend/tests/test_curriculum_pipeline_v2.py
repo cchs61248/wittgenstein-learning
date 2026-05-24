@@ -196,6 +196,43 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(captured["stages"]), 1)
         self.assertIsNotNone(orch._pending_stages)
 
+    async def test_v2_small_file_skips_macro_region_planner(self):
+        """sess_live_e106b1a4 觀察：Rate Limiter 20 chunks 仍跑 MacroRegion + per-region
+        splitter（13 splitter + 10 verify = 23 LLM）。優化後 small_file 應 bypass
+        MacroRegionPlanner，直接 single split (1-2 splitter + 1-2 verify)。
+        """
+        orch = _mk_orch_v2()
+        macro_called = {"count": 0}
+
+        class _MacroSpy:
+            def __init__(self, *a, **kw): pass
+            async def run(self, ctx):
+                macro_called["count"] += 1
+                return {"regions": []}
+
+        with patch(
+            "backend.orchestrator.curriculum_pipeline_v2.MacroRegionPlannerAgent",
+            _MacroSpy,
+        ):
+            # default _chunks(30) 屬 small_file (threshold 50)。
+            # _run_v2 預設 SMALL_FILE_CHUNK_THRESHOLD=0 強制 large path，
+            # 這裡 override 回 default 觸發 small_file branch。
+            captured, events = await self._run_v2(
+                orch, env={"SMALL_FILE_CHUNK_THRESHOLD": "50"},
+            )
+
+        self.assertEqual(
+            macro_called["count"], 0,
+            "small_file 應 bypass MacroRegionPlanner",
+        )
+        # 仍應 emit region_done（single pseudo region）
+        self.assertIn("region_done", events)
+        # splitter 應只被呼叫 1 次（無 per-region 多次，本 test mock verifier 永遠 aligned）
+        self.assertEqual(
+            orch.splitter.run.await_count, 1,
+            "small_file 應只跑 1 次 splitter (mock verifier 永遠 aligned，無 reroll)",
+        )
+
     async def test_v2_plan_b_skips_reducer(self):
         orch = _mk_orch_v2()
         chunks = _chunks(20, "src_a") + [

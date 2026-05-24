@@ -258,6 +258,120 @@ def _splitter_stages_to_candidates(stages: list[dict], region: dict) -> list[dic
     return out
 
 
+async def _run_single_split(
+    *,
+    orch: "LearningOrchestrator",
+    session_id: str,
+    user_id: str,
+    source_chunks: list[dict],
+    target_depth: str,
+    max_stages: int,
+    required_outline: dict | None,
+    emit,
+) -> tuple[list[dict], str]:
+    """small_file path：一次 splitter call 處理整檔（bypass MacroRegion + per-region loop）。
+
+    對 ≤ small_file_chunk_threshold (default 50) 的教材：MacroRegionPlanner 切的
+    region 數 × per-region splitter+verifier+reroll 加總 LLM 用量極不合理
+    （sess_live_e106b1a4 Rate Limiter 20 chunks 跑了 23 次 splitter+verifier）。
+
+    替代流程：1 splitter + 1 verifier + 最多 1 次 reroll = 2-3 次 LLM 即可，
+    省 ~80% splitter 階段 LLM 用量。
+    """
+    splitter_ctx_payload: dict = {
+        "source_chunks": source_chunks,
+        "max_stages": max_stages,
+        "target_depth": target_depth,
+    }
+    if required_outline:
+        splitter_ctx_payload["required_outline"] = required_outline
+    ctx = AgentContext(
+        session_id=session_id, user_id=user_id, task_payload=splitter_ctx_payload,
+    )
+    try:
+        split_result = await orch.splitter.run(ctx)
+    except Exception as e:
+        _log.warning("v2 small_file split failed  session=%s  err=%s", session_id, e)
+        return [], ""
+    stages = split_result.get("stages") or []
+    summary = split_result.get("summary") or ""
+
+    verify_ctx = AgentContext(
+        session_id=session_id, user_id=user_id,
+        task_payload={"source_chunks": source_chunks, "stages": stages},
+    )
+    vresult: dict | None = None
+    try:
+        vresult = await orch.splitter_verifier.run(verify_ctx)
+    except Exception as e:
+        _log.warning("v2 small_file verifier error  session=%s  err=%s", session_id, e)
+
+    if vresult and not vresult.get("aligned"):
+        filtered = filter_false_verifier_misses(
+            vresult.get("missing_options") or [], stages, source_chunks,
+        )
+        if not filtered:
+            _log.info("v2 small_file verifier false positive filtered  session=%s", session_id)
+        else:
+            _log.warning(
+                "v2 small_file verifier failed  session=%s  missing=%s",
+                session_id, filtered,
+            )
+            repair_struct = vresult.get("repair_plan_struct") or {}
+            if not repair_struct.get("required_stage_titles") and required_outline:
+                repair_struct = {
+                    **repair_struct,
+                    "required_stage_titles": (
+                        required_outline.get("required_stage_titles") or []
+                    ),
+                }
+            reroll_ctx = AgentContext(
+                session_id=session_id, user_id=user_id,
+                task_payload={
+                    **splitter_ctx_payload,
+                    "previous_attempt_missed": filtered,
+                    "issue_chunk_ids": vresult.get("issue_chunk_ids") or [],
+                    "verifier_reason": vresult.get("reason", ""),
+                    "repair_plan_struct": repair_struct,
+                },
+            )
+            try:
+                rerolled = await orch.splitter.run(reroll_ctx)
+                rerolled_stages = rerolled.get("stages") or []
+                if rerolled_stages:
+                    stages = rerolled_stages
+                    _log.info(
+                        "v2 small_file reroll done  session=%s  stages=%d",
+                        session_id, len(stages),
+                    )
+            except Exception as e:
+                _log.warning(
+                    "v2 small_file reroll failed  session=%s  err=%s", session_id, e,
+                )
+
+    # 單一 pseudo region 涵蓋全 chunks（_splitter_stages_to_candidates 用 chunk_ids 過濾）
+    primary_source_id = (
+        source_chunks[0].get("source_id") if source_chunks else ""
+    ) or "src_0"
+    pseudo_region = {
+        "region_id": "region_single",
+        "source_id": primary_source_id,
+        "chunk_ids": [
+            c["chunk_id"] for c in source_chunks if c.get("chunk_id")
+        ],
+    }
+    candidates = _splitter_stages_to_candidates(stages, pseudo_region)
+    await emit({
+        "type": "region_done",
+        "payload": {
+            "session_id": session_id,
+            "region_id": "region_single",
+            "stage_count": len(stages),
+        },
+    })
+    return candidates, summary
+
+
 async def run_start_session_v2(
     orch: "LearningOrchestrator",
     *,
@@ -307,32 +421,59 @@ async def run_start_session_v2(
         except Exception as e:
             _log.warning("v2 content_outline failed  session=%s  err=%s", session_id, e)
 
-    regions = await MacroRegionPlannerAgent(orch.splitter.llm, orch.splitter.token_counter).run(
-        AgentContext(
-            session_id=session_id,
-            user_id=user_id,
-            task_payload={"source_chunks": source_chunks},
-        )
-    )
-    regions = regions.get("regions") or []
-    regions = enrich_regions_with_outline_topics(regions, required_outline, source_chunks)
     small_file = is_small_file(source_chunks)
-    if small_file:
-        zero_region_overlaps(regions)
-        _log.info("v2 small_file path  session=%s  chunks=%d", session_id, len(source_chunks))
-    await emit({
-        "type": "region_done",
-        "payload": {"session_id": session_id, "region_count": len(regions)},
-    })
-
     source_count = len(sources_manifest) or 1
     max_stages = compute_dynamic_max_stages(
         source_chunks, source_count=source_count, required_outline=required_outline,
     )
-    per_region_max = max(3, max_stages // max(len(regions), 1))
 
     all_candidates: list[dict] = []
     summary_parts: list[str] = []
+
+    if small_file:
+        # small_file path：bypass MacroRegionPlanner + per-region loop，省 ~20 次 LLM
+        _log.info(
+            "v2 small_file path (single-split)  session=%s  chunks=%d",
+            session_id, len(source_chunks),
+        )
+        await emit({
+            "type": "region_done",
+            "payload": {"session_id": session_id, "region_count": 1},
+        })
+        single_candidates, single_summary = await _run_single_split(
+            orch=orch,
+            session_id=session_id,
+            user_id=user_id,
+            source_chunks=source_chunks,
+            target_depth=target_depth,
+            max_stages=max_stages,
+            required_outline=required_outline,
+            emit=emit,
+        )
+        all_candidates.extend(single_candidates)
+        if single_summary:
+            summary_parts.append(single_summary)
+        regions = []  # 下游 region_done loop 不需執行
+    else:
+        regions_result = await MacroRegionPlannerAgent(
+            orch.splitter.llm, orch.splitter.token_counter
+        ).run(
+            AgentContext(
+                session_id=session_id,
+                user_id=user_id,
+                task_payload={"source_chunks": source_chunks},
+            )
+        )
+        regions = regions_result.get("regions") or []
+        regions = enrich_regions_with_outline_topics(
+            regions, required_outline, source_chunks,
+        )
+        await emit({
+            "type": "region_done",
+            "payload": {"session_id": session_id, "region_count": len(regions)},
+        })
+
+    per_region_max = max(3, max_stages // max(len(regions), 1)) if regions else max_stages
 
     for ri, region in enumerate(regions):
         region_chunks = slice_region_chunks(source_chunks, region, regions, ri)
