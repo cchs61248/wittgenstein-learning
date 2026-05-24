@@ -2,7 +2,19 @@
 本地文件解析模組：將上傳的檔案轉換為純文字。
 後端掌控文字抽取，不依賴 LLM Files API 作為主要教材來源。
 """
+import re
 from pathlib import Path
+
+# PDF 垂直水印常拆成單字元行（如 Notion/BuildMoat 匯出的 grow.tao 側欄）
+_PDF_GLYPH_NOISE_LINE = re.compile(r"^[\.\-a-z]{1,2}$")
+_PDF_INLINE_FIXES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"hash\(ukey\)", re.I), "hash(key)"),
+    (re.compile(r"\bhashd\b", re.I), "hash"),
+    (re.compile(r"\bhbash\b", re.I), "hash"),
+    (re.compile(r"\bhashinog\b", re.I), "hashing"),
+    (re.compile(r"\bmodurlo\b", re.I), "modulo"),
+    (re.compile(r"grow\.tao", re.I), ""),
+)
 
 
 def extract_text(filename: str, raw_bytes: bytes) -> str:
@@ -49,7 +61,7 @@ def _extract_pdf(raw: bytes) -> str:
                 text = page.extract_text(x_tolerance=2, y_tolerance=2)
                 if text:
                     pages.append(text.strip())
-            return "\n\n".join(pages)
+            return _clean_pdf_text("\n\n".join(pages))
     except ImportError:
         pass
 
@@ -61,7 +73,28 @@ def _extract_pdf(raw: bytes) -> str:
         text = page.extract_text()
         if text:
             pages.append(text.strip())
-    return "\n\n".join(pages)
+    return _clean_pdf_text("\n\n".join(pages))
+
+
+def _clean_pdf_text(text: str) -> str:
+    """移除 PDF 抽取常見噪音：垂直水印單字元行、已知行內水印殘留。"""
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            kept.append("")
+            continue
+        if _PDF_GLYPH_NOISE_LINE.match(stripped):
+            continue
+        kept.append(stripped)
+
+    merged = "\n".join(kept)
+    merged = re.sub(r"\n{3,}", "\n\n", merged)
+
+    for pattern, replacement in _PDF_INLINE_FIXES:
+        merged = pattern.sub(replacement, merged)
+    merged = re.sub(r"  +", " ", merged)
+    return merged.strip()
 
 
 def _extract_docx(raw: bytes) -> str:
