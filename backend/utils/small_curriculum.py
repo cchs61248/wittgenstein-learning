@@ -23,6 +23,8 @@ DUPLICATE_TITLE_THRESHOLD = 0.92
 ORPHAN_BULK_MAX_ATTACH_PER_STAGE = 3
 ORPHAN_STAGE_MAX_CHUNKS = 14
 STAGE_MAX_KEY_CONCEPTS = 8
+# Split mash-up stages that hit kc cap but still pack too many chunks (e.g. 8 kc + 11 chunks).
+KC_HEAVY_SPLIT_CHUNK_THRESHOLD = 7
 ORPHAN_OVERFLOW_BATCH_SIZE = 6
 _PAREN_SUFFIX_RE = re.compile(r"\s*[\(（].*?[\)）]\s*$")
 _GRADE_LABEL_RE = re.compile(r"[\(（]?\s*[AB]級[^\)）]*[\)）]?")
@@ -568,7 +570,7 @@ def best_chunk_for_case(
         text = str(chunk.get("text") or "")
         if not text:
             continue
-        if is_toc_listicle_chunk(chunk) or is_toc_cn_epub_chunk(chunk):
+        if is_toc_listicle_chunk(chunk) or is_toc_cn_epub_chunk(chunk) or is_epub_nav_junk_chunk(chunk):
             continue
         if intro_chunk_id and cid == intro_chunk_id:
             if not any(token in text for token in tokens):
@@ -775,6 +777,13 @@ _INTRO_TITLE_RE = re.compile(
     r"前言|序言|導言|緒論|投資心法|富人思維|行為財務學|決策偏誤",
     re.IGNORECASE,
 )
+
+
+def _is_intro_framework_stage(stage: dict) -> bool:
+    """Intro / framework stage — orphan attach and kc expansion should not bloat these."""
+    if (stage.get("kind") or "").strip().lower() in ("framework", "intro"):
+        return True
+    return bool(_INTRO_TITLE_RE.search(stage.get("title") or ""))
 
 
 def _normalize_title_for_merge(title: str) -> str:
@@ -1098,6 +1107,31 @@ def prune_phantom_key_concepts(
     return out
 
 
+def split_kc_heavy_stages(
+    stages: list[dict],
+    source_chunks: list[dict],
+    *,
+    max_chunks: int = KC_HEAVY_SPLIT_CHUNK_THRESHOLD,
+    min_kc: int = STAGE_MAX_KEY_CONCEPTS,
+) -> list[dict]:
+    """Split stages at kc cap that still pack too many chunks (reducer / orphan mash-up)."""
+    if not stages:
+        return stages
+    out: list[dict] = []
+    changed = False
+    for stage in stages:
+        ids = list(stage.get("source_chunk_ids") or [])
+        kcs = list(stage.get("key_concepts") or [])
+        if len(kcs) >= min_kc and len(ids) > max_chunks:
+            parts = split_oversized_stages([stage], source_chunks, max_chunks=max_chunks)
+            out.extend(parts)
+            if len(parts) > 1:
+                changed = True
+        else:
+            out.append(stage)
+    return _renumber_stages(out) if changed else out
+
+
 def split_oversized_stages(
     stages: list[dict],
     source_chunks: list[dict],
@@ -1212,6 +1246,34 @@ def _append_orphan_overflow_stages(
     return out
 
 
+def _find_best_orphan_attach_stage(
+    stages: list[dict],
+    orphan_order_index: int,
+    source_chunks: list[dict],
+    attach_counts: list[int],
+) -> int | None:
+    """Nearest non-intro stage with capacity; None → use overflow batch."""
+    best_i: int | None = None
+    best_dist = 10**9
+    for i, stage in enumerate(stages):
+        if _is_intro_framework_stage(stage):
+            continue
+        ids = stage.get("source_chunk_ids") or []
+        if not ids:
+            continue
+        anchor = min(_chunk_order_index(cid, source_chunks) for cid in ids)
+        dist = abs(orphan_order_index - anchor)
+        stage_ids = stage.get("source_chunk_ids") or []
+        at_chunk_cap = len(stage_ids) >= ORPHAN_STAGE_MAX_CHUNKS
+        at_attach_cap = attach_counts[i] >= ORPHAN_BULK_MAX_ATTACH_PER_STAGE
+        if at_chunk_cap or at_attach_cap:
+            continue
+        if dist < best_dist:
+            best_dist = dist
+            best_i = i
+    return best_i
+
+
 def ensure_orphan_chunks_attached(
     stages: list[dict],
     source_chunks: list[dict],
@@ -1255,21 +1317,8 @@ def ensure_orphan_chunks_attached(
         overflow: list[str] = []
         for oid in orphans:
             oidx = _chunk_order_index(oid, source_chunks)
-            best_i = 0
-            best_dist = 10**9
-            for i, stage in enumerate(out):
-                ids = stage.get("source_chunk_ids") or []
-                if not ids:
-                    continue
-                anchor = min(_chunk_order_index(cid, source_chunks) for cid in ids)
-                dist = abs(oidx - anchor)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_i = i
-            stage_ids = out[best_i].get("source_chunk_ids") or []
-            at_chunk_cap = len(stage_ids) >= ORPHAN_STAGE_MAX_CHUNKS
-            at_attach_cap = attach_counts[best_i] >= ORPHAN_BULK_MAX_ATTACH_PER_STAGE
-            if at_chunk_cap or at_attach_cap:
+            best_i = _find_best_orphan_attach_stage(out, oidx, source_chunks, attach_counts)
+            if best_i is None:
                 overflow.append(oid)
             else:
                 out[best_i] = _attach_chunk_to_stage(out[best_i], oid, by_id)
@@ -1429,6 +1478,9 @@ def ensure_key_concept_chunk_coverage(
     out: list[dict] = []
     for stage in stages:
         s = dict(stage)
+        if _is_intro_framework_stage(s):
+            out.append(s)
+            continue
         ids = list(s.get("source_chunk_ids") or [])
         kcs = [kc for kc in (s.get("key_concepts") or []) if kc]
         for kc in kcs:
@@ -1462,7 +1514,7 @@ def trim_intro_stage_first_chunk_only(
     stages: list[dict],
     source_chunks: list[dict],
 ) -> list[dict]:
-    """Intro/framework stage anchors at first chunk; expand contiguously if kc need later chunks."""
+    """Intro/framework stage keeps only the document's first chunk (no forward kc expansion)."""
     if not stages or not source_chunks:
         return stages
     ordered = sorted(source_chunks, key=lambda c: c.get("order_index", 0))
@@ -1473,14 +1525,8 @@ def trim_intro_stage_first_chunk_only(
     out: list[dict] = []
     for stage in stages:
         s = dict(stage)
-        title = s.get("title") or ""
-        if _INTRO_TITLE_RE.search(title) and first_cid in (s.get("source_chunk_ids") or []):
-            span_ids = _minimal_contiguous_chunks_for_kc(
-                first_cid,
-                s.get("key_concepts") or [],
-                source_chunks,
-            )
-            out.append(_attach_source_chunks_meta(s, span_ids, by_id))
+        if _is_intro_framework_stage(s) and first_cid in (s.get("source_chunk_ids") or []):
+            out.append(_attach_source_chunks_meta(s, [first_cid], by_id))
         else:
             out.append(s)
     return out
@@ -1496,6 +1542,7 @@ def normalize_stages_pre_verify(
     stages = prune_phantom_key_concepts(stages, source_chunks)
     stages = dedupe_key_concept_aliases(stages)
     stages = split_oversized_stages(stages, source_chunks)
+    stages = split_kc_heavy_stages(stages, source_chunks)
     stages = prune_intro_chunk_sharing(stages, source_chunks)
     stages = merge_duplicate_topic_stages(stages)
     stages = merge_empty_chunk_stages(stages)
@@ -1519,6 +1566,7 @@ def finalize_small_file_stages(
     stages = normalize_small_file_stages(stages, source_chunks)
     stages = ensure_orphan_chunks_attached(stages, source_chunks)
     stages = split_oversized_stages(stages, source_chunks)
+    stages = split_kc_heavy_stages(stages, source_chunks)
     stages = dedupe_key_concept_aliases(stages)
     stages = prune_phantom_key_concepts(stages, source_chunks)
     stages = ensure_empty_key_concepts(stages)
@@ -1527,6 +1575,52 @@ def finalize_small_file_stages(
 
 _TOC_RULE_LINE_RE = re.compile(r"^\s*法則\s*\d+")
 _CN_TOC_SECTION_RE = re.compile(r"^第[一二三四五六七八九十百零\d]+節")
+
+
+_EPUB_NAV_JUNK_HINTS = (
+    "發表新回應",
+    "書籍首頁",
+    "回書籍",
+    "回上一頁",
+    "下一頁",
+    "書刊介紹",
+    "購買紙本",
+    "電子書籍",
+    "版權聲明",
+    "前往購買",
+    "博客來",
+)
+
+
+def is_epub_nav_junk_chunk(chunk: dict) -> bool:
+    """EPUB 尾端導航 / 留言區 junk（非正文段落）。"""
+    text = str(chunk.get("text") or "").strip()
+    if not text or len(text) > 500:
+        return False
+    hits = sum(1 for hint in _EPUB_NAV_JUNK_HINTS if hint in text)
+    if hits >= 2:
+        return True
+    if hits >= 1 and len(text) < 150:
+        return True
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return hits >= 1 and len(lines) <= 4 and len(text) < 250
+
+
+def filter_epub_nav_junk_chunks(source_chunks: list[dict]) -> list[dict]:
+    """Drop nav junk chunks and re-index order_index / chunk_id."""
+    kept = [
+        c for c in source_chunks
+        if isinstance(c, dict) and c.get("chunk_id") and not is_epub_nav_junk_chunk(c)
+    ]
+    if len(kept) == len(source_chunks):
+        return source_chunks
+    out: list[dict] = []
+    for i, chunk in enumerate(kept):
+        c = dict(chunk)
+        c["chunk_id"] = f"chunk_{i:04d}"
+        c["order_index"] = i
+        out.append(c)
+    return out
 
 
 def is_toc_cn_epub_chunk(chunk: dict) -> bool:
@@ -1561,7 +1655,11 @@ def prune_toc_listicle_chunks(
     toc_ids = {
         c["chunk_id"]
         for c in source_chunks
-        if c.get("chunk_id") and (is_toc_listicle_chunk(c) or is_toc_cn_epub_chunk(c))
+        if c.get("chunk_id") and (
+            is_toc_listicle_chunk(c)
+            or is_toc_cn_epub_chunk(c)
+            or is_epub_nav_junk_chunk(c)
+        )
     }
     if not toc_ids:
         return stages

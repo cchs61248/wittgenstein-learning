@@ -26,6 +26,16 @@ TIER_LLM_BUDGET: dict[str, int] = {
 }
 
 
+def tier_llm_budget(source_chunks: list[dict]) -> int:
+    """Tier base budget; mid/large full-V2 paths scale with chunk count (~3 calls/chunk)."""
+    tier = curriculum_tier(source_chunks)
+    base = TIER_LLM_BUDGET.get(tier, TIER_LLM_BUDGET["large"])
+    n = len(source_chunks)
+    if tier in ("mid", "large"):
+        return max(base, n * 3)
+    return base
+
+
 def curriculum_tier(source_chunks: list[dict]) -> str:
     n = len(source_chunks)
     if is_small_file(source_chunks):
@@ -52,7 +62,7 @@ class CurriculumLlmMeter:
 
     def to_quality_warnings(self, source_chunks: list[dict]) -> dict[str, Any]:
         tier = curriculum_tier(source_chunks)
-        budget = TIER_LLM_BUDGET.get(tier, TIER_LLM_BUDGET["large"])
+        budget = tier_llm_budget(source_chunks)
         total = self.total
         return {
             "curriculum_llm_calls": total,

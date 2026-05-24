@@ -45,7 +45,9 @@ from ..utils.small_curriculum import (
     use_single_split_path,
     prune_toc_listicle_chunks,
     split_oversized_stages,
+    split_kc_heavy_stages,
     trim_stage_key_concepts,
+    filter_epub_nav_junk_chunks,
     zero_region_overlaps,
 )
 from ..utils.stage_budget import compute_dynamic_max_stages
@@ -481,6 +483,7 @@ async def run_start_session_v2(
     emit,
     source_file_ids: list[str] | None = None,
 ) -> None:
+    source_chunks = filter_epub_nav_junk_chunks(source_chunks)
     content_hash = compute_content_hash(source_chunks)
     sources_manifest = _build_sources_manifest(source_chunks)
     meter = CurriculumLlmMeter()
@@ -917,6 +920,7 @@ async def run_start_session_v2(
         if orphan_check.get("orphan_chunk_ids"):
             stages = ensure_orphan_chunks_attached(stages, source_chunks)
             stages = split_oversized_stages(stages, source_chunks)
+            stages = split_kc_heavy_stages(stages, source_chunks)
             stages = dedupe_key_concept_aliases(stages)
             stages = prune_phantom_key_concepts(stages, source_chunks)
             stages = trim_stage_key_concepts(stages)
@@ -931,6 +935,7 @@ async def run_start_session_v2(
         if orphan_after.get("orphan_chunk_ids"):
             stages = ensure_orphan_chunks_attached(stages, source_chunks)
             stages = split_oversized_stages(stages, source_chunks)
+            stages = split_kc_heavy_stages(stages, source_chunks)
             stages = trim_stage_key_concepts(stages)
 
     stages = finalize_curriculum_stages(stages, source_chunks)

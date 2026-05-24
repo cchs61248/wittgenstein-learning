@@ -49,15 +49,21 @@ def build_source_chunks(text: str) -> list[dict]:
     raw_chunks = _normalize_chunk_sizes(raw_chunks, target=600, max_chars=1000)
 
     # 組裝最終格式
+    from .small_curriculum import is_epub_nav_junk_chunk
+
     chunks = []
-    for i, chunk_text in enumerate(raw_chunks):
+    for chunk_text in raw_chunks:
         chunk_text = chunk_text.strip()
         if not chunk_text:
             continue
+        probe = {"text": chunk_text}
+        if is_epub_nav_junk_chunk(probe):
+            continue
+        idx = len(chunks)
         chunks.append({
-            "chunk_id": f"chunk_{i:04d}",
+            "chunk_id": f"chunk_{idx:04d}",
             "text": chunk_text,
-            "order_index": i,
+            "order_index": idx,
             "section_title": _extract_section_title(chunk_text),
             "char_start": _find_char_start(text, chunk_text),
             "char_end": None,  # 由 char_start + len 推導

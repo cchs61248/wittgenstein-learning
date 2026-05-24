@@ -7,6 +7,7 @@ from backend.utils.curriculum_llm_meter import (
     CurriculumLlmMeter,
     assess_curriculum_cost,
     curriculum_tier,
+    tier_llm_budget,
 )
 
 
@@ -99,6 +100,30 @@ class TestCurriculumLlmMeter(unittest.TestCase):
                 qw = assess_curriculum_cost(
                     session_id="s1", meter=meter, source_chunks=chunks,
                 )
+        self.assertFalse(qw["curriculum_llm_over_budget"])
+        mock_log.warning.assert_not_called()
+
+    def test_mid_tier_budget_scales_with_chunk_count(self):
+        chunks = [{"chunk_id": f"c{i}"} for i in range(86)]
+        with patch.dict("os.environ", {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            self.assertEqual(tier_llm_budget(chunks), 258)
+
+    def test_mid_session_224_calls_under_scaled_budget(self):
+        meter = CurriculumLlmMeter()
+        for _ in range(139):
+            meter.record("ContentSplitterAgent")
+        for _ in range(82):
+            meter.record("SplitterVerifierAgent")
+        meter.record("ContentOutlineAgent")
+        meter.record("MacroRegionPlannerAgent")
+        meter.record("GlobalCurriculumReducerAgent")
+        chunks = [{"chunk_id": f"c{i}"} for i in range(86)]
+        with patch.dict("os.environ", {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            with patch("backend.utils.curriculum_llm_meter._log") as mock_log:
+                qw = assess_curriculum_cost(
+                    session_id="meng_zi", meter=meter, source_chunks=chunks,
+                )
+        self.assertEqual(qw["curriculum_llm_budget"], 258)
         self.assertFalse(qw["curriculum_llm_over_budget"])
         mock_log.warning.assert_not_called()
 

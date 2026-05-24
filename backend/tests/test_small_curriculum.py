@@ -27,7 +27,12 @@ from backend.utils.small_curriculum import (
     prune_intro_chunk_sharing,
     prune_phantom_key_concepts,
     split_oversized_stages,
+    split_kc_heavy_stages,
+    trim_intro_stage_first_chunk_only,
     trim_stage_key_concepts,
+    is_epub_nav_junk_chunk,
+    filter_epub_nav_junk_chunks,
+    KC_HEAVY_SPLIT_CHUNK_THRESHOLD,
     zero_region_overlaps,
     ORPHAN_STAGE_MAX_CHUNKS,
     STAGE_MAX_KEY_CONCEPTS,
@@ -526,8 +531,8 @@ def _data_pipeline_chunks() -> list[dict]:
 
 
 class TestIntroStageKeyConceptCoverage(unittest.TestCase):
-    def test_intro_expands_contiguous_chunks_for_spark_kc(self):
-        """Data Pipeline regression: intro 選型 stage 須涵蓋 Spark/MapReduce chunk。"""
+    def test_intro_trimmed_to_first_chunk_not_forward_expanded(self):
+        """Intro 框架 stage 只保留首 chunk；Spark 等 kc 應由 splitter 分配到下游 stage。"""
         chunks = _data_pipeline_chunks()
         stages = [{
             "stage_id": 1,
@@ -537,8 +542,7 @@ class TestIntroStageKeyConceptCoverage(unittest.TestCase):
         }]
         normalized = normalize_stages_pre_verify(stages, chunks)
         ids = normalized[0]["source_chunk_ids"]
-        self.assertIn("chunk_0000", ids)
-        self.assertIn("chunk_0002", ids)
+        self.assertEqual(ids, ["chunk_0000"])
 
     def test_intro_stays_single_chunk_when_kc_covered(self):
         chunks = [
@@ -619,6 +623,83 @@ class TestOrphanAttach(unittest.TestCase):
         stages = [{"key_concepts": [f"c{i}" for i in range(12)]}]
         trimmed = trim_stage_key_concepts(stages, max_kc=8)
         self.assertEqual(len(trimmed[0]["key_concepts"]), 8)
+
+    def test_orphan_skips_intro_framework_stage(self):
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": f"p{i}", "order_index": i}
+            for i in range(8)
+        ]
+        stages = [
+            {
+                "stage_id": 1,
+                "title": "儒家政治與仁政框架",
+                "key_concepts": ["仁義"],
+                "source_chunk_ids": ["chunk_0000"],
+            },
+            {
+                "stage_id": 2,
+                "title": "告子篇",
+                "key_concepts": ["性善"],
+                "source_chunk_ids": ["chunk_0005"],
+            },
+        ]
+        fixed = ensure_orphan_chunks_attached(stages, chunks)
+        intro = next(s for s in fixed if "框架" in (s.get("title") or ""))
+        self.assertEqual(intro.get("source_chunk_ids"), ["chunk_0000"])
+        for cid in ("chunk_0001", "chunk_0002", "chunk_0003", "chunk_0004"):
+            self.assertNotIn(cid, intro.get("source_chunk_ids") or [])
+
+    def test_trim_intro_first_chunk_only(self):
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": f"仁義利 p{i}", "order_index": i}
+            for i in range(6)
+        ]
+        stages = [{
+            "stage_id": 1,
+            "title": "儒家仁政框架",
+            "key_concepts": ["仁義", "利"],
+            "source_chunk_ids": ["chunk_0000", "chunk_0001", "chunk_0002"],
+        }]
+        out = trim_intro_stage_first_chunk_only(stages, chunks)
+        self.assertEqual(out[0]["source_chunk_ids"], ["chunk_0000"])
+
+
+class TestEpubNavJunkFilter(unittest.TestCase):
+    def test_detects_nav_junk(self):
+        junk = {"text": "發表新回應\n書籍首頁\n回上一頁"}
+        self.assertTrue(is_epub_nav_junk_chunk(junk))
+        body = {"text": "孟子曰：仁義禮智，非由外鑠我也，我固有之也。" * 5}
+        self.assertFalse(is_epub_nav_junk_chunk(body))
+
+    def test_filter_reindexes_chunks(self):
+        chunks = [
+            {"chunk_id": "chunk_0000", "text": "正文段落 " * 20, "order_index": 0},
+            {"chunk_id": "chunk_0001", "text": "發表新回應 書籍首頁", "order_index": 1},
+            {"chunk_id": "chunk_0002", "text": "更多正文 " * 20, "order_index": 2},
+        ]
+        out = filter_epub_nav_junk_chunks(chunks)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["chunk_id"], "chunk_0000")
+        self.assertEqual(out[1]["chunk_id"], "chunk_0001")
+        self.assertEqual(out[1]["order_index"], 1)
+
+
+class TestKcHeavySplit(unittest.TestCase):
+    def test_split_kc_heavy_stage(self):
+        chunks = [
+            {"chunk_id": f"chunk_{i:04d}", "text": f"p{i}", "order_index": i}
+            for i in range(12)
+        ]
+        stages = [{
+            "stage_id": 29,
+            "title": "案例 mash-up",
+            "key_concepts": [f"kc{k}" for k in range(8)],
+            "source_chunk_ids": [f"chunk_{i:04d}" for i in range(11)],
+        }]
+        fixed = split_kc_heavy_stages(stages, chunks)
+        self.assertGreater(len(fixed), 1)
+        max_chunks = max(len(s.get("source_chunk_ids") or []) for s in fixed)
+        self.assertLessEqual(max_chunks, KC_HEAVY_SPLIT_CHUNK_THRESHOLD)
 
 
 class TestStageChunkCapAndKcHygiene(unittest.TestCase):
