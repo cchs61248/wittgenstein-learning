@@ -146,7 +146,9 @@ async def run_live_curriculum(
     user_id: str = DEFAULT_USER_ID,
 ) -> LiveRunResult:
     if full_v2:
-        os.environ["SMALL_FILE_CHUNK_THRESHOLD"] = "0"
+        # setdefault：default 行為不變（強制走 large path 驗 V2 full pipeline），
+        # 但外部可用 $env:SMALL_FILE_CHUNK_THRESHOLD=50 override 來測 small_file branch
+        os.environ.setdefault("SMALL_FILE_CHUNK_THRESHOLD", "0")
     source_chunks, per_source = probe_multi_source_chunks(source_paths)
     probe = _chunk_probe(source_chunks)
     print(
