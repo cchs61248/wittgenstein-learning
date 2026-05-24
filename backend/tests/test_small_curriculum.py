@@ -226,6 +226,43 @@ class TestFuzzyNamedCase(unittest.TestCase):
         )
         self.assertEqual(missing, [])
 
+    def test_1987_case_matches_contrarian_stage_with_cn_year(self):
+        """outline「1987 年…反向操作」對齊 stage「逆勢操作案例」+ chunk「一九八七年」。"""
+        chunks = [{
+            "chunk_id": "chunk_0041",
+            "text": "猶記得一九八七年市場崩盤，六名買方決定逆勢而行，下單買進道瓊指數買權。",
+            "order_index": 41,
+        }]
+        stages = [{
+            "title": "應變與逆勢操作案例",
+            "key_concepts": ["羊群心態", "逆勢操作心法"],
+            "source_chunk_ids": ["chunk_0041"],
+        }]
+        missing = filter_missing_named_cases(
+            ["1987 年市場崩盤與反向操作"],
+            stages,
+            chunks,
+        )
+        self.assertEqual(missing, [])
+
+    def test_1987_case_covered_when_chunks_orphan_attached_to_unrelated_stage(self):
+        chunks = [{
+            "chunk_id": "chunk_0041",
+            "text": "猶記得一九八七年市場崩盤，六名買方決定逆勢而行。",
+            "order_index": 41,
+        }]
+        stages = [{
+            "title": "複利武器與長期紀律",
+            "key_concepts": ["複利魔力", "均值回歸"],
+            "source_chunk_ids": ["chunk_0041"],
+        }]
+        missing = filter_missing_named_cases(
+            ["1987年股市崩盤與反向操作"],
+            stages,
+            chunks,
+        )
+        self.assertEqual(missing, [])
+
     def test_topic_alias_credit_loan(self):
         stages = [{
             "title": "借錢方案（二）：信貸與房貸壓力",

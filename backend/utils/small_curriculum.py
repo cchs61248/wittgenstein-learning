@@ -39,6 +39,8 @@ _TOPIC_ALIASES: dict[str, list[str]] = {
     "風林火山": ["風林火山", "肥羊波浪", "波浪理論", "蛛網交易"],
     "肥羊派流買法": ["肥羊派流", "肥羊派流買法", "流買法"],
     "股票質押": ["股票質押", "質押"],
+    "反向操作": ["反向操作", "逆勢操作", "逆勢操作心法", "逆勢而為"],
+    "逆勢操作": ["逆勢操作", "反向操作", "逆勢操作心法", "逆勢而為"],
 }
 _PAREN_INNER_RE = re.compile(r"[\(（]([^\)）]+)[\)）]")
 _CN_ENUM_LABEL_RE = re.compile(r"[（(][一二三四五六七八九十百千万\d]+[）)]")
@@ -46,6 +48,8 @@ _COLON_SUFFIX_RE = re.compile(r"^.+?[：:]\s*(.+)$")
 _GRADE_MISS_RE = re.compile(r"([SAB])\s*級")
 _CASE_PREFIX_RE = re.compile(r"^案例\s*實務?[：:]\s*|^案例[：:]\s*", re.IGNORECASE)
 _VS_SPLIT_RE = re.compile(r"\s+vs\s+", re.IGNORECASE)
+_ARABIC_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+_CN_DIGITS = "零一二三四五六七八九"
 
 
 def _topic_tokens(topic: str) -> list[str]:
@@ -201,6 +205,66 @@ def topic_covered_in_stages(topic: str, stages: list[dict]) -> bool:
     if _slash_topics_covered(topic, stages):
         return True
     return any(topic_covered_in_stage(s, topic) for s in stages)
+
+
+def _case_part_covered_globally(
+    part: str,
+    stages: list[dict],
+    chunks_by_id: dict[str, dict],
+    *,
+    threshold: float = CASE_MATCH_THRESHOLD,
+) -> bool:
+    """單一 case 子句是否已在任意 stage（title/kc/chunk 原文）出現。"""
+    part = part.strip()
+    if not part:
+        return False
+    if topic_covered_in_stages(part, stages):
+        return True
+    probes: list[str] = list(_topic_tokens(part))
+    year_match = _ARABIC_YEAR_RE.search(part)
+    if year_match:
+        probes.extend(_year_cn_variants(year_match.group(0)))
+    for kw in ("崩盤", "逆勢", "反向", "市場"):
+        if kw in part and kw not in probes:
+            probes.append(kw)
+    probes = [p for p in dict.fromkeys(probes) if len(p) >= 2]
+    for stage in stages:
+        hay = _stage_metadata_text(stage)
+        if any(p in hay for p in probes):
+            return True
+        for concept in stage.get("key_concepts") or []:
+            cstr = str(concept)
+            for p in probes:
+                if similarity(p, cstr) >= threshold:
+                    return True
+    for stage in stages:
+        for cid in stage.get("source_chunk_ids") or []:
+            text = str(chunks_by_id.get(cid, {}).get("text") or "")
+            if any(p in text for p in probes):
+                return True
+            if ("逆勢" in part or "反向" in part) and (
+                "逆勢" in text or "反向" in text
+            ):
+                return True
+    return False
+
+
+def _case_parts_covered_globally(
+    case_name: str,
+    stages: list[dict],
+    chunks_by_id: dict[str, dict],
+    *,
+    threshold: float = CASE_MATCH_THRESHOLD,
+) -> bool:
+    """「A與B」型 named case — 兩側在任意 stage 合併覆蓋即可（orphan attach 後也適用）。"""
+    core = normalize_case_name(case_name)
+    parts = [p.strip() for p in re.split(r"[與和]", core) if len(p.strip()) >= 2]
+    if len(parts) < 2:
+        return False
+    return all(
+        _case_part_covered_globally(part, stages, chunks_by_id, threshold=threshold)
+        for part in parts[:2]
+    )
 
 
 def _paren_enumeration_covered(label: str, stages: list[dict]) -> bool:
@@ -385,6 +449,67 @@ def normalize_case_name(case_name: str) -> str:
     return s
 
 
+def _year_cn_variants(year_str: str) -> list[str]:
+    """「1987」→ 阿拉伯數字 + 中文數字變體（chunk 原文常用「一九八七年」）。"""
+    year_str = str(year_str).strip()
+    if not year_str.isdigit():
+        return [year_str] if year_str else []
+    variants = [year_str, f"{year_str}年"]
+    cn = "".join(_CN_DIGITS[int(ch)] for ch in year_str if ch.isdigit())
+    if cn:
+        variants.extend([cn, f"{cn}年"])
+    return variants
+
+
+def _case_year_in_stage_chunks(
+    stage: dict,
+    case_name: str,
+    chunks_by_id: dict[str, dict],
+) -> bool:
+    """案例 stage 的 chunk 原文含 outline 年份（阿拉伯/中文數字皆可）。"""
+    title = (stage.get("title") or "").strip()
+    if "案例" not in title and "逆勢" not in title and "操作" not in title:
+        return False
+    years = _ARABIC_YEAR_RE.findall(str(case_name))
+    if not years:
+        return False
+    probes: list[str] = []
+    for year in years:
+        probes.extend(_year_cn_variants(year))
+    if not probes:
+        return False
+    for cid in stage.get("source_chunk_ids") or []:
+        text = str(chunks_by_id.get(cid, {}).get("text") or "")
+        if any(p in text for p in probes):
+            return True
+    return False
+
+
+def _case_and_parts_covered_in_stage(
+    stage: dict,
+    case_name: str,
+    chunks_by_id: dict[str, dict],
+    *,
+    threshold: float = CASE_MATCH_THRESHOLD,
+) -> bool:
+    """「1987 年市場崩盤與反向操作」— 與/和 兩側分別對齊 title/kc/chunk。"""
+    core = normalize_case_name(case_name)
+    parts = [p.strip() for p in re.split(r"[與和]", core) if len(p.strip()) >= 2]
+    if len(parts) < 2:
+        return False
+
+    def _part_ok(part: str) -> bool:
+        if topic_covered_in_stage(stage, part, threshold=threshold):
+            return True
+        if _ARABIC_YEAR_RE.search(part) and _case_year_in_stage_chunks(
+            stage, part, chunks_by_id,
+        ):
+            return True
+        return False
+
+    return all(_part_ok(part) for part in parts[:2])
+
+
 def _case_tokens(case_name: str) -> list[str]:
     case_str = str(case_name).strip()
     if not case_str:
@@ -554,6 +679,10 @@ def case_covered_in_stage(
         return True
     if topic_covered_in_stage(stage, case_name, threshold=threshold):
         return True
+    if _case_and_parts_covered_in_stage(
+        stage, case_name, chunks_by_id, threshold=threshold,
+    ):
+        return True
     if _case_covered_via_case_stage_chunk(title, stage, chunks_by_id, case_name):
         return True
     return False
@@ -572,15 +701,27 @@ def _case_covered_via_case_stage_chunk(
     words = [w for w in main.split() if len(w) >= 4]
     if not words and len(main) >= 4:
         words = [main]
-    if not words:
+    probes: list[str] = list(words)
+    for part in re.split(r"[與和]", main):
+        part = part.strip()
+        if len(part) >= 2:
+            probes.append(part)
+            probes.extend(_topic_tokens(part))
+    for year in _ARABIC_YEAR_RE.findall(case_name):
+        probes.extend(_year_cn_variants(year))
+    probes = [p for p in dict.fromkeys(probes) if len(p) >= 2]
+    if not probes:
         return False
     meta = title + " " + " ".join(str(c) for c in stage.get("key_concepts") or [])
     for cid in stage.get("source_chunk_ids") or []:
         text = str(chunks_by_id.get(cid, {}).get("text") or "")
-        if not any(w in text for w in words):
+        if not any(p in text for p in probes):
             continue
-        if any(w in title for w in words):
+        if any(p in title for p in probes):
             return True
+        for probe in probes:
+            if topic_covered_in_stage(stage, probe):
+                return True
         if "Limiter" in text and "限流" in meta:
             return True
         if "BuildMoat" in text and ("BuildMoat" in meta or "素材" in meta):
@@ -596,9 +737,13 @@ def case_covered_in_stages(
     threshold: float = CASE_MATCH_THRESHOLD,
 ) -> bool:
     by_id = chunks_lookup(source_chunks)
-    return any(
+    if any(
         case_covered_in_stage(s, case_name, by_id, threshold=threshold)
         for s in stages
+    ):
+        return True
+    return _case_parts_covered_globally(
+        case_name, stages, by_id, threshold=threshold,
     )
 
 

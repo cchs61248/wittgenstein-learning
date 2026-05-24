@@ -19,6 +19,7 @@ from ..utils.curriculum_reducer import attach_supporting_by_fuzzy_match, outcome
 from ..utils.fuzzy_match import concepts_match
 from ..utils.reducer_constants import MAX_MERGED_OUTCOME_CHUNKS
 from ..utils.region_planning import (
+    LISTICLE_REGION_SPLITTER_FLOOR,
     enrich_regions_with_outline_topics,
     is_listicle_source,
     slice_region_chunks,
@@ -262,6 +263,22 @@ def _splitter_stages_to_candidates(stages: list[dict], region: dict) -> list[dic
             "confidence": 0.9,
         })
     return out
+
+
+def _region_splitter_max_stages(
+    region: dict,
+    per_region_max: int,
+    *,
+    listicle: bool,
+) -> int:
+    """Cap splitter max_stages for one macro region (listicle books need more headroom)."""
+    expected = int(region.get("expected_stage_count") or 5)
+    headroom = 4 if listicle else 2
+    cap = expected + headroom
+    if listicle:
+        topic_count = len(region.get("must_cover_topics") or [])
+        cap = max(cap, min(topic_count + 2, per_region_max))
+    return min(per_region_max, cap)
 
 
 async def _run_single_split(
@@ -586,6 +603,9 @@ async def run_start_session_v2(
         })
 
     per_region_max = max(3, max_stages // max(len(regions), 1)) if regions else max_stages
+    listicle = is_listicle_source(source_chunks)
+    if listicle and regions:
+        per_region_max = max(per_region_max, LISTICLE_REGION_SPLITTER_FLOOR)
 
     for ri, region in enumerate(regions):
         region_chunks = slice_region_chunks(source_chunks, region, regions, ri)
@@ -593,7 +613,9 @@ async def run_start_session_v2(
             continue
         splitter_ctx_payload: dict = {
             "source_chunks": region_chunks,
-            "max_stages": min(per_region_max, region.get("expected_stage_count", 5) + 2),
+            "max_stages": _region_splitter_max_stages(
+                region, per_region_max, listicle=listicle,
+            ),
             "target_depth": target_depth,
         }
         if required_outline:

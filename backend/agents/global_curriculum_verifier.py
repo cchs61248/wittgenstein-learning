@@ -55,6 +55,11 @@ def _duplicate_titles(
         for j in range(i + 1, len(titles)):
             if not titles[j]:
                 continue
+            if (
+                stages[i].get("kind") == "follow_up_orphan"
+                and stages[j].get("kind") == "follow_up_orphan"
+            ):
+                continue
             if similarity(titles[i], titles[j]) >= threshold:
                 dupes.append(f"{titles[i]} ~ {titles[j]}")
                 continue

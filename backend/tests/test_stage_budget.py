@@ -23,6 +23,17 @@ class TestStageBudget(unittest.TestCase):
         outline = {"required_stage_titles": [], "named_cases": [f"c{i}" for i in range(12)]}
         self.assertGreaterEqual(compute_dynamic_max_stages(chunks, required_outline=outline), 48)
 
+    def test_listicle_rule_count_raises_budget(self):
+        chunks = [
+            {
+                "chunk_id": f"chunk_{i:04d}",
+                "section_title": f"法則 {i + 1}：標題",
+            }
+            for i in range(40)
+        ]
+        budget = compute_dynamic_max_stages(chunks)
+        self.assertGreaterEqual(budget, 40)
+
 
 if __name__ == "__main__":
     unittest.main()

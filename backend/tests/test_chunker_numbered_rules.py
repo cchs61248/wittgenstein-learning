@@ -59,6 +59,24 @@ class TestListicleRegionPlanning(unittest.TestCase):
         self.assertTrue(rule_regions)
         self.assertTrue(any("法則" in t for r in rule_regions for t in r["must_cover_topics"]))
 
+    def test_listicle_region_expected_stage_count_scales_with_rules(self):
+        chunks = []
+        for n in range(1, 25):
+            chunks.append({
+                "chunk_id": f"chunk_{n:04d}",
+                "order_index": n,
+                "section_title": f"法則 {n}：標題{n}",
+                "text": f"法則{n}\n標題{n}\n" + ("內容。" * 40),
+                "source_id": "book",
+            })
+        regions = plan_macro_regions(chunks, chunks_per_region=10)
+        rule_regions = [r for r in regions if r.get("must_cover_topics")]
+        self.assertTrue(rule_regions)
+        self.assertGreaterEqual(
+            max(int(r.get("expected_stage_count") or 0) for r in rule_regions),
+            8,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

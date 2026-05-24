@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .region_planning import count_listicle_rules, is_listicle_source
+
 
 def compute_dynamic_max_stages(
     source_chunks: list[dict],
@@ -18,4 +20,9 @@ def compute_dynamic_max_stages(
     named_cases = outline.get("named_cases") or []
     outline_demand = len(titles) + len(named_cases) + 5
     case_budget = len(named_cases) * 4
-    return max(30, chunk_based, outline_demand, case_budget)
+    budget = max(30, chunk_based, outline_demand, case_budget)
+    if is_listicle_source(source_chunks):
+        rule_count = count_listicle_rules(source_chunks)
+        if rule_count >= 10:
+            budget = max(budget, min(rule_count, 50))
+    return budget

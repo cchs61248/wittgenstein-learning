@@ -8,6 +8,9 @@ from typing import Any
 from .small_curriculum import _case_tokens
 
 _RULE_SECTION_RE = re.compile(r"^法則\s*\d+", re.IGNORECASE)
+LISTICLE_MAX_EXPECTED_STAGES = 14
+LISTICLE_MAX_TOPICS_PER_REGION = 12
+LISTICLE_REGION_SPLITTER_FLOOR = 16
 
 
 def overlap_chunk_count(region_size: int) -> int:
@@ -29,7 +32,11 @@ def _listicle_rule_ratio(chunks: list[dict]) -> float:
     return rule_count / len(chunks)
 
 
-def _listicle_must_cover_topics(group: list[dict], *, max_topics: int = 8) -> list[str]:
+def _listicle_must_cover_topics(
+    group: list[dict],
+    *,
+    max_topics: int = LISTICLE_MAX_TOPICS_PER_REGION,
+) -> list[str]:
     topics: list[str] = []
     for c in group:
         title = (c.get("section_title") or "").strip()
@@ -41,6 +48,13 @@ def _listicle_must_cover_topics(group: list[dict], *, max_topics: int = 8) -> li
 def is_listicle_source(source_chunks: list[dict]) -> bool:
     """True when ≥40% chunks carry 法則 N section titles (numbered-rule books)."""
     return _listicle_rule_ratio(source_chunks) >= 0.4
+
+
+def count_listicle_rules(source_chunks: list[dict]) -> int:
+    """Count chunks whose section_title is a numbered 法則 heading."""
+    return sum(
+        1 for c in source_chunks if _is_numbered_rule_title(c.get("section_title"))
+    )
 
 
 def _group_key(chunk: dict) -> tuple:
@@ -132,8 +146,17 @@ def plan_macro_regions(
             overlap = overlap_chunk_count(len(group))
             cover_topics = _listicle_must_cover_topics(group) if listicle else []
             expected = max(1, min(8, math.ceil(len(group) / 3)))
+            if listicle:
+                rule_in_region = sum(
+                    1 for c in group if _is_numbered_rule_title(c.get("section_title"))
+                )
+                expected = max(
+                    expected,
+                    min(rule_in_region, LISTICLE_MAX_EXPECTED_STAGES),
+                )
             if cover_topics:
-                expected = max(expected, min(len(cover_topics), 8))
+                cap = LISTICLE_MAX_EXPECTED_STAGES if listicle else 8
+                expected = max(expected, min(len(cover_topics), cap))
             regions.append({
                 "region_id": f"region_{region_idx:03d}",
                 "source_id": str(source_id),
@@ -186,6 +209,9 @@ def enrich_regions_with_outline_topics(
     """將 content outline 的 named_cases / titles 依 chunk 歸屬注入 region must_cover_topics。"""
     if not regions or not required_outline:
         return regions
+
+    if is_listicle_source(source_chunks):
+        max_topics_per_region = max(max_topics_per_region, LISTICLE_MAX_TOPICS_PER_REGION)
 
     by_id = {c["chunk_id"]: c for c in source_chunks if c.get("chunk_id")}
     topics: list[str] = []

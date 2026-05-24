@@ -39,6 +39,36 @@ class TestGlobalCurriculumVerifier(unittest.TestCase):
         self.assertFalse(result["aligned"])
         self.assertTrue(result["duplicate_titles"])
 
+    def test_follow_up_orphan_batches_not_duplicate(self):
+        """Orphan overflow stages intentionally share generic titles."""
+        stages = [
+            {
+                "title": "主題",
+                "key_concepts": ["複利"],
+                "source_chunk_ids": ["chunk_0001"],
+            },
+            {
+                "title": "補充段落（1）",
+                "key_concepts": ["章節補充"],
+                "source_chunk_ids": ["chunk_0068"],
+                "kind": "follow_up_orphan",
+            },
+            {
+                "title": "補充段落（2）",
+                "key_concepts": ["章節補充"],
+                "source_chunk_ids": ["chunk_0069"],
+                "kind": "follow_up_orphan",
+            },
+        ]
+        chunks = [
+            _chunk("chunk_0001"),
+            _chunk("chunk_0068"),
+            _chunk("chunk_0069"),
+        ]
+        result = verify_global_coverage(stages, chunks)
+        self.assertEqual(result["duplicate_titles"], [])
+        self.assertTrue(result["aligned"])
+
     def test_enum_stripped_duplicate_with_kc_overlap_fails(self):
         # sess_live_2834df87 案例：splitter 把信用貸款的不同子細節
         # 切成 (一) + (二) 兩個編號 stage，主軸都是「信貸」。
