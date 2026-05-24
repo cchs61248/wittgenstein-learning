@@ -137,6 +137,30 @@ def probe_multi_source_chunks(
     return all_chunks, per_source
 
 
+def _env_file_value(key: str) -> str | None:
+    if not _env_path.exists():
+        return None
+    for line in _env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith(";") or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() == key:
+            return v.strip()
+    return None
+
+
+def _apply_small_file_threshold(*, full_v2: bool) -> None:
+    """Apply threshold from backend/.env; avoid stale shell SMALL_FILE_CHUNK_THRESHOLD=0."""
+    if full_v2:
+        os.environ["SMALL_FILE_CHUNK_THRESHOLD"] = "0"
+        return
+    from backend.utils.small_curriculum import DEFAULT_SMALL_FILE_CHUNK_THRESHOLD
+
+    raw = _env_file_value("SMALL_FILE_CHUNK_THRESHOLD")
+    os.environ["SMALL_FILE_CHUNK_THRESHOLD"] = raw or str(DEFAULT_SMALL_FILE_CHUNK_THRESHOLD)
+
+
 async def run_live_curriculum(
     source_paths: list[Path],
     *,
@@ -145,8 +169,7 @@ async def run_live_curriculum(
     run_stage1: bool,
     user_id: str = DEFAULT_USER_ID,
 ) -> LiveRunResult:
-    if full_v2:
-        os.environ["SMALL_FILE_CHUNK_THRESHOLD"] = "0"
+    _apply_small_file_threshold(full_v2=full_v2)
     source_chunks, per_source = probe_multi_source_chunks(source_paths)
     probe = _chunk_probe(source_chunks)
     print(

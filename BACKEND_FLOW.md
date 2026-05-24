@@ -624,6 +624,12 @@ class WorkingMemory:
                 │   └── emit knowledge_map（可含 quality_warnings → 前端 QualityWarningBanner）
                 │
                 └── 【V2 路徑】`curriculum_pipeline_v2.run_start_session_v2`（`CURRICULUM_PIPELINE_V2=1`）
+                        ├── **小檔三路徑**（`len(chunks) ≤ SMALL_FILE_CHUNK_THRESHOLD`，預設 50）：
+                        │     │ `use_single_split_path`（1 source）→ `_run_single_split`（bypass outline / macro / reducer）
+                        │     │ `use_per_source_split_path`（2+ sources）→ `_run_per_source_split`（每 source 各跑 single-split，合併 candidates）
+                        │     │ else → **full V2**（見下）
+                        │     log：`v2 small_file path (single-split|per-source-split)`；`quality_warnings` 含 `small_file_path`、`multi_source_split`、`source_count`
+                        │     `--full-v2` / `SMALL_FILE_CHUNK_THRESHOLD=0` 強制 full path（live 工具 `live_small_file_curriculum_test.py --full-v2`）
                         ├── MacroRegionPlannerAgent → `plan_macro_regions` + 可選 LLM refinement
                         │     tier (a) source_id + section_title 分組；oversized group（>40 chunks）強制 fixed-size 切（避免 epub 共用 section_title 退化為 1-region）
                         │     tier (b) 無 section_title → fixed-size 25 chunks 切
@@ -1470,6 +1476,8 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `GO_NOGO_LLM_PROVIDER` | — | 真 LLM Go/No-Go 測試用 provider 覆寫（預設 `DEFAULT_PROVIDER`） |
 | `RUN_LLM_TESTS` | — | 設 `1` 才執行 `pytest -m llm_live` 真 LLM gate |
 | `MACRO_REGION_USE_LLM` | `0` | V2 tier-3：`1` 啟用 MacroRegionPlanner LLM metadata refinement（補 title/expected_stage_count/must_cover_topics，不重切邊界） |
+| `SMALL_FILE_CHUNK_THRESHOLD` | `50` | `len(chunks) ≤ N` 走 small_file 路徑（single / per-source）；`0` 強制 full V2 |
+| `SMALL_FILE_FORCE_OUTLINE` | `0` | 測試用：`1` 時 small_file 仍額外跑 ContentOutline（production 預設 off） |
 
 > Schema contract：`docs/superpowers/specs/2026-05-22-curriculum-v2-schema.md`
 

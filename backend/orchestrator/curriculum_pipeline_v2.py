@@ -38,6 +38,9 @@ from ..utils.small_curriculum import (
     normalize_case_name,
     normalize_stages_pre_verify,
     prune_phantom_key_concepts,
+    source_count as count_sources,
+    use_per_source_split_path,
+    use_single_split_path,
     prune_toc_listicle_chunks,
     split_oversized_stages,
     trim_stage_key_concepts,
@@ -373,6 +376,60 @@ async def _run_single_split(
     return candidates, summary
 
 
+async def _run_per_source_split(
+    *,
+    orch: "LearningOrchestrator",
+    session_id: str,
+    user_id: str,
+    source_chunks: list[dict],
+    sources_manifest: list[dict],
+    target_depth: str,
+    max_stages: int,
+    required_outline: dict | None,
+    emit,
+) -> tuple[list[dict], str]:
+    """multi-source small_file：每 source 各跑 single-split，再合併 candidates。"""
+    n_sources = len(sources_manifest) or 1
+    per_source_max = max(3, max_stages // n_sources)
+    all_candidates: list[dict] = []
+    summary_parts: list[str] = []
+
+    await emit({
+        "type": "region_done",
+        "payload": {"session_id": session_id, "region_count": n_sources},
+    })
+
+    for src in sources_manifest:
+        sid = src.get("source_id") or f"src_{src.get('source_index', 0)}"
+        idx = src.get("source_index", 0)
+        subset = [
+            c for c in source_chunks
+            if isinstance(c, dict)
+            and (
+                (c.get("source_id") or f"src_{c.get('source_index', 0)}") == sid
+                or c.get("source_index") == idx
+            )
+        ]
+        if not subset:
+            continue
+        candidates, summary = await _run_single_split(
+            orch=orch,
+            session_id=session_id,
+            user_id=user_id,
+            source_chunks=subset,
+            target_depth=target_depth,
+            max_stages=per_source_max,
+            required_outline=required_outline,
+            emit=emit,
+        )
+        all_candidates.extend(candidates)
+        if summary:
+            summary_parts.append(summary)
+
+    combined = " ".join(s for s in summary_parts if s).strip()
+    return all_candidates, combined
+
+
 async def run_start_session_v2(
     orch: "LearningOrchestrator",
     *,
@@ -405,10 +462,15 @@ async def run_start_session_v2(
     await emit({"type": "session_generating", "payload": {"session_id": session_id}})
 
     # early detect: small_file 跳過 ContentOutline（C）+ MacroRegionPlanner（A）
-    small_file = is_small_file(source_chunks)
+    single_split = use_single_split_path(source_chunks)
+    per_source_split = use_per_source_split_path(source_chunks)
+    small_file = single_split or per_source_split
 
     required_outline: dict | None = None
-    if source_chunks and not small_file:
+    force_outline = os.getenv("SMALL_FILE_FORCE_OUTLINE", "0").strip().lower() in (
+        "1", "true", "yes",
+    )
+    if source_chunks and (not small_file or force_outline):
         outline_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -425,17 +487,17 @@ async def run_start_session_v2(
         except Exception as e:
             _log.warning("v2 content_outline failed  session=%s  err=%s", session_id, e)
 
-    # small_file 已在前面 early-detect（line 407）— 不重複偵測
-    source_count = len(sources_manifest) or 1
+    # small_file 已在前面 early-detect — 不重複偵測
+    n_sources = count_sources(source_chunks)
     max_stages = compute_dynamic_max_stages(
-        source_chunks, source_count=source_count, required_outline=required_outline,
+        source_chunks, source_count=n_sources, required_outline=required_outline,
     )
 
     all_candidates: list[dict] = []
     summary_parts: list[str] = []
 
-    if small_file:
-        # small_file path：bypass MacroRegionPlanner + per-region loop，省 ~20 次 LLM
+    if single_split:
+        # small_file single-source：bypass MacroRegionPlanner + per-region loop
         _log.info(
             "v2 small_file path (single-split)  session=%s  chunks=%d",
             session_id, len(source_chunks),
@@ -458,6 +520,26 @@ async def run_start_session_v2(
         if single_summary:
             summary_parts.append(single_summary)
         regions = []  # 下游 region_done loop 不需執行
+    elif per_source_split:
+        _log.info(
+            "v2 small_file path (per-source-split)  session=%s  chunks=%d  sources=%d",
+            session_id, len(source_chunks), n_sources,
+        )
+        per_candidates, per_summary = await _run_per_source_split(
+            orch=orch,
+            session_id=session_id,
+            user_id=user_id,
+            source_chunks=source_chunks,
+            sources_manifest=sources_manifest,
+            target_depth=target_depth,
+            max_stages=max_stages,
+            required_outline=required_outline,
+            emit=emit,
+        )
+        all_candidates.extend(per_candidates)
+        if per_summary:
+            summary_parts.append(per_summary)
+        regions = []
     else:
         regions_result = await MacroRegionPlannerAgent(
             orch.splitter.llm, orch.splitter.token_counter
@@ -602,6 +684,9 @@ async def run_start_session_v2(
     if small_file:
         stages = candidates_to_stages_flat(all_candidates, chunks_lookup)
         quality_warnings = {"small_file_path": True, "reducer_skipped": True}
+        if per_source_split:
+            quality_warnings["multi_source_split"] = True
+            quality_warnings["source_count"] = n_sources
         reduce_metrics["outcome_count"] = len(all_candidates)
     elif use_plan_b:
         stages, plan_b_qw = _build_plan_b_stages(

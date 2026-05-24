@@ -28,6 +28,8 @@ class GoldenSource:
 _DOWNLOADS = Path.home() / "Downloads"
 _EPUB_BOOK = Path(r"C:\Users\dqaiot\Documents\aaron\epub\book")
 
+_EPUB_OUTPUT = Path(r"C:\Users\dqaiot\Documents\aaron\epub\output\億元肥羊零成本買股術 - 翁建原")
+
 GOLDEN_SOURCES: tuple[GoldenSource, ...] = (
     GoldenSource(
         id="api_design",
@@ -108,6 +110,27 @@ GOLDEN_SOURCES: tuple[GoldenSource, ...] = (
         min_chunks=80,
         min_section_titles=0,
         notes="法則 N listicle; titles often in body not section_title field",
+    ),
+    GoldenSource(
+        id="multi_source_small",
+        archetype="multi_chapter_txt",
+        label="億元肥羊 4章 txt（per-source small）",
+        candidate_paths=tuple(
+            str(_EPUB_OUTPUT / name)
+            for name in (
+                "004_第2章 借掉輸家性格 借錢養大金融股.txt",
+                "008_第6章 複製莊家思維 建立零風險贏家賽局.txt",
+                "009_第7章 5次借錢炒股 勝率100%的獲利真相.txt",
+                "010_第8章 借力使力 開啟無本炒股人生.txt",
+            )
+        ),
+        min_chunks=30,
+        min_section_titles=0,
+        full_v2=False,
+        notes=(
+            "4 sources ~39 chunks total; per-source-split path. "
+            "Full 8 chapters ~106 chunks → full V2 unless threshold raised."
+        ),
     ),
 )
 

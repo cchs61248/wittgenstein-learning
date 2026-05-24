@@ -461,6 +461,24 @@ def is_small_file(source_chunks: list[dict]) -> bool:
     return len(source_chunks) <= small_file_chunk_threshold()
 
 
+def source_count(source_chunks: list[dict]) -> int:
+    if not source_chunks:
+        return 1
+    return len({
+        c.get("source_id") or f"src_{c.get('source_index', 0)}"
+        for c in source_chunks
+        if isinstance(c, dict)
+    }) or 1
+
+
+def use_single_split_path(source_chunks: list[dict]) -> bool:
+    return is_small_file(source_chunks) and source_count(source_chunks) <= 1
+
+
+def use_per_source_split_path(source_chunks: list[dict]) -> bool:
+    return is_small_file(source_chunks) and source_count(source_chunks) > 1
+
+
 def is_compact_curriculum(source_chunks: list[dict]) -> bool:
     """Small-file path or short PDFs/epubs that need finalize even when full V2 is forced."""
     return is_small_file(source_chunks) or len(source_chunks) <= COMPACT_FINALIZE_CHUNK_MAX

@@ -19,6 +19,9 @@ from backend.utils.small_curriculum import (
     is_compact_curriculum,
     is_small_file,
     merge_duplicate_topic_stages,
+    source_count,
+    use_per_source_split_path,
+    use_single_split_path,
     merge_empty_chunk_stages,
     normalize_stages_pre_verify,
     prune_intro_chunk_sharing,
@@ -119,6 +122,44 @@ class TestSmallFileDetection(unittest.TestCase):
         with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "0"}, clear=False):
             self.assertFalse(is_small_file(chunks))
             self.assertTrue(is_compact_curriculum(chunks))
+
+
+class TestSmallFilePathHelpers(unittest.TestCase):
+    def test_source_count_distinct_ids(self):
+        chunks = [
+            {"chunk_id": "a", "source_id": "s1"},
+            {"chunk_id": "b", "source_id": "s2"},
+            {"chunk_id": "c", "source_id": "s1"},
+        ]
+        self.assertEqual(source_count(chunks), 2)
+
+    def test_source_count_fallback_source_index(self):
+        chunks = [
+            {"chunk_id": "a", "source_index": 0},
+            {"chunk_id": "b", "source_index": 1},
+        ]
+        self.assertEqual(source_count(chunks), 2)
+
+    def test_single_split_one_source(self):
+        chunks = [{"chunk_id": f"c{i}", "source_id": "only"} for i in range(10)]
+        with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            self.assertTrue(use_single_split_path(chunks))
+            self.assertFalse(use_per_source_split_path(chunks))
+
+    def test_per_source_split_multi(self):
+        chunks = [
+            {"chunk_id": "a", "source_id": "s1"},
+            {"chunk_id": "b", "source_id": "s2"},
+        ]
+        with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            self.assertFalse(use_single_split_path(chunks))
+            self.assertTrue(use_per_source_split_path(chunks))
+
+    def test_large_file_neither_small_path(self):
+        chunks = [{"chunk_id": f"c{i}", "source_id": f"s{i % 2}"} for i in range(51)]
+        with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
+            self.assertFalse(use_single_split_path(chunks))
+            self.assertFalse(use_per_source_split_path(chunks))
 
 
 class TestFuzzyNamedCase(unittest.TestCase):

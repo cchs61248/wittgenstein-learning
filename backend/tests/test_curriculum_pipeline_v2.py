@@ -20,6 +20,21 @@ def _chunks(n: int = 30, source_id: str = "src_a") -> list[dict]:
     ]
 
 
+def _multi_source_chunks(n_per_source: int = 10) -> list[dict]:
+    chunks: list[dict] = []
+    for src_idx, src_id in enumerate(["src_a", "src_b"]):
+        for i in range(n_per_source):
+            chunks.append({
+                "chunk_id": f"chunk_{src_id}_{i:04d}",
+                "text": f"段落 {i} 關於概念 alpha beta gamma",
+                "source_id": src_id,
+                "source_index": src_idx,
+                "source_label": f"書{src_id}",
+                "section_title": f"第 {i // 5 + 1} 章",
+            })
+    return chunks
+
+
 def _mk_orch_v2() -> LearningOrchestrator:
     orch = LearningOrchestrator.__new__(LearningOrchestrator)
     orch.content_outliner = MagicMock()
@@ -113,6 +128,7 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         self,
         orch,
         *,
+        source_chunks: list[dict] | None = None,
         env: dict | None = None,
         reducer_outcomes=None,
         reducer_result: dict | None = None,
@@ -173,7 +189,7 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
                 orch,
                 session_id="sess_v2",
                 user_id="u1",
-                source_chunks=_chunks(),
+                source_chunks=source_chunks or _chunks(),
                 target_depth="standard",
                 question_mode="multiple_choice",
                 provider_name="claude",
@@ -237,6 +253,40 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             orch.content_outliner.run.await_count, 0,
             "small_file 應 bypass ContentOutline",
         )
+
+    async def test_v2_multi_source_small_file_per_source_split(self):
+        """2 sources × 10 chunks：per-source split，各 1 次 splitter，無 outline/reducer。"""
+        orch = _mk_orch_v2()
+        macro_called = {"count": 0}
+
+        class _MacroSpy:
+            def __init__(self, *a, **kw): pass
+            async def run(self, ctx):
+                macro_called["count"] += 1
+                return {"regions": []}
+
+        with patch(
+            "backend.orchestrator.curriculum_pipeline_v2.MacroRegionPlannerAgent",
+            _MacroSpy,
+        ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.GlobalCurriculumReducerAgent",
+        ) as reducer_cls:
+            captured, events = await self._run_v2(
+                orch,
+                source_chunks=_multi_source_chunks(10),
+                env={"SMALL_FILE_CHUNK_THRESHOLD": "50"},
+            )
+
+        self.assertEqual(macro_called["count"], 0)
+        reducer_cls.assert_not_called()
+        self.assertEqual(orch.splitter.run.await_count, 2)
+        self.assertEqual(orch.content_outliner.run.await_count, 0)
+        qw = captured["quality_warnings"] or {}
+        self.assertTrue(qw.get("small_file_path"))
+        self.assertTrue(qw.get("multi_source_split"))
+        self.assertEqual(qw.get("source_count"), 2)
+        self.assertTrue(qw.get("reducer_skipped"))
+        self.assertIn("region_done", events)
 
     async def test_v2_plan_b_skips_reducer(self):
         orch = _mk_orch_v2()
