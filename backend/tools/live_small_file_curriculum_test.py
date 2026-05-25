@@ -20,6 +20,13 @@ Cleanup sess_live_* without LLM (also run after manual verification):
 
     .\\backend\\.venv\\Scripts\\python.exe backend\\tools\\live_small_file_curriculum_test.py --cleanup-all
 
+In-process 測試會直接寫 data/learning.db。若 Docker worker 在跑，請先：
+    docker compose stop curriculum-worker
+或改用 Docker worker + live_arq_verify.py（長教材 Arq 模式）。
+
+檢查 worker 狀態：
+    .\\backend\\.venv\\Scripts\\python.exe backend\\tools\\check_curriculum_workers.py
+
 Sessions are deleted by default when the run finishes. Use --keep only if you still
 need the session in DB for inspect_session.py; delete afterward with --cleanup-all.
 """
@@ -314,9 +321,11 @@ async def main(
     keep: bool,
     cleanup_all: bool,
     run_stage1: bool,
+    force_in_process: bool,
 ) -> None:
     from backend.db.database import init_db, close_db
     from backend.utils.logger import setup_logging
+    from backend.tools.curriculum_worker_guard import DbContentionError, assert_no_db_contention
 
     setup_logging()
     await init_db(str(ROOT / "data" / "learning.db"))
@@ -330,6 +339,14 @@ async def main(
         return
 
     _require_live_llm_opt_in()
+
+    if not cleanup_all:
+        try:
+            assert_no_db_contention(allow_in_process=force_in_process)
+        except DbContentionError as e:
+            print(e, file=sys.stderr)
+            await close_db()
+            return
 
     missing = [p for p in source_paths if not p.exists()]
     if missing:
@@ -377,6 +394,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Delete all sess_live_* sessions for the test user, then exit",
     )
+    parser.add_argument(
+        "--force-in-process",
+        action="store_true",
+        help="Skip worker contention check (stop Docker/local arq first)",
+    )
     args = parser.parse_args()
     paths = sorted(Path(p) for p in args.sources)
     asyncio.run(main(
@@ -385,4 +407,5 @@ if __name__ == "__main__":
         keep=args.keep,
         cleanup_all=args.cleanup_all,
         run_stage1=args.run_stage1,
+        force_in_process=args.force_in_process,
     ))

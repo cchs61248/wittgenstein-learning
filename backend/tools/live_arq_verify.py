@@ -1,17 +1,15 @@
 """Live verification: 155-chunk curriculum via Arq worker.
 
 Usage (from wittgenstein-learning/):
-  Terminal 1 — worker:
-    $env:CURRICULUM_PIPELINE_V2="1"
-    $env:REDIS_URL="redis://localhost:6379/0"
-    ..\\.venv\\Scripts\\python.exe -m arq backend.jobs.arq_settings.WorkerSettings
+  Terminal 1 — Docker worker（唯一 DB writer）:
+    docker compose up -d
+    docker compose logs -f curriculum-worker
 
-  Terminal 2 — this script (prepare + enqueue + monitor):
+  Terminal 2 — prepare + enqueue + monitor（本機只寫 enqueue，不跑 in-process pipeline）:
+    ..\\.venv\\Scripts\\python.exe backend/tools/check_curriculum_workers.py
     ..\\.venv\\Scripts\\python.exe backend/tools/live_arq_verify.py
 
-  Optional API path (requires API restart with CURRICULUM_USE_ARQ=1):
-    docker compose up -d   # redis + worker
-    API with CURRICULUM_USE_ARQ=1
+  API（CURRICULUM_USE_ARQ=1）可另開 uvicorn；勿同時跑本機 python -m arq。
 """
 from __future__ import annotations
 
@@ -200,6 +198,13 @@ async def _monitor(job_id: str | None) -> None:
 
 
 async def main() -> None:
+    from backend.tools.curriculum_worker_guard import DbContentionError, assert_docker_worker_ready
+
+    try:
+        assert_docker_worker_ready()
+    except DbContentionError as e:
+        raise SystemExit(str(e)) from e
+
     os.environ.setdefault("CURRICULUM_PIPELINE_V2", "1")
     info = _prepare_session()
     print("Prepared session:", json.dumps(info, ensure_ascii=False), flush=True)
