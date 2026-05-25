@@ -14,6 +14,7 @@ from ..agents.global_curriculum_verifier import verify_global_coverage
 from ..agents.macro_region_planner import MacroRegionPlannerAgent
 from ..agents.stage_composer import StageComposerAgent
 from ..memory import session_memory
+from ..memory import curriculum_checkpoint as ckpt_mem
 from ..utils.canonicalize_apply import apply_canonical_mappings
 from ..utils.curriculum_reducer import attach_supporting_by_fuzzy_match, outcomes_to_stages
 from ..utils.fuzzy_match import concepts_match
@@ -470,6 +471,52 @@ async def _run_per_source_split(
     return all_candidates, combined
 
 
+async def _load_resume_checkpoint(
+    session_id: str, content_hash: str,
+) -> tuple[dict | None, bool]:
+    checkpoint = await ckpt_mem.load_checkpoint(session_id)
+    if not checkpoint:
+        return None, False
+    if checkpoint["content_hash"] != content_hash:
+        await ckpt_mem.delete_checkpoint(session_id)
+        return None, False
+    return checkpoint, True
+
+
+def _meter_from_checkpoint(checkpoint: dict | None) -> CurriculumLlmMeter:
+    meter = CurriculumLlmMeter()
+    if checkpoint:
+        meter.breakdown = dict(checkpoint.get("meter_breakdown") or {})
+    return meter
+
+
+async def _save_checkpoint(
+    session_id: str,
+    content_hash: str,
+    *,
+    pipeline_meta: dict | None = None,
+    required_outline: dict | None = None,
+    regions: list | None = None,
+    completed_region_ids: list | None = None,
+    all_candidates: list | None = None,
+    summary_parts: list | None = None,
+    meter: CurriculumLlmMeter | None = None,
+    last_region_id: str | None = None,
+) -> None:
+    await ckpt_mem.upsert_checkpoint(
+        session_id,
+        content_hash=content_hash,
+        pipeline_meta=pipeline_meta,
+        required_outline=required_outline,
+        regions=regions,
+        completed_region_ids=completed_region_ids,
+        all_candidates=all_candidates,
+        summary_parts=summary_parts,
+        meter_breakdown=dict(meter.breakdown) if meter else None,
+        last_region_id=last_region_id,
+    )
+
+
 async def run_start_session_v2(
     orch: "LearningOrchestrator",
     *,
@@ -486,21 +533,50 @@ async def run_start_session_v2(
     source_chunks = filter_epub_nav_junk_chunks(source_chunks)
     content_hash = compute_content_hash(source_chunks)
     sources_manifest = _build_sources_manifest(source_chunks)
-    meter = CurriculumLlmMeter()
+
+    checkpoint, resuming = await _load_resume_checkpoint(session_id, content_hash)
+    if resuming and checkpoint:
+        _log.info(
+            "v2 checkpoint resume  session=%s  skip_regions=%d",
+            session_id,
+            len(checkpoint.get("completed_region_ids") or []),
+        )
+
+    meter = _meter_from_checkpoint(checkpoint)
+    pipeline_meta: dict = {
+        "user_id": user_id,
+        "target_depth": target_depth,
+        "question_mode": question_mode,
+        "provider_name": provider_name,
+        "model_name": model_name,
+    }
+    if checkpoint:
+        pipeline_meta = {**checkpoint.get("pipeline_meta", {}), **pipeline_meta}
 
     _log.info(
-        "start_session_v2  session=%s  chunks=%d  sources=%d",
-        session_id, len(source_chunks), len(sources_manifest),
+        "start_session_v2  session=%s  chunks=%d  sources=%d  resuming=%s",
+        session_id, len(source_chunks), len(sources_manifest), resuming,
     )
 
-    await session_memory.create_generating_stub(
-        session_id, user_id, content_hash,
-        source_file_ids=source_file_ids or [],
-        sources_json=sources_manifest,
-    )
-    await session_memory.insert_source_chunks(session_id, source_chunks)
-    if source_file_ids:
-        await session_memory.purge_source_uploads(session_id, source_file_ids)
+    db_chunks = await session_memory.get_source_chunks(session_id) if resuming else []
+    if resuming and db_chunks:
+        if not source_chunks:
+            source_chunks = db_chunks
+    else:
+        await session_memory.create_generating_stub(
+            session_id, user_id, content_hash,
+            source_file_ids=source_file_ids or [],
+            sources_json=sources_manifest,
+            provider_name=provider_name,
+            model_name=model_name,
+            question_mode=question_mode,
+            target_depth=target_depth,
+        )
+        await session_memory.insert_source_chunks(session_id, source_chunks)
+        if source_file_ids:
+            await session_memory.purge_source_uploads(session_id, source_file_ids)
+        await _save_checkpoint(session_id, content_hash, pipeline_meta=pipeline_meta)
+
     await emit({"type": "session_generating", "payload": {"session_id": session_id}})
 
     # early detect: small_file 跳過 ContentOutline（C）+ MacroRegionPlanner（A）
@@ -509,10 +585,12 @@ async def run_start_session_v2(
     small_file = single_split or per_source_split
 
     required_outline: dict | None = None
+    if resuming and checkpoint and checkpoint.get("required_outline") is not None:
+        required_outline = checkpoint["required_outline"]
     force_outline = os.getenv("SMALL_FILE_FORCE_OUTLINE", "0").strip().lower() in (
         "1", "true", "yes",
     )
-    if source_chunks and (not small_file or force_outline):
+    if required_outline is None and source_chunks and (not small_file or force_outline):
         outline_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -527,6 +605,12 @@ async def run_start_session_v2(
                 len(required_outline.get("named_cases") or []),
                 len(required_outline.get("required_stage_titles") or []),
             )
+            await _save_checkpoint(
+                session_id, content_hash,
+                pipeline_meta=pipeline_meta,
+                required_outline=required_outline,
+                meter=meter,
+            )
         except Exception as e:
             _log.warning("v2 content_outline failed  session=%s  err=%s", session_id, e)
 
@@ -536,70 +620,117 @@ async def run_start_session_v2(
         source_chunks, source_count=n_sources, required_outline=required_outline,
     )
 
-    all_candidates: list[dict] = []
-    summary_parts: list[str] = []
+    all_candidates: list[dict] = (
+        list(checkpoint.get("all_candidates") or []) if resuming and checkpoint else []
+    )
+    summary_parts: list[str] = (
+        list(checkpoint.get("summary_parts") or []) if resuming and checkpoint else []
+    )
+    completed_region_ids: set[str] = (
+        set(checkpoint.get("completed_region_ids") or []) if resuming and checkpoint else set()
+    )
+    saved_path = (checkpoint or {}).get("pipeline_meta", {}).get("pipeline_path")
 
     if single_split:
-        # small_file single-source：bypass MacroRegionPlanner + per-region loop
-        _log.info(
-            "v2 small_file path (single-split)  session=%s  chunks=%d",
-            session_id, len(source_chunks),
-        )
-        await emit({
-            "type": "region_done",
-            "payload": {"session_id": session_id, "region_count": 1},
-        })
-        single_candidates, single_summary = await _run_single_split(
-            orch=orch,
-            session_id=session_id,
-            user_id=user_id,
-            source_chunks=source_chunks,
-            target_depth=target_depth,
-            max_stages=max_stages,
-            required_outline=required_outline,
-            emit=emit,
-            meter=meter,
-        )
-        all_candidates.extend(single_candidates)
-        if single_summary:
-            summary_parts.append(single_summary)
-        regions = []  # 下游 region_done loop 不需執行
-    elif per_source_split:
-        _log.info(
-            "v2 small_file path (per-source-split)  session=%s  chunks=%d  sources=%d",
-            session_id, len(source_chunks), n_sources,
-        )
-        per_candidates, per_summary = await _run_per_source_split(
-            orch=orch,
-            session_id=session_id,
-            user_id=user_id,
-            source_chunks=source_chunks,
-            sources_manifest=sources_manifest,
-            target_depth=target_depth,
-            max_stages=max_stages,
-            required_outline=required_outline,
-            emit=emit,
-            meter=meter,
-        )
-        all_candidates.extend(per_candidates)
-        if per_summary:
-            summary_parts.append(per_summary)
-        regions = []
-    else:
-        regions_result = await MacroRegionPlannerAgent(
-            orch.splitter.llm, orch.splitter.token_counter
-        ).run(
-            AgentContext(
+        if resuming and saved_path == "single_split" and all_candidates:
+            _log.info("v2 checkpoint skip single_split  session=%s", session_id)
+            regions = []
+        else:
+            _log.info(
+                "v2 small_file path (single-split)  session=%s  chunks=%d",
+                session_id, len(source_chunks),
+            )
+            await emit({
+                "type": "region_done",
+                "payload": {"session_id": session_id, "region_count": 1},
+            })
+            single_candidates, single_summary = await _run_single_split(
+                orch=orch,
                 session_id=session_id,
                 user_id=user_id,
-                task_payload={"source_chunks": source_chunks},
+                source_chunks=source_chunks,
+                target_depth=target_depth,
+                max_stages=max_stages,
+                required_outline=required_outline,
+                emit=emit,
+                meter=meter,
             )
-        )
-        meter.record("MacroRegionPlannerAgent")
-        regions = regions_result.get("regions") or []
-        regions = enrich_regions_with_outline_topics(
-            regions, required_outline, source_chunks,
-        )
+            all_candidates.extend(single_candidates)
+            if single_summary:
+                summary_parts.append(single_summary)
+            await _save_checkpoint(
+                session_id, content_hash,
+                pipeline_meta={**pipeline_meta, "pipeline_path": "single_split"},
+                required_outline=required_outline,
+                all_candidates=all_candidates,
+                summary_parts=summary_parts,
+                completed_region_ids=["__single_split__"],
+                meter=meter,
+            )
+            regions = []
+    elif per_source_split:
+        if resuming and saved_path == "per_source_split" and all_candidates:
+            _log.info("v2 checkpoint skip per_source_split  session=%s", session_id)
+            regions = []
+        else:
+            _log.info(
+                "v2 small_file path (per-source-split)  session=%s  chunks=%d  sources=%d",
+                session_id, len(source_chunks), n_sources,
+            )
+            per_candidates, per_summary = await _run_per_source_split(
+                orch=orch,
+                session_id=session_id,
+                user_id=user_id,
+                source_chunks=source_chunks,
+                sources_manifest=sources_manifest,
+                target_depth=target_depth,
+                max_stages=max_stages,
+                required_outline=required_outline,
+                emit=emit,
+                meter=meter,
+            )
+            all_candidates.extend(per_candidates)
+            if per_summary:
+                summary_parts.append(per_summary)
+            await _save_checkpoint(
+                session_id, content_hash,
+                pipeline_meta={**pipeline_meta, "pipeline_path": "per_source_split"},
+                required_outline=required_outline,
+                all_candidates=all_candidates,
+                summary_parts=summary_parts,
+                completed_region_ids=["__per_source_split__"],
+                meter=meter,
+            )
+            regions = []
+    else:
+        if resuming and checkpoint and checkpoint.get("regions"):
+            regions = checkpoint["regions"]
+            _log.info(
+                "v2 checkpoint skip MacroRegionPlanner  session=%s  regions=%d",
+                session_id, len(regions),
+            )
+        else:
+            regions_result = await MacroRegionPlannerAgent(
+                orch.splitter.llm, orch.splitter.token_counter
+            ).run(
+                AgentContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    task_payload={"source_chunks": source_chunks},
+                )
+            )
+            meter.record("MacroRegionPlannerAgent")
+            regions = regions_result.get("regions") or []
+            regions = enrich_regions_with_outline_topics(
+                regions, required_outline, source_chunks,
+            )
+            await _save_checkpoint(
+                session_id, content_hash,
+                pipeline_meta={**pipeline_meta, "pipeline_path": "region_loop"},
+                required_outline=required_outline,
+                regions=regions,
+                meter=meter,
+            )
         await emit({
             "type": "region_done",
             "payload": {"session_id": session_id, "region_count": len(regions)},
@@ -611,6 +742,9 @@ async def run_start_session_v2(
         per_region_max = max(per_region_max, LISTICLE_REGION_SPLITTER_FLOOR)
 
     for ri, region in enumerate(regions):
+        rid = region.get("region_id") or f"region_{ri:03d}"
+        if rid in completed_region_ids:
+            continue
         region_chunks = slice_region_chunks(source_chunks, region, regions, ri)
         if not region_chunks:
             continue
@@ -706,6 +840,22 @@ async def run_start_session_v2(
                 )
 
         all_candidates.extend(_splitter_stages_to_candidates(region_stages, region))
+        completed_region_ids.add(rid)
+        await _save_checkpoint(
+            session_id, content_hash,
+            pipeline_meta={**pipeline_meta, "pipeline_path": "region_loop"},
+            required_outline=required_outline,
+            regions=regions,
+            completed_region_ids=list(completed_region_ids),
+            all_candidates=all_candidates,
+            summary_parts=summary_parts,
+            meter=meter,
+            last_region_id=rid,
+        )
+        _log.info(
+            "v2 checkpoint saved  session=%s  region=%s  done=%d/%d",
+            session_id, rid, len(completed_region_ids), len(regions),
+        )
         await emit({
             "type": "region_done",
             "payload": {
@@ -974,6 +1124,8 @@ async def run_start_session_v2(
         session_id=session_id, meter=meter, source_chunks=source_chunks,
     )
     quality_warnings = {**(quality_warnings or {}), **cost_qw}
+
+    await ckpt_mem.delete_checkpoint(session_id)
 
     await session_memory.create_pending_session(
         session_id=session_id,

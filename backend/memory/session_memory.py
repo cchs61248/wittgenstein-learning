@@ -65,6 +65,10 @@ async def create_generating_stub(
     content_hash: str,
     source_file_ids: list[str] | None = None,
     sources_json: list[dict] | None = None,
+    provider_name: str | None = None,
+    model_name: str | None = None,
+    question_mode: str | None = None,
+    target_depth: str | None = None,
 ) -> None:
     """ContentSplitter 執行前建立佔位記錄，讓書櫃在 LLM 呼叫期間持久顯示「生成中」。"""
     db = await get_db()
@@ -73,17 +77,33 @@ async def create_generating_stub(
     await db.execute(
         """INSERT OR IGNORE INTO sessions
            (session_id, user_id, content_hash, total_stages, status, title,
-            source_file_ids_json, sources_json)
-           VALUES (?, ?, ?, 0, 'generating', '生成中…', ?, ?)""",
-        (session_id, user_id, content_hash, file_ids_json, sources_json_str),
+            source_file_ids_json, sources_json, provider_name, model_name,
+            question_mode, target_depth)
+           VALUES (?, ?, ?, 0, 'generating', '生成中…', ?, ?, ?, ?, ?, ?)""",
+        (
+            session_id, user_id, content_hash, file_ids_json, sources_json_str,
+            provider_name, model_name, question_mode, target_depth,
+        ),
     )
-    # 若 stub 已存在（重試），補寫 file_ids
+    # 若 stub 已存在（重試），補寫 file_ids 與 start 參數
     await db.execute(
         """UPDATE sessions
            SET source_file_ids_json = ?,
-               sources_json = COALESCE(?, sources_json)
+               sources_json = COALESCE(?, sources_json),
+               provider_name = COALESCE(?, provider_name),
+               model_name = COALESCE(?, model_name),
+               question_mode = COALESCE(?, question_mode),
+               target_depth = COALESCE(?, target_depth)
            WHERE session_id = ? AND status = 'generating'""",
-        (file_ids_json, sources_json_str if sources_json else None, session_id),
+        (
+            file_ids_json,
+            sources_json_str if sources_json else None,
+            provider_name,
+            model_name,
+            question_mode,
+            target_depth,
+            session_id,
+        ),
     )
     await db.commit()
 
@@ -124,6 +144,8 @@ async def abandon_generating_stub(session_id: str) -> None:
 
     await _delete_session_upload_blobs(session_id)
     await db.execute("DELETE FROM source_chunks WHERE session_id = ?", (session_id,))
+    from . import curriculum_checkpoint as ckpt
+    await ckpt.delete_checkpoint(session_id)
     await db.execute(
         """UPDATE sessions
            SET status = 'abandoned', source_file_ids_json = '[]'

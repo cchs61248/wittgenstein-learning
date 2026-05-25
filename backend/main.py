@@ -73,6 +73,23 @@ async def lifespan(app: FastAPI):
             )
     except Exception as e:
         ws_logger().warning(f"upload_gc failed on startup: {e}")
+    # 自動續跑中斷的 curriculum pipeline（generating + checkpoint + source_chunks）
+    try:
+        from .memory import curriculum_checkpoint as ckpt
+        from .orchestrator.curriculum_resume import resume_generating_session_background
+
+        for sid in await ckpt.list_resumable_sessions():
+            ws_logger().info("curriculum: scheduling background resume  session=%s", sid)
+            asyncio.create_task(
+                resume_generating_session_background(
+                    sid,
+                    lambda provider, model: create_provider(
+                        provider or DEFAULT_PROVIDER, model=model,
+                    ),
+                )
+            )
+    except Exception as e:
+        ws_logger().warning(f"curriculum auto-resume failed on startup: {e}")
     yield
     await close_db()
     ws_logger().info("Wittgenstein Learning System shutting down")
@@ -418,7 +435,10 @@ async def websocket_endpoint(
                             emit=emit,
                         )
                     except asyncio.CancelledError:
-                        await session_memory.abandon_generating_stub(session_id)
+                        _ws_log.info(
+                            "start_session cancelled (shutdown?)  session=%s  checkpoint preserved",
+                            session_id,
+                        )
                         raise
                     except Exception as e:
                         await emit({"type": "error", "payload": {"message": f"啟動會話失敗：{e}"}})

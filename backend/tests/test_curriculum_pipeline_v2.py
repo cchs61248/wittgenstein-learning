@@ -176,6 +176,18 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.insert_source_chunks",
             new=AsyncMock(),
         ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.session_memory.get_source_chunks",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.ckpt_mem.load_checkpoint",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.ckpt_mem.upsert_checkpoint",
+            new=AsyncMock(),
+        ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.ckpt_mem.delete_checkpoint",
+            new=AsyncMock(),
+        ), patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.create_pending_session",
             new=AsyncMock(side_effect=_capture_pending),
         ), patch(
@@ -317,6 +329,18 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(),
         ), patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.insert_source_chunks",
+            new=AsyncMock(),
+        ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.session_memory.get_source_chunks",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.ckpt_mem.load_checkpoint",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.ckpt_mem.upsert_checkpoint",
+            new=AsyncMock(),
+        ), patch(
+            "backend.orchestrator.curriculum_pipeline_v2.ckpt_mem.delete_checkpoint",
             new=AsyncMock(),
         ), patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.create_pending_session",

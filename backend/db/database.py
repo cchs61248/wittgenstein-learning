@@ -290,6 +290,38 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
+    # Migration 022：curriculum pipeline region checkpoint（重啟續跑）
+    await _connection.execute(
+        """CREATE TABLE IF NOT EXISTS curriculum_checkpoints (
+            session_id            TEXT PRIMARY KEY REFERENCES sessions(session_id),
+            content_hash          TEXT NOT NULL,
+            pipeline_version      TEXT NOT NULL DEFAULT 'v2',
+            pipeline_meta_json    TEXT NOT NULL DEFAULT '{}',
+            required_outline_json TEXT,
+            regions_json          TEXT,
+            completed_region_ids_json TEXT NOT NULL DEFAULT '[]',
+            all_candidates_json   TEXT NOT NULL DEFAULT '[]',
+            summary_parts_json    TEXT NOT NULL DEFAULT '[]',
+            meter_json            TEXT NOT NULL DEFAULT '{}',
+            last_region_id        TEXT,
+            updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    await _connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_curriculum_ckpt_updated "
+        "ON curriculum_checkpoints(updated_at)"
+    )
+    await _connection.commit()
+
+    # Migration 023：generating 期間持久化 target_depth
+    try:
+        await _connection.execute(
+            "ALTER TABLE sessions ADD COLUMN target_depth TEXT DEFAULT NULL"
+        )
+        await _connection.commit()
+    except Exception:
+        pass
+
 
 async def close_db() -> None:
     global _connection
