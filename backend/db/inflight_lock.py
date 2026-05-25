@@ -1,6 +1,8 @@
 """DB-backed inflight lock — 跨 worker dedup 的 acquire/release/is_active CRUD。"""
+import ctypes
 import os
 import sqlite3
+import sys
 import time
 from typing import Optional
 
@@ -8,12 +10,36 @@ from .database import get_db
 from ..utils.logger import ws_logger
 
 
+def _pid_alive_windows(pid: int) -> bool:
+    """Windows: os.kill(pid, 0) 會 WinError 87，改用 OpenProcess。"""
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    ERROR_ACCESS_DENIED = 5
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # 程序存在但無權限 → 視為仍存活，避免誤刪 lock
+        if ctypes.get_last_error() == ERROR_ACCESS_DENIED:
+            return True
+        return False
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _pid_alive(pid: int) -> bool:
     if pid is None or pid <= 0:
         return False
     try:
+        if sys.platform == "win32":
+            return _pid_alive_windows(int(pid))
         os.kill(pid, 0)
-    except OSError:
+    except (OSError, SystemError, ValueError, OverflowError):
         return False
     return True
 
