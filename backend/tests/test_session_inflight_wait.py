@@ -29,6 +29,19 @@ class TestSessionInflightDb(unittest.IsolatedAsyncioTestCase):
         await release("sess_a:answer:q1")
         self.assertFalse(await has_session_inflight("sess_a"))
 
+    async def test_has_session_inflight_exclude_kinds(self):
+        await acquire("sess_b", session_id="sess_b", kind="resume_session")
+        self.assertTrue(await has_session_inflight("sess_b"))
+        self.assertFalse(
+            await has_session_inflight("sess_b", exclude_kinds=("resume_session",))
+        )
+        await acquire("sess_b:answer:q1", session_id="sess_b", kind="submit_answer")
+        self.assertTrue(
+            await has_session_inflight("sess_b", exclude_kinds=("resume_session",))
+        )
+        await release("sess_b")
+        await release("sess_b:answer:q1")
+
 
 class TestWaitForSessionIdle(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -117,8 +130,10 @@ class TestResumeFromStoredInflightGuard(unittest.IsolatedAsyncioTestCase):
                 "sess_x", "user", [stage], 0, stored, emit
             )
 
-        self.assertEqual(len(emitted), 1)
-        self.assertEqual(emitted[0]["type"], "session_generating")
+        self.assertEqual(len(emitted), 2)
+        self.assertEqual(emitted[0]["type"], "explanation_chunk")
+        self.assertEqual(emitted[1]["type"], "stage_generating")
+        self.assertEqual(emitted[1]["payload"]["stage_id"], 17)
 
 
 if __name__ == "__main__":

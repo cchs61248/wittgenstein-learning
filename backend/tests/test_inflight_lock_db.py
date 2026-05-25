@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from backend.db.database import init_db, close_db, get_db
-from backend.db.inflight_lock import acquire, release, is_active, cleanup_stale
+from backend.db.inflight_lock import acquire, release, is_active, cleanup_stale, cleanup_dead_worker_locks
 
 
 class TestInflightLockDb(unittest.IsolatedAsyncioTestCase):
@@ -51,6 +51,18 @@ class TestInflightLockDb(unittest.IsolatedAsyncioTestCase):
         # 不該拋例外
         await release("nonexistent_key")
         self.assertFalse(await is_active("nonexistent_key"))
+
+    async def test_cleanup_dead_worker_locks(self):
+        await acquire("dead_k", session_id="s", kind="resume_session")
+        db = await get_db()
+        await db.execute(
+            "UPDATE inflight_locks SET worker_pid = ? WHERE key = ?",
+            (99999999, "dead_k"),
+        )
+        await db.commit()
+        n = await cleanup_dead_worker_locks()
+        self.assertEqual(n, 1)
+        self.assertFalse(await is_active("dead_k"))
 
     async def test_meta_json_persisted(self):
         await acquire("k_meta", session_id="s", kind="tutor", meta_json='{"q": "hi"}')

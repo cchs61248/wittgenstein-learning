@@ -14,6 +14,8 @@ from pathlib import Path
 from .config import DB_PATH, CORS_ORIGINS, CORS_ORIGIN_REGEX, DEFAULT_PROVIDER, UPLOAD_ORPHAN_MAX_AGE_HOURS
 from .db.database import init_db, close_db
 from .db.inflight_lock import cleanup_stale as inflight_cleanup_stale
+from .db.inflight_lock import cleanup_dead_worker_locks as inflight_cleanup_dead_workers
+from .db.inflight_lock import release as inflight_release
 from .auth.router import router as auth_router
 from .routers.upload import router as upload_router
 from .routers.session import router as session_router
@@ -48,6 +50,9 @@ async def lifespan(app: FastAPI):
     await init_db(DB_PATH)
     # 清掉前次 worker 強制關閉時殘留的孤兒 inflight locks（Phase 3 Task B2）
     try:
+        n_dead = await inflight_cleanup_dead_workers()
+        if n_dead:
+            ws_logger().info(f"inflight_locks: cleaned {n_dead} dead-worker entries on startup")
         n = await inflight_cleanup_stale(max_age_s=600)
         if n:
             ws_logger().info(f"inflight_locks: cleaned {n} stale entries on startup")
@@ -527,8 +532,14 @@ async def websocket_endpoint(
 
             elif msg_type == "resume_session":
                 session_id_to_resume: str = p.get("session_id", session_id)
-                # 等待此 session 任一 inflight（含 submit_answer 內嵌的 run_stage）
-                await _wait_for_session_idle(session_id_to_resume, timeout_s=300)
+                # reload 後可能殘留 dead worker 的 resume lock；先清再 wait
+                await inflight_cleanup_dead_workers()
+                # 只等真正生成中的 task（submit_answer/run_stage），不等 resume 自身 lock
+                await _wait_for_session_idle(
+                    session_id_to_resume,
+                    timeout_s=120,
+                    exclude_kinds=("resume_session",),
+                )
 
                 session_row = await session_memory.get_session(session_id_to_resume)
                 provider_name: str = (
@@ -562,9 +573,20 @@ async def websocket_endpoint(
                     session_id=session_id_to_resume, kind="resume_session",
                 )
                 if handle is None:
-                    # race lost：另一個 worker 已在 resume 同 session；無 cache，跳過即可
+                    # stale resume lock（reload 中斷）— 強制釋放後重試一次
+                    await inflight_release(session_id_to_resume)
+                    task = asyncio.create_task(_run_resume())
+                    handle = await _gen_register_async(
+                        session_id_to_resume, task,
+                        session_id=session_id_to_resume, kind="resume_session",
+                    )
+                if handle is None:
                     task.cancel()
                     _ws_log.warning("resume_session: race lost for key=%s", session_id_to_resume)
+                    await emit({
+                        "type": "error",
+                        "payload": {"message": "恢復會話失敗：另一個恢復任務正在進行，請稍後再試"},
+                    })
 
             elif msg_type == "request_hint":
                 await emit({

@@ -453,18 +453,40 @@ export default function App() {
         wsRef.current = ws;
       });
     } else if (entry.status !== 'generating') {
-      // 生成失敗（abandoned 等），退回上傳畫面
-      setIsWaitingForCurrentGeneration(false);
-      setShowUpload(true);
+      // 教材分析失敗（abandoned 等）才退回上傳；進行中的學習 session（active）不應誤觸。
+      const hasStages = useSessionStore.getState().stages.length > 0;
+      if (!hasStages) {
+        setIsWaitingForCurrentGeneration(false);
+        setShowUpload(true);
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookshelf, isWaitingForCurrentGeneration, token]);
 
   const handleMessage = (msg: ServerMessage) => {
     switch (msg.type) {
-      case 'session_generating':
-        // 與當前前景 session 一致時維持 loading（雙重保險，避免極短 race 漏設）
+      case 'stage_generating':
+        // 章節講解仍在後端 inflight 生成中；若 DB 已有部分講解，保留內容只開 loading。
         if (msg.payload.session_id === sessionIdRef.current) {
+          setIsWaitingForCurrentGeneration(false);
+          const st = useSessionStore.getState();
+          const sid = msg.payload.stage_id;
+          const hasContent =
+            sid in st.stageExplanations &&
+            (st.stageExplanations[sid]?.trim().length ?? 0) > 0;
+          if (hasContent) {
+            useSessionStore.setState({
+              isExplanationLoading: true,
+              isRetryLoading: false,
+            });
+          } else {
+            st.beginExplanationLoading(sid);
+          }
+        }
+        break;
+      case 'session_generating':
+        // session_generating 僅用於 ContentSplitter 教材分析；已有 stages 的 session 不應觸發。
+        if (msg.payload.session_id === sessionIdRef.current && stagesRef.current.length === 0) {
           setIsWaitingForCurrentGeneration(true);
         }
         // 前景模式：stub 已建立，若書櫃中尚無此項目（例如使用者直接發送 start_session）則補上

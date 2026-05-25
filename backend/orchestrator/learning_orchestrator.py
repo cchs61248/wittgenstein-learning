@@ -2071,14 +2071,18 @@ class LearningOrchestrator:
             return
 
         if not questions and teacher_only.strip() and existing_status == "in_progress":
-            if await has_session_inflight(session_id):
+            if await has_session_inflight(session_id, exclude_kinds=("resume_session",)):
                 _log.info(
                     "resume_from_stored skip replay while generating  session=%s  stage_id=%s",
                     session_id, stage["stage_id"],
                 )
+                # 還原已持久化的部分講解，並告知前端「章節生成中」——
+                # 不可發 session_generating（那是教材分析階段專用，會誤觸上傳畫面）。
+                await emit({"type": "explanation_chunk", "payload": {"chunk": display_md, "is_final": False}})
+                wm.current_explanation = teacher_only
                 await emit({
-                    "type": "session_generating",
-                    "payload": {"session_id": session_id},
+                    "type": "stage_generating",
+                    "payload": {"session_id": session_id, "stage_id": stage["stage_id"]},
                 })
                 return
 

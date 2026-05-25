@@ -8,6 +8,16 @@ from .database import get_db
 from ..utils.logger import ws_logger
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
 async def acquire(
     key: str,
     *,
@@ -69,13 +79,27 @@ async def is_active(key: str) -> bool:
     return row is not None
 
 
-async def has_session_inflight(session_id: str) -> bool:
-    """此 session 是否有任一 inflight 任務（含 submit_answer → run_stage 等子 key）。"""
+async def has_session_inflight(
+    session_id: str,
+    *,
+    exclude_kinds: tuple[str, ...] = (),
+) -> bool:
+    """此 session 是否有任一 inflight 任務（含 submit_answer → run_stage 等子 key）。
+
+    exclude_kinds：resume_session 等「查詢用」lock 不應視為 stage 仍在生成。
+    """
     db = await get_db()
-    cur = await db.execute(
-        "SELECT 1 FROM inflight_locks WHERE session_id = ? LIMIT 1",
-        (session_id,),
-    )
+    if exclude_kinds:
+        placeholders = ",".join("?" * len(exclude_kinds))
+        sql = (
+            f"SELECT 1 FROM inflight_locks "
+            f"WHERE session_id = ? AND kind NOT IN ({placeholders}) LIMIT 1"
+        )
+        params: tuple = (session_id, *exclude_kinds)
+    else:
+        sql = "SELECT 1 FROM inflight_locks WHERE session_id = ? LIMIT 1"
+        params = (session_id,)
+    cur = await db.execute(sql, params)
     return (await cur.fetchone()) is not None
 
 
@@ -87,6 +111,28 @@ async def active_keys_for_session(session_id: str) -> list[str]:
     )
     rows = await cur.fetchall()
     return [r[0] for r in rows]
+
+
+async def cleanup_dead_worker_locks() -> int:
+    """清掉 worker_pid 已不存在（reload / crash）的孤兒 lock。"""
+    log = ws_logger()
+    db = await get_db()
+    async with db.execute(
+        "SELECT key, session_id, kind, worker_pid FROM inflight_locks"
+    ) as cur:
+        rows = await cur.fetchall()
+    dead = [r for r in rows if not _pid_alive(r[3])]
+    if dead:
+        log.info(
+            "inflight_lock cleanup_dead_worker targets  count=%d  entries=%s",
+            len(dead),
+            [(r[0], r[1], r[2], r[3]) for r in dead],
+        )
+    n = 0
+    for row in dead:
+        await release(row[0])
+        n += 1
+    return n
 
 
 async def cleanup_stale(max_age_s: float = 600) -> int:

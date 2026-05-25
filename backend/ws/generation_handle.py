@@ -59,10 +59,16 @@ def _local_handles_for_session(session_id: str) -> list[_GenerationHandle]:
     return out
 
 
-async def wait_for_session_idle(session_id: str, timeout_s: float = 300) -> bool:
+async def wait_for_session_idle(
+    session_id: str,
+    timeout_s: float = 300,
+    *,
+    exclude_kinds: tuple[str, ...] = (),
+) -> bool:
     """
     等待此 session 所有 inflight 任務結束（含 :answer:、:start 等子 key）。
     同 worker 等本地 Task event；跨 worker 輪詢 DB inflight_locks。
+    exclude_kinds：resume 等待時排除 resume_session，避免 stale lock 空等。
     回傳 True 表示已 idle，False 表示 timeout 時仍有 lock。
     """
     log = ws_logger()
@@ -82,10 +88,14 @@ async def wait_for_session_idle(session_id: str, timeout_s: float = 300) -> bool
                     session_id,
                     [h.key for h in local],
                 )
-        if not local and not await inflight_lock.has_session_inflight(session_id):
+        if not local and not await inflight_lock.has_session_inflight(
+            session_id, exclude_kinds=exclude_kinds
+        ):
             return True
         await asyncio.sleep(0.2)
-    still = await inflight_lock.has_session_inflight(session_id)
+    still = await inflight_lock.has_session_inflight(
+        session_id, exclude_kinds=exclude_kinds
+    )
     log.warning(
         "wait_for_session_idle timeout  session=%s  db_inflight=%s  local_keys=%s",
         session_id,

@@ -164,6 +164,7 @@ export interface ResumeStatePayload {
 
 export type ServerMessage =
   | { type: 'session_generating'; payload: { session_id: string } }
+  | { type: 'stage_generating'; payload: { session_id: string; stage_id: number } }
   | { type: 'knowledge_map'; payload: KnowledgeMapPayload }
   | { type: 'session_started'; payload: SessionStartedPayload }
   | { type: 'explanation_chunk'; payload: ExplanationChunkPayload }
