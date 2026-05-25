@@ -45,3 +45,16 @@ UPLOAD_ORPHAN_MAX_AGE_HOURS: float = float(os.getenv("UPLOAD_ORPHAN_MAX_AGE_HOUR
 
 # 上傳解析後允許的最大字元數（與 URL 擷取一致）
 UPLOAD_MAX_CHAR_COUNT: int = int(os.getenv("UPLOAD_MAX_CHAR_COUNT", "500000"))
+
+REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CURRICULUM_USE_ARQ: bool = os.getenv("CURRICULUM_USE_ARQ", "0").strip().lower() in (
+    "1", "true", "yes",
+)
+ARQ_MAX_JOBS: int = int(os.getenv("ARQ_MAX_JOBS", "1"))
+ARQ_JOB_TIMEOUT_S: int = int(os.getenv("ARQ_JOB_TIMEOUT_S", "7200"))
+
+LLM_CACHE_ENABLED: bool = os.getenv("LLM_CACHE_ENABLED", "0").strip().lower() in (
+    "1", "true", "yes",
+)
+CURRICULUM_PROMPT_VERSION: str = os.getenv("CURRICULUM_PROMPT_VERSION", "1")
+LLM_CACHE_EVICT_DAYS: int = int(os.getenv("LLM_CACHE_EVICT_DAYS", "90"))

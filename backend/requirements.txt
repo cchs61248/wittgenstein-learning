@@ -23,3 +23,5 @@ youtube-transcript-api>=0.6.2
 yt-dlp>=2025.1.26
 faster-whisper>=1.0.3
 python-multipart>=0.0.9
+arq>=0.26.0
+redis>=5.0.0

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -11,7 +12,15 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from .config import DB_PATH, CORS_ORIGINS, CORS_ORIGIN_REGEX, DEFAULT_PROVIDER, UPLOAD_ORPHAN_MAX_AGE_HOURS
+from .config import (
+    DB_PATH,
+    CORS_ORIGINS,
+    CORS_ORIGIN_REGEX,
+    DEFAULT_PROVIDER,
+    UPLOAD_ORPHAN_MAX_AGE_HOURS,
+    CURRICULUM_USE_ARQ,
+    REDIS_URL,
+)
 from .db.database import init_db, close_db
 from .db.inflight_lock import cleanup_stale as inflight_cleanup_stale
 from .db.inflight_lock import cleanup_dead_worker_locks as inflight_cleanup_dead_workers
@@ -73,23 +82,24 @@ async def lifespan(app: FastAPI):
             )
     except Exception as e:
         ws_logger().warning(f"upload_gc failed on startup: {e}")
-    # 自動續跑中斷的 curriculum pipeline（generating + checkpoint + source_chunks）
-    try:
-        from .memory import curriculum_checkpoint as ckpt
-        from .orchestrator.curriculum_resume import resume_generating_session_background
+    # 自動續跑：in-process（CURRICULUM_USE_ARQ=0）由 API 排程；Arq 模式由 worker startup 處理
+    if not CURRICULUM_USE_ARQ:
+        try:
+            from .memory import curriculum_checkpoint as ckpt
+            from .orchestrator.curriculum_resume import resume_generating_session_background
 
-        for sid in await ckpt.list_resumable_sessions():
-            ws_logger().info("curriculum: scheduling background resume  session=%s", sid)
-            asyncio.create_task(
-                resume_generating_session_background(
-                    sid,
-                    lambda provider, model: create_provider(
-                        provider or DEFAULT_PROVIDER, model=model,
-                    ),
+            for sid in await ckpt.list_resumable_sessions():
+                ws_logger().info("curriculum: scheduling background resume  session=%s", sid)
+                asyncio.create_task(
+                    resume_generating_session_background(
+                        sid,
+                        lambda provider, model: create_provider(
+                            provider or DEFAULT_PROVIDER, model=model,
+                        ),
+                    )
                 )
-            )
-    except Exception as e:
-        ws_logger().warning(f"curriculum auto-resume failed on startup: {e}")
+        except Exception as e:
+            ws_logger().warning(f"curriculum auto-resume failed on startup: {e}")
     yield
     await close_db()
     ws_logger().info("Wittgenstein Learning System shutting down")
@@ -418,6 +428,55 @@ async def websocket_endpoint(
                     continue  # emit already sent
                 source_chunks, source_file_ids = built
 
+                target_depth = p.get("target_depth", "intermediate")
+                question_mode = p.get("question_mode", "short_answer")
+
+                if CURRICULUM_USE_ARQ and os.getenv("CURRICULUM_PIPELINE_V2") == "1":
+                    from arq import create_pool
+                    from arq.connections import RedisSettings
+                    from .jobs.session_prepare import prepare_curriculum_session
+                    from .jobs.enqueue import enqueue_curriculum_job
+                    from .orchestrator.curriculum_pipeline_v2 import _build_sources_manifest
+                    from .utils.content_hash import compute_content_hash
+
+                    content_hash = compute_content_hash(source_chunks)
+                    sources_manifest = _build_sources_manifest(source_chunks)
+                    try:
+                        await prepare_curriculum_session(
+                            session_id=session_id,
+                            user_id=user_id,
+                            source_chunks=source_chunks,
+                            content_hash=content_hash,
+                            target_depth=target_depth,
+                            question_mode=question_mode,
+                            provider_name=provider_name,
+                            model_name=model,
+                            source_file_ids=source_file_ids,
+                            sources_json=sources_manifest,
+                        )
+                        pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
+                        try:
+                            job_id = await enqueue_curriculum_job(pool, session_id)
+                            await emit({
+                                "type": "session_generating",
+                                "payload": {"session_id": session_id},
+                            })
+                            if job_id is None:
+                                _ws_log.info(
+                                    "start_session: curriculum already in flight  session=%s",
+                                    session_id,
+                                )
+                        finally:
+                            await pool.close()
+                    except Exception as e:
+                        from .db.inflight_lock import release as _release_inflight
+                        await _release_inflight(_start_key)
+                        await emit({
+                            "type": "error",
+                            "payload": {"message": f"排程教材分析失敗：{e}"},
+                        })
+                    continue
+
                 llm = create_provider(provider_name, model=model)
                 orchestrator = LearningOrchestrator(llm)
 
@@ -428,8 +487,8 @@ async def websocket_endpoint(
                             user_id=user_id,
                             source_chunks=source_chunks,
                             source_file_ids=source_file_ids,
-                            target_depth=p.get("target_depth", "intermediate"),
-                            question_mode=p.get("question_mode", "short_answer"),
+                            target_depth=target_depth,
+                            question_mode=question_mode,
                             provider_name=provider_name,
                             model_name=model,
                             emit=emit,
