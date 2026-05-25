@@ -25,6 +25,13 @@
 
 多來源 session：可同時上傳多份檔案 + URL + 文字，ContentSplitter 跨來源語義聚合，同主題 chunks 收進同一 stage。
 
+### 教材生成背景化（2026-05-25）
+
+- **Region checkpoint 斷點續跑**：V2 pipeline 每完成一個 macro region 寫入 `curriculum_checkpoints`；API / worker 重啟後 skip 已完成 regions，不從頭生成
+- **Arq + Redis 背景 worker**：`CURRICULUM_USE_ARQ=1` 時，uvicorn 只 prepare + enqueue；獨立 worker 跑 pipeline，重啟 API 不中斷長教材生成
+- **LLM result cache**：`LLM_CACHE_ENABLED=1` 時 curriculum agents 共用 SQLite cache，相同 prompt 不重複呼叫 LLM（reroll / verifier retry 受益）
+- **Docker Compose**：`docker compose up -d` 一鍵啟動 Redis（`:6380`）+ curriculum-worker
+
 ### 學習迴圈（Phase 1–4 完整實作）
 
 - **Source Truth 後端掌控**：上傳後 `text_extractor → chunker` 建立 `source_chunks` 表，LLM 只做語義切分回傳 `chunk_id`，原文一律由後端回填，杜絕幻覺引用
@@ -94,6 +101,46 @@ copy .env.example .env
 
 > 開發時請務必用 `uvicorn run:app` 而非 `uvicorn main:app`；`run.py` 會把上層目錄加入 `sys.path` 才能正確匯入 `backend.*`。
 
+### Curriculum 背景 worker（Arq 模式，可選）
+
+長教材（50+ chunks）建議啟用 Arq，讓生成與 API 解耦：
+
+**1. `.env` 設定**
+```env
+CURRICULUM_PIPELINE_V2=1
+CURRICULUM_USE_ARQ=1
+REDIS_URL=redis://localhost:6380/0
+LLM_CACHE_ENABLED=1
+```
+
+**2. Docker 啟動 Redis + worker**（專案根目錄）
+```powershell
+docker compose up -d --build
+docker compose logs -f curriculum-worker
+```
+
+**3. 重啟 uvicorn**（不帶 `--reload` 較穩）
+```powershell
+cd backend
+.\.venv\Scripts\uvicorn.exe run:app --port 8000
+```
+
+| 容器 | 用途 | Host 埠 |
+|------|------|---------|
+| `wl-redis` | Arq 佇列 | `6380` |
+| `wl-curriculum-worker` | 執行 `run_curriculum_job` | — |
+
+Compose 會把 `./data` 掛載為 `/seed`（唯讀種子 DB）、`wl-worker-data` 掛載為 `/data`（worker 實際寫入），並 bind-mount `./backend` 方便開發。Worker 容器內 `MONICA_BASE_URL` 預設指向 `host.docker.internal:8001`（本機 Monica 代理）。
+
+> **Windows 注意**：Docker worker 將 SQLite copy 至 container volume 執行（避免 bind-mount I/O 問題）。本機 uvicorn 請勿同時跑 in-process curriculum；進度以 worker 內 DB 為準，容器退出時 sync 回 `./data/`。純本機開發也可不用 Docker，直接：
+> ```powershell
+> $env:CURRICULUM_PIPELINE_V2="1"; $env:REDIS_URL="redis://localhost:6380/0"
+> ..\.venv\Scripts\python.exe -m arq backend.jobs.arq_settings.WorkerSettings
+> ```
+> （需在 `wittgenstein-learning/` 目錄、與 uvicorn 共用同一 `learning.db`）
+
+詳見 [BACKEND_FLOW §12](./BACKEND_FLOW.md#12-curriculum-背景化checkpoint--arq--llm-cache)。
+
 ### 前端
 
 ```bash
@@ -126,8 +173,15 @@ npm run lint
 | `JWT_EXPIRE_DAYS` | JWT 有效期（天） | `7` |
 | `CORS_ORIGINS` | 額外允許的 CORS 來源（逗號分隔；不設則用 Vite dev server 預設） | — |
 | `CORS_ORIGIN_REGEX` | CORS regex 白名單（如 Cloudflare Quick Tunnel） | `https://.*\.trycloudflare\.com` |
+| `CURRICULUM_PIPELINE_V2` | `1` 啟用 V2 macro region + reducer pipeline | `0` |
+| `CURRICULUM_USE_ARQ` | `1` 時 start_session 改 enqueue，由 Arq worker 執行 | `0` |
+| `REDIS_URL` | Arq 佇列 URL；docker compose 用 `redis://localhost:6380/0` | `redis://localhost:6379/0` |
+| `LLM_CACHE_ENABLED` | `1` 啟用 curriculum LLM result cache | `0` |
+| `MACRO_REGION_USE_LLM` | V2 tier-3 LLM region metadata refinement | `0` |
+| `SMALL_FILE_CHUNK_THRESHOLD` | chunks ≤ N 走 small_file 快速路徑 | `50` |
+| `SQLITE_JOURNAL_MODE` | SQLite journal mode（Docker worker volume 建議 WAL） | `WAL` |
 
-> `PASS_THRESHOLD=0.75` 與 `MAX_STAGE_ATTEMPTS=3` 現已寫死在 orchestrator 中，不再由環境變數覆寫。
+> `PASS_THRESHOLD=0.75` 與 `MAX_STAGE_ATTEMPTS=3` 寫死在 orchestrator 中。Arq 相關：`ARQ_MAX_JOBS`（預設 1）、`ARQ_JOB_TIMEOUT_S`（預設 7200）、`LLM_CACHE_EVICT_DAYS`（預設 90）。完整列表見 [BACKEND_FLOW §10](./BACKEND_FLOW.md#10-設定與環境變數)。
 
 ---
 
@@ -147,7 +201,16 @@ backend/
 │   ├── gemini_provider.py
 │   ├── monica_provider.py      # OpenAI 相容代理
 │   ├── deepseek_provider.py    # 繼承 OpenAIProvider，reasoning_content fallback
-│   └── provider_factory.py     # create_provider(name, model?)
+│   ├── caching_provider.py     # CachingLLMProvider（LLM_CACHE_ENABLED 時包裝）
+│   ├── cache_context.py        # curriculum agent llm_cache_context
+│   └── provider_factory.py     # create_provider(name, model?) — 名稱大小寫不敏感
+├── jobs/                       # Arq 背景 worker（CURRICULUM_USE_ARQ=1）
+│   ├── arq_settings.py           # WorkerSettings（startup 掃 resumable + enqueue）
+│   ├── curriculum_job.py         # run_curriculum_job 入口
+│   ├── enqueue.py                # enqueue_curriculum_job + inflight_key
+│   └── session_prepare.py        # prepare_curriculum_session（寫 DB + checkpoint meta）
+├── docker/
+│   └── worker-entrypoint.sh      # Docker worker：copy DB 至 volume 再執行
 ├── agents/                     # 六個功能 Agent + BaseAgent
 │   ├── base_agent.py           # _messages 自動 _reset()，token 預算管理
 │   ├── content_splitter.py     # 語義切分（只回傳 chunk_id，不生成原文）
@@ -158,18 +221,22 @@ backend/
 │   └── drift_verifier.py       # Citation accuracy 驗證（逐條 claim 核對，Phase 4）
 ├── orchestrator/
 │   ├── learning_orchestrator.py  # 協調所有元件的主控流程
+│   ├── curriculum_pipeline_v2.py # V2 macro region + reducer pipeline
+│   ├── curriculum_resume.py      # resume_generating_session（checkpoint 續跑）
 │   ├── debounced_writer.py       # DebouncedExplanationWriter：時間 + size 雙閘門 throttle 寫 DB
 │   └── context_builder.py        # 學生狀態包組裝
 ├── ws/
 │   └── generation_handle.py    # _GenerationHandle (task + event)；同步 register/finish/cancel +
 │                                 #   async register_async/finish_async/cancel_async（同步寫 inflight_locks DB lock）
 ├── db/
-│   ├── database.py             # SQLite 連線、16 個 migration（內嵌）；PRAGMA WAL
-│   └── inflight_lock.py        # acquire/release/is_active/cleanup_stale（startup 清孤兒）
+│   ├── database.py             # SQLite 連線、migration 022–024 等（內嵌）；PRAGMA journal_mode
+│   └── inflight_lock.py        # acquire/release/cleanup_stale/cleanup_dead_worker_locks
 ├── memory/
 │   ├── working_memory.py       # 當次輪次狀態（含 current_teaching_intent）
 │   ├── session_memory.py       # 本次學習進度 + source_chunks（SQLite）
-│   └── longterm_memory.py      # 跨會話掌握度 + misconceptions（SQLite，EMA α=0.3）
+│   ├── longterm_memory.py      # 跨會話掌握度 + misconceptions（SQLite，EMA α=0.3）
+│   ├── curriculum_checkpoint.py # V2 region checkpoint CRUD
+│   └── llm_cache.py            # llm_result_cache CRUD
 ├── routers/
 │   ├── session.py              # 書櫃：sessions list / detail / title PATCH / DELETE
 │   ├── upload.py               # 三種上傳：file / url / youtube_asr (NDJSON 串流)
@@ -185,8 +252,17 @@ backend/
 ├── files/
 │   └── upload_store.py         # 磁碟讀寫 data/uploads/{file_id}.bin + .meta.json
 ├── tools/
-│   └── web_search.py           # DuckDuckGo Instant Answer API（ask_tutor 離題時用）
+│   ├── web_search.py           # DuckDuckGo Instant Answer API（ask_tutor 離題時用）
+│   ├── resume_curriculum.py      # CLI：手動 resume generating session
+│   ├── llm_cache_stats.py        # CLI：LLM cache 統計
+│   └── live_arq_verify.py        # Live 驗證：prepare + enqueue + monitor checkpoint
 └── auth/                       # JWT 帳號系統（單裝置強制登出，session_version）
+```
+
+根目錄另有：
+```
+docker-compose.yml              # wl-redis + wl-curriculum-worker
+Dockerfile.worker               # worker 映像
 ```
 
 ### 前端（React 19 + TypeScript + Vite + Zustand）
@@ -230,20 +306,22 @@ frontend/src/
 
 ### 資料庫 Schema
 
-十張資料表，由 `database.py` 內嵌的 **16 個 migration** 增量建立（冪等：`try/except ALTER` 與 `CREATE TABLE IF NOT EXISTS`，無 `schema_migrations` 追蹤表）：
+十張以上資料表，由 `database.py` 內嵌 migration 增量建立（冪等）：
 
 | 表 | 用途 |
 |----|------|
 | `users` | 帳號 + `session_version`（單裝置強制登出，Migration 011） |
-| `sessions` | 學習會話、`stages_json`、`provider/model`、`question_mode`、`title`、`source_file_ids_json`（GC 用） |
+| `sessions` | 學習會話、`stages_json`、`provider/model`、`question_mode`、`title`、`target_depth`、`source_file_ids_json` |
 | `source_chunks` | 後端 source truth；`chunk_NNNN` 文件層級命名（Migration 009） |
 | `stage_progress` | 各 stage 狀態、`full_explanation`、`questions_json` |
 | `qa_records` | 答題歷史 |
 | `decision_records` | 進度決策歷史（含 `strategy_snapshot_json` 與 selection_reason / high_severity / repeated_patterns） |
 | `tutor_records` | ask_tutor 問答（含 `scope` 三態，Migration 013–014） |
-| `concept_mastery` | 跨會話概念掌握度（EMA α=0.3）、結構化 misconception_patterns、成功 analogies |
+| `concept_mastery` | 跨會話概念掌握度（EMA α=0.3）、`source_signature` 跨教材隔離 |
 | `user_learning_profile` | 學習風格、平均嘗試次數、`ui_state_json`（跨裝置 UI 同步，Migration 012） |
-| `inflight_locks` | 跨 worker dedup lock：`key`/`session_id`/`kind`/`started_at`/`worker_pid`（Migration 016）；startup 清 stale ≥ 10 分鐘的孤兒 |
+| `inflight_locks` | 跨 worker dedup lock（Migration 016）；startup 清 stale / dead worker |
+| `curriculum_checkpoints` | V2 pipeline region 斷點（Migration 022） |
+| `llm_result_cache` | curriculum LLM 結果快取（Migration 024） |
 
 完整 schema、欄位、index、migration 列表見 [BACKEND_FLOW §3](./BACKEND_FLOW.md#3-資料庫-schema)。
 
@@ -333,8 +411,10 @@ frontend/src/
 # 1. 打包前端
 cd frontend; npm run build
 
-# 2. 後端自動偵測 frontend/dist/ 並掛載 /
-cd ../backend; .\.venv\Scripts\uvicorn.exe run:app --port 8000
+# 2. 後端（+ 可選 Arq worker）
+cd ..
+docker compose up -d          # Redis + curriculum-worker（CURRICULUM_USE_ARQ=1 時）
+cd backend; .\.venv\Scripts\uvicorn.exe run:app --port 8000
 ```
 
 - 只需對外開放 8000 port；REST `/auth/*` / `/sessions/*` 與 WebSocket `/ws/*` 路由不受影響

@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（最後更新：2026-05-24，含 **Curriculum Pipeline V2** 強化：GlobalCurriculumReducer Step B/C（confidence&lt;0.8 保留 split）、`REDUCER_FAIL_MODE=hard` LLM 失敗 raise、`verify_global_coverage` duplicate 標題檢查、`curriculum_health` 監控信號（`plan_b_recommended` 不自動切 Plan B）、Go/No-Go mock CI + `pytest -m llm_live` 真 LLM 手動 gate；以及 macro region / per-region split、**dynamic max_stages**、**SPLITTER_FAIL_MODE fail-soft** + QualityWarningBanner、Migration 019 provenance、`CURRICULUM_PIPELINE_V2` feature flag；**mega-stage 防護三層**：`_dedupe_candidates` / reducer LLM merge / orphan attach 全部以 `MAX_MERGED_OUTCOME_CHUNKS=20` 為 cap（commit `b9759ce` / `4492dce`）；**splitter prompt 規則 11 / 12**：禁實體名稱（作者名、書名、章節編號、修辭性引用）作為 key_concept、stage 1 key_concepts 上限 5（commit `0029e16`）；**JSON fenced array 解析修補**：`_slice_json` 取最早 opener 為外層（commit `46e71dd`，修補 reducer LLM 對 `[{...},{...}]` 回應 parse 失敗 → 誤觸 Plan B 的 bug）；**Teacher prompt 維特根斯坦 anchor 移除 + 規則 7 禁外部理論體系包裝**（commit `70b84b8`，修補 DriftVerifier infinite false → QG gate 卡住）；既有 retry/remediate、多來源、DriftVerifier 等（2026-05-19 前項從略）**）
+> 適用版本：2026-05 feature 分支（最後更新：2026-05-25，含 **Curriculum Pipeline 背景化**：region checkpoint 斷點續跑（Migration 022–023）、Arq + Redis 背景 worker（`CURRICULUM_USE_ARQ=1`）、LLM result cache（Migration 024 / `LLM_CACHE_ENABLED=1`）、`docker-compose.yml`（Redis :6380 + curriculum-worker）；**inflight PID 檢查 Windows 相容**（`OpenProcess` 取代 `os.kill`）；以及 2026-05-24 既有 **Curriculum Pipeline V2** 強化：GlobalCurriculumReducer Step B/C、Go/No-Go、`CURRICULUM_PIPELINE_V2` feature flag 等（詳下）**）
 
 ---
 
@@ -25,6 +25,7 @@
 9. [LLM 抽象層與 Provider](#9-llm-抽象層與-provider)
 10. [設定與環境變數](#10-設定與環境變數)
 11. [WS 基礎設施（Phase 1–3 增補）](#11-ws-基礎設施phase-13-增補)
+12. [Curriculum 背景化（Checkpoint / Arq / LLM Cache）](#12-curriculum-背景化checkpoint--arq--llm-cache)
 
 ---
 
@@ -92,6 +93,21 @@
 
 **跨重啟的持久狀態**：全部存於 SQLite（`data/learning.db`）
 
+**Curriculum 生成（V2 + 背景化）**：
+- **In-process（預設）**：`CURRICULUM_USE_ARQ=0` 時，uvicorn 內 `asyncio.create_task` 跑 pipeline；API startup 掃 `list_resumable_sessions()` 自動續跑
+- **Arq worker**：`CURRICULUM_USE_ARQ=1` 時，API 只 `prepare + enqueue`；獨立 worker 從 Redis 取 job 執行；重啟 uvicorn **不**中斷生成
+- **Checkpoint**：每完成一個 macro region 寫入 `curriculum_checkpoints`；重啟後 skip 已完成 regions
+- **LLM cache**：`LLM_CACHE_ENABLED=1` 時 curriculum agents 共用 `llm_result_cache`（同 content_hash + agent + prompt_version）
+
+```
+本機 uvicorn (:8000)                    Docker（docker compose up）
+      │                                        │
+      │  start_session                         │  wl-redis (:6380)
+      │  prepare + enqueue ──────────► Redis ◄─┤  wl-curriculum-worker
+      │  （Arq 模式）                           │  run_curriculum_job
+      └─ in-process task（非 Arq 模式）         └─ resume from checkpoint
+```
+
 ---
 
 ## 2. 啟動流程
@@ -102,9 +118,24 @@ uvicorn run:app --port 8000
     ├── run.py → 將上層目錄加入 sys.path，讓 backend.* 匯入正常
     │
     └── lifespan(app)
-            ├── init_db(DB_PATH)           # 建立 DB 連線、執行 migrations、PRAGMA WAL
-            ├── inflight_lock.cleanup_stale(max_age_s=600)  # Phase 3：清前次 worker 強制關閉殘留的孤兒 lock
-            └── （應用結束）close_db()      # 關閉 DB 連線
+            ├── init_db(DB_PATH)           # 建立 DB 連線、執行 migrations、PRAGMA journal_mode（預設 WAL；`SQLITE_JOURNAL_MODE` 可覆寫）
+            ├── inflight_cleanup_dead_workers()  # 清 worker_pid 已不存在的孤兒 lock（Windows 用 OpenProcess）
+            ├── inflight_lock.cleanup_stale(max_age_s=600)  # 清前次 worker 強制關閉殘留的孤兒 lock
+            ├── upload_gc / llm_cache evict（可選）
+            ├── 【僅 CURRICULUM_USE_ARQ=0】curriculum auto-resume：
+            │       list_resumable_sessions() → resume_generating_session_background(create_task)
+            └── （應用結束）close_db()      # 關 DB 連線
+```
+
+**Arq worker 獨立進程**（`CURRICULUM_USE_ARQ=1` 時必開）：
+
+```
+python -m arq backend.jobs.arq_settings.WorkerSettings
+# 或：docker compose up -d   → wl-redis + wl-curriculum-worker
+
+WorkerSettings.on_startup:
+    ├── init_db + cleanup_dead_worker_locks
+    └── list_resumable_sessions() → enqueue_curriculum_job(redis, sid)
 ```
 
 ### 資料庫 Migration 流程
@@ -127,8 +158,14 @@ uvicorn run:app --port 8000
 | 014 (Python) | `ALTER TABLE tutor_records ADD COLUMN scope TEXT DEFAULT NULL`（三態邊界判定：`current_chapter` / `other_chapter` / `out_of_scope`） |
 | 015 (Python) | `ALTER TABLE sessions ADD COLUMN source_file_ids_json TEXT DEFAULT '[]'`（記錄 session 引用的 upload file_ids，供 `delete_session` 時 GC 磁碟 blob） |
 | 016 (Python) | 建立 `inflight_locks` 表 + index（Phase 3 Task B：跨 worker dedup lock）；`CREATE TABLE IF NOT EXISTS` |
+| 017 (Python) | `concept_mastery` 加 `source_signature`（跨教材 mastery 隔離） |
+| 018 (Python) | `concept_mastery` 唯一鍵改為 `(user_id, source_signature, concept_name)` |
+| 019 (Python) | `source_chunks` 加 `source_id/source_index/source_label`；`sessions.sources_json` |
+| 022 (Python) | 建立 `curriculum_checkpoints` 表（V2 pipeline region 斷點續跑） |
+| 023 (Python) | `sessions.target_depth`（generating 期間持久化） |
+| 024 (Python) | 建立 `llm_result_cache` 表（curriculum LLM 結果快取） |
 
-Migration 002–005、007–008、010–012、014–015 均用 `try/except` 包裹，已存在欄位時靜默跳過（冪等）。006、009、013、016 使用 `CREATE TABLE IF NOT EXISTS`。注意：程式碼中 006（`decision_records`）的建立語句實際位於 010 之後，但邏輯上屬於 Migration 006。沒有正式的 `schema_migrations` 追蹤表，所有狀態依賴 `try/except`／`IF NOT EXISTS` 的冪等性。`PRAGMA journal_mode=WAL` 在 `init_db()` 內啟用，允許多 reader + 1 writer 並存。
+Migration 002–005、007–008、010–012、014–015、017、019、023 均用 `try/except` 包裹，已存在欄位時靜默跳過（冪等）。006、009、013、016、022、024 使用 `CREATE TABLE IF NOT EXISTS`。018 以 `concept_mastery_scoped` 一次性遷移。沒有正式的 `schema_migrations` 追蹤表，所有狀態依賴 `try/except`／`IF NOT EXISTS` 的冪等性。`PRAGMA journal_mode` 預設 WAL，可由環境變數 `SQLITE_JOURNAL_MODE` 覆寫（Docker worker 在 Linux volume 內通常用 WAL）。
 
 ---
 
@@ -159,6 +196,7 @@ model_name          TEXT DEFAULT NULL     # 記錄本 session 使用的 model（
 question_mode        TEXT DEFAULT 'short_answer'
 title                TEXT DEFAULT NULL     # 書櫃自訂標題（Migration 010，可透過 PATCH 更新）
 source_file_ids_json TEXT DEFAULT '[]'     # Migration 015，sessions 引用的 upload file_id 列表（供 delete_session GC）
+target_depth         TEXT DEFAULT NULL     # Migration 023，generating 期間的 target_depth（checkpoint meta 備援）
 created_at           TIMESTAMP
 updated_at           TIMESTAMP
 status 可能值         generating | pending_confirmation | active | completed | abandoned
@@ -287,7 +325,46 @@ meta_json    TEXT                    # 預留擴展欄位
 INDEX: idx_inflight_session ON inflight_locks(session_id)
 ```
 
-跨 worker dedup 機制：`register_async` 嘗試 `INSERT`（PRIMARY KEY 衝突即 lock 已被占有），衝突回 `None`、呼叫端做 race lost 處理。`done_callback` / `finish_async` / `cancel_async` 都會 release lock。`cleanup_stale(max_age_s=600)` 在 FastAPI lifespan startup 跑一次，清掉前次 worker 強制關閉時殘留的孤兒 lock。
+跨 worker dedup 機制：`register_async` 嘗試 `INSERT`（PRIMARY KEY 衝突即 lock 已被占有），衝突回 `None`、呼叫端做 race lost 處理。`done_callback` / `finish_async` / `cancel_async` 都會 release lock。`cleanup_stale(max_age_s=600)` 在 FastAPI lifespan startup 跑一次，清掉前次 worker 強制關閉時殘留的孤兒 lock。`cleanup_dead_worker_locks()` 檢查 `worker_pid` 是否仍存活；**Windows** 使用 `OpenProcess`/`GetExitCodeProcess`（`os.kill(pid,0)` 會 WinError 87）。
+
+### `curriculum_checkpoints`（Migration 022）
+```
+session_id                TEXT PRIMARY KEY → sessions.session_id
+content_hash              TEXT NOT NULL
+pipeline_version          TEXT DEFAULT 'v2'
+pipeline_meta_json        TEXT             # {user_id, target_depth, question_mode, provider_name, model_name}
+required_outline_json     TEXT
+regions_json              TEXT             # macro region 列表（resume 時跳過 MacroRegionPlanner）
+completed_region_ids_json TEXT DEFAULT '[]'
+all_candidates_json       TEXT DEFAULT '[]'
+summary_parts_json        TEXT DEFAULT '[]'
+meter_json                TEXT DEFAULT '{}'
+last_region_id            TEXT
+updated_at                TIMESTAMP
+INDEX: idx_curriculum_ckpt_updated ON curriculum_checkpoints(updated_at)
+```
+
+每完成一個 region 更新 `completed_region_ids_json`；`resume_generating_session` 讀取後 skip 已完成 regions 繼續跑。`list_resumable_sessions()` 回傳 `status='generating'` 且有 checkpoint 的 session_id 列表。
+
+### `llm_result_cache`（Migration 024）
+```
+cache_key       TEXT PRIMARY KEY    # hash(scope, content_hash, agent, region, prompt_version, model, messages)
+scope           TEXT DEFAULT 'curriculum'
+content_hash    TEXT
+agent_name      TEXT NOT NULL
+region_id       TEXT
+prompt_version  TEXT NOT NULL       # CURRICULUM_PROMPT_VERSION
+model_name      TEXT NOT NULL
+result_json     TEXT NOT NULL
+input_tokens    INTEGER
+output_tokens   INTEGER
+hit_count       INTEGER DEFAULT 0
+created_at      TIMESTAMP
+last_hit_at     TIMESTAMP
+INDEX: idx_llm_cache_content_hash, idx_llm_cache_scope_agent, idx_llm_cache_created
+```
+
+`CachingLLMProvider` 包裝底層 provider：cache hit 直接回傳 JSON；miss 時呼叫 LLM 並寫入。CLI：`python backend/tools/llm_cache_stats.py`。
 
 ---
 
@@ -612,9 +689,20 @@ class WorkingMemory:
         │           source_label: str     # 來源名稱
         │           source_index: int     # 來源順序
         │
-        ├── create_provider(provider_name, model?)
-        ├── LearningOrchestrator(llm)
-        └── orchestrator.start_session(source_chunks=all_chunks, ...)
+        ├── create_provider(provider_name, model?)   # provider 名稱會 .lower() 正規化
+        │
+        ├── 【Arq 路徑】CURRICULUM_USE_ARQ=1 且 CURRICULUM_PIPELINE_V2=1：
+        │       prepare_curriculum_session(...)  → 寫 sessions / source_chunks / checkpoint meta
+        │       enqueue_curriculum_job(redis, session_id)  → Redis 佇列
+        │       emit session_generating
+        │       continue（不 create_task；由 worker 執行 resume_generating_session）
+        │
+        ├── 【In-process 路徑】（預設）
+        │       LearningOrchestrator(llm)
+        │       asyncio.create_task(orchestrator.start_session(...))
+        │
+        └── （以下為 start_session 內部，in-process 或 worker resume 共用）
+                orchestrator.start_session(...) / resume_generating_session(...)
                 │
                 ├── 【V1 預設路徑】`_start_session_v1`（`CURRICULUM_PIPELINE_V2` 未設）
                 │   ├── ContentOutlineAgent（preventive hint）
@@ -1432,6 +1520,7 @@ async def stream_chat(messages, system_prompt) -> AsyncGenerator[str, None]
 
 ```python
 llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", model=None)
+# 名稱大小寫不敏感（"DeepSeek" → deepseek）
 ```
 
 > Phase 1 後，Files API 主路徑改為後端 `text_extractor` + `chunker`，原 `llm/file_adapter.py`（多 provider 上傳 adapter）已於 2026-05 清理（無人引用）。DeepSeek 走 OpenAI 相容 endpoint，需設定 `DEEPSEEK_API_KEY`；推理模型輸出在 `reasoning_content` 時自動 fallback 取用。Monica 同樣使用 OpenAI 相容 API，需設定 `MONICA_BASE_URL` 與 `MONICA_API_KEY`。
@@ -1479,6 +1568,14 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `MACRO_REGION_USE_LLM` | `0` | V2 tier-3：`1` 啟用 MacroRegionPlanner LLM metadata refinement（補 title/expected_stage_count/must_cover_topics，不重切邊界） |
 | `SMALL_FILE_CHUNK_THRESHOLD` | `50` | `len(chunks) ≤ N` 走 small_file 路徑（single / per-source）；`0` 強制 full V2 |
 | `SMALL_FILE_FORCE_OUTLINE` | `0` | 測試用：`1` 時 small_file 仍額外跑 ContentOutline（production 預設 off） |
+| `CURRICULUM_USE_ARQ` | `0` | `1` 時 start_session 改 enqueue 至 Redis，由 Arq worker 執行 pipeline |
+| `REDIS_URL` | `redis://localhost:6379/0` | Arq 佇列；本機 docker compose 用 `redis://localhost:6380/0` |
+| `ARQ_MAX_JOBS` | `1` | Arq worker 同時執行 job 數 |
+| `ARQ_JOB_TIMEOUT_S` | `7200` | 單一 curriculum job 最長秒數 |
+| `LLM_CACHE_ENABLED` | `0` | `1` 啟用 curriculum LLM result cache |
+| `CURRICULUM_PROMPT_VERSION` | `1` | cache key 一部分；prompt 改版時遞增以失效舊 cache |
+| `LLM_CACHE_EVICT_DAYS` | `90` | startup 清掉超過 N 天的 cache entry；`0` 關閉 |
+| `SQLITE_JOURNAL_MODE` | `WAL` | SQLite journal mode（Docker worker volume 內建議 WAL） |
 
 > Schema contract：`docs/superpowers/specs/2026-05-22-curriculum-v2-schema.md`
 
@@ -1652,3 +1749,69 @@ elif msg_type == "cancel_generation":
 ```
 
 前端 `case 'generation_cancelled'` 看 `kind === 'ask_tutor'` → `commitStreamingTutorAsCancelled()`（streaming bubble 凍結為 history note）；其他 kind 走 `endExplanationLoading()` 通用路徑。
+
+---
+
+## 12. Curriculum 背景化（Checkpoint / Arq / LLM Cache）
+
+155-chunk 等長教材的 V2 pipeline 可能跑數小時。Phase 1–3 背景化讓生成與 API 進程解耦、支援斷點續跑與 LLM 去重。
+
+### 12.1 Region Checkpoint（Phase 1）
+
+**模組**：`backend/memory/curriculum_checkpoint.py`、`backend/orchestrator/curriculum_pipeline_v2.py`
+
+- 每完成一個 macro region → `upsert_checkpoint(completed_region_ids, ...)`
+- `resume_generating_session(orch, session_id)` 讀 checkpoint，skip 已完成 regions
+- API startup（`CURRICULUM_USE_ARQ=0`）：`list_resumable_sessions()` → `resume_generating_session_background`
+- CLI：`python backend/tools/resume_curriculum.py`、`abandon_session.py --delete-checkpoint`
+
+### 12.2 Arq Background Worker（Phase 2）
+
+**模組**：`backend/jobs/`（`session_prepare.py`、`enqueue.py`、`curriculum_job.py`、`arq_settings.py`）
+
+```
+start_session (WS, CURRICULUM_USE_ARQ=1)
+    → prepare_curriculum_session
+    → enqueue_curriculum_job(redis, session_id)   # inflight key: {session_id}:start
+    → emit session_generating
+
+run_curriculum_job (Arq worker)
+    → maybe_wrap_curriculum_llm(create_provider(...))
+    → resume_generating_session(orch, session_id, emit=_null_emit)
+    → finally: release(inflight_key)
+```
+
+**注意**：
+- Worker 內 `_null_emit`：Arq 模式**不**推 WS `region_done` / `reduce_done` 等進度事件（前端需 polling session status 或之後補機制）
+- 固定 job id `curriculum:{session_id}`；重試前需清 stale `arq:result:*` key（`backend/tools/live_arq_verify.py` 內建清理）
+- **Docker**（`docker-compose.yml`）：
+  - `wl-redis`：host `:6380` → container `:6379`
+  - `wl-curriculum-worker`：`./data:/seed`（種子 DB）、`wl-worker-data:/data`（執行時 DB）、`./backend:/app/backend`
+  - entrypoint（`backend/docker/worker-entrypoint.sh`）：啟動時 `cp /seed/learning.db → /data/learning.db`；退出時 `wal_checkpoint` + sync 回 `/seed`
+  - 可選 `WORKER_SYNC_INTERVAL=30` 週期 sync（預設關閉，避免與本機 uvicorn 同時寫 DB）
+- **Windows + 本機 uvicorn 共用 SQLite**：**勿**與 in-process 生成同時寫同一 DB；Arq 模式下 uvicorn 只 enqueue
+
+### 12.3 LLM Result Cache（Phase 3）
+
+**模組**：`backend/memory/llm_cache.py`、`backend/llm/caching_provider.py`、`backend/llm/cache_context.py`
+
+- 6 個 curriculum agents 在 `llm_cache_context(...)` 內呼叫 LLM
+- Cache key = hash(scope, content_hash, agent_name, region_id, prompt_version, model, messages)
+- `LLM_CACHE_ENABLED=1` 啟用；reroll / verifier retry 同 prompt 可 hit cache
+- Stats：`python backend/tools/llm_cache_stats.py`
+
+### 12.4 部署模式對照
+
+| 模式 | uvicorn | worker | 重啟 API | WS region 進度 |
+|------|---------|--------|----------|----------------|
+| In-process（預設） | pipeline 在進程內 | 不需要 | 中斷；startup 自動續跑 | 有 |
+| Arq 本機 | 只 enqueue | `python -m arq ...` | 不影響 worker | 無（目前） |
+| Arq Docker | 只 enqueue | `docker compose up -d` | 不影響 worker | 無（目前） |
+
+**建議 `.env`（Arq 模式）**：
+```env
+CURRICULUM_PIPELINE_V2=1
+CURRICULUM_USE_ARQ=1
+REDIS_URL=redis://localhost:6380/0
+LLM_CACHE_ENABLED=1
+```

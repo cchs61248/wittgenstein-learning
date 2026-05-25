@@ -10,7 +10,8 @@ Usage (from wittgenstein-learning/):
     ..\\.venv\\Scripts\\python.exe backend/tools/live_arq_verify.py
 
   Optional API path (requires API restart with CURRICULUM_USE_ARQ=1):
-    same worker + API with CURRICULUM_USE_ARQ=1
+    docker compose up -d   # redis + worker
+    API with CURRICULUM_USE_ARQ=1
 """
 from __future__ import annotations
 

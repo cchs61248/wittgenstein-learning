@@ -27,7 +27,9 @@ async def init_db(db_path: str) -> None:
 
     _connection = await aiosqlite.connect(db_path)
     _connection.row_factory = aiosqlite.Row
-    await _connection.execute("PRAGMA journal_mode=WAL")
+    journal = os.getenv("SQLITE_JOURNAL_MODE", "WAL").strip().upper()
+    await _connection.execute(f"PRAGMA journal_mode={journal}")
+    await _connection.execute("PRAGMA busy_timeout=30000")
     await _connection.execute("PRAGMA foreign_keys=ON")
 
     migration_path = Path(__file__).parent / "migrations" / "001_initial.sql"

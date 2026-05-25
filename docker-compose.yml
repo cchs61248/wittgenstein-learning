@@ -1,0 +1,37 @@
+# Redis + curriculum Arq worker（本機 uvicorn 用 REDIS_URL=redis://localhost:6380/0）
+#
+#   docker compose up -d --build
+#   docker compose logs -f curriculum-worker
+#
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: wl-redis
+    ports:
+      - "6380:6379"
+    restart: unless-stopped
+
+  curriculum-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: wl-curriculum-worker
+    depends_on:
+      - redis
+    environment:
+      CURRICULUM_PIPELINE_V2: "1"
+      CURRICULUM_USE_ARQ: "1"
+      LLM_CACHE_ENABLED: "1"
+      REDIS_URL: redis://redis:6379/0
+      MONICA_BASE_URL: http://host.docker.internal:8001/v1
+      SQLITE_JOURNAL_MODE: WAL
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/seed
+      - wl-worker-data:/data
+      - ./backend:/app/backend
+    restart: unless-stopped
+
+volumes:
+  wl-worker-data:
