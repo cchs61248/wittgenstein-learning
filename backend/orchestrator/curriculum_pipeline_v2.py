@@ -754,6 +754,7 @@ async def run_start_session_v2(
                 region, per_region_max, listicle=listicle,
             ),
             "target_depth": target_depth,
+            "region_id": rid,
         }
         if required_outline:
             splitter_ctx_payload["required_outline"] = required_outline
@@ -775,7 +776,11 @@ async def run_start_session_v2(
         verify_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
-            task_payload={"source_chunks": region_chunks, "stages": region_stages},
+            task_payload={
+                "source_chunks": region_chunks,
+                "stages": region_stages,
+                "region_id": rid,
+            },
         )
         vresult: dict | None = None
         try:

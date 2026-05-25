@@ -322,6 +322,38 @@ async def init_db(db_path: str) -> None:
     except Exception:
         pass
 
+    # Migration 024：curriculum LLM result cache
+    await _connection.execute(
+        """CREATE TABLE IF NOT EXISTS llm_result_cache (
+            cache_key       TEXT PRIMARY KEY,
+            scope           TEXT NOT NULL DEFAULT 'curriculum',
+            content_hash    TEXT,
+            agent_name      TEXT NOT NULL,
+            region_id       TEXT,
+            prompt_version  TEXT NOT NULL,
+            model_name      TEXT NOT NULL,
+            result_json     TEXT NOT NULL,
+            input_tokens    INTEGER DEFAULT 0,
+            output_tokens   INTEGER DEFAULT 0,
+            hit_count       INTEGER NOT NULL DEFAULT 0,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_hit_at     TIMESTAMP
+        )"""
+    )
+    await _connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_llm_cache_content_hash "
+        "ON llm_result_cache(content_hash)"
+    )
+    await _connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_llm_cache_scope_agent "
+        "ON llm_result_cache(scope, agent_name)"
+    )
+    await _connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_llm_cache_created "
+        "ON llm_result_cache(created_at)"
+    )
+    await _connection.commit()
+
 
 async def close_db() -> None:
     global _connection

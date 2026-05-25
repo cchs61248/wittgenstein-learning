@@ -7,6 +7,7 @@ from typing import Any
 
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
+from ..llm.cache_context import llm_cache_context
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
 
@@ -26,24 +27,25 @@ class ContentOutlineAgent(BaseAgent):
     """從 source_chunks 抽取教材骨架與並列具名案例。"""
 
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
-        self._reset()
-        payload = ctx.task_payload
-        source_chunks: list[dict] = payload.get("source_chunks") or []
-        t0 = self._log_start(ctx, chunks=len(source_chunks))
+        with llm_cache_context(agent_name="ContentOutlineAgent"):
+            self._reset()
+            payload = ctx.task_payload
+            source_chunks: list[dict] = payload.get("source_chunks") or []
+            t0 = self._log_start(ctx, chunks=len(source_chunks))
 
-        self._add_message(
-            MessageRole.USER,
-            f"source_chunks={json.dumps(source_chunks, ensure_ascii=False)}",
-        )
-        response = await self.llm.chat(
-            self._messages, system_prompt=SYSTEM_PROMPTS["content_outline"]
-        )
-        self._reset()
+            self._add_message(
+                MessageRole.USER,
+                f"source_chunks={json.dumps(source_chunks, ensure_ascii=False)}",
+            )
+            response = await self.llm.chat(
+                self._messages, system_prompt=SYSTEM_PROMPTS["content_outline"]
+            )
+            self._reset()
 
-        data = json.loads(extract_json(response.content))
-        result = normalize_outline(data)
-        self._log_end(ctx, t0, {
-            "named_cases_count": len(result["named_cases"]),
-            "required_titles_count": len(result["required_stage_titles"]),
-        })
-        return result
+            data = json.loads(extract_json(response.content))
+            result = normalize_outline(data)
+            self._log_end(ctx, t0, {
+                "named_cases_count": len(result["named_cases"]),
+                "required_titles_count": len(result["required_stage_titles"]),
+            })
+            return result

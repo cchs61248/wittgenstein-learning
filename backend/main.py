@@ -20,6 +20,7 @@ from .config import (
     UPLOAD_ORPHAN_MAX_AGE_HOURS,
     CURRICULUM_USE_ARQ,
     REDIS_URL,
+    LLM_CACHE_EVICT_DAYS,
 )
 from .db.database import init_db, close_db
 from .db.inflight_lock import cleanup_stale as inflight_cleanup_stale
@@ -82,6 +83,14 @@ async def lifespan(app: FastAPI):
             )
     except Exception as e:
         ws_logger().warning(f"upload_gc failed on startup: {e}")
+    if LLM_CACHE_EVICT_DAYS > 0:
+        try:
+            from .memory import llm_cache
+            n = await llm_cache.evict_older_than(LLM_CACHE_EVICT_DAYS)
+            if n:
+                ws_logger().info("llm_cache: evicted %d entries older than %d days", n, LLM_CACHE_EVICT_DAYS)
+        except Exception as e:
+            ws_logger().warning(f"llm_cache eviction failed on startup: {e}")
     # 自動續跑：in-process（CURRICULUM_USE_ARQ=0）由 API 排程；Arq 模式由 worker startup 處理
     if not CURRICULUM_USE_ARQ:
         try:

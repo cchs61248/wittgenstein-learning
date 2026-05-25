@@ -11,6 +11,7 @@ from typing import Any
 
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
+from ..llm.cache_context import llm_cache_context
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
 
@@ -61,36 +62,37 @@ class SplitterVerifierAgent(BaseAgent):
     """驗證 splitter 是否漏切教材原文宣告的並列方案。"""
 
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
-        self._reset()
         payload = ctx.task_payload
-        source_chunks: list[dict] = payload.get("source_chunks") or []
-        stages: list[dict] = payload.get("stages") or []
-        t0 = self._log_start(
-            ctx,
-            chunks=len(source_chunks),
-            stages=len(stages),
-        )
+        region_id = payload.get("region_id")
+        with llm_cache_context(agent_name="SplitterVerifierAgent", region_id=region_id):
+            self._reset()
+            source_chunks: list[dict] = payload.get("source_chunks") or []
+            stages: list[dict] = payload.get("stages") or []
+            t0 = self._log_start(
+                ctx,
+                chunks=len(source_chunks),
+                stages=len(stages),
+            )
 
-        # 組裝 user message
-        self._add_message(
-            MessageRole.USER,
-            f"source_chunks={json.dumps(source_chunks, ensure_ascii=False)}\n\n"
-            f"stages={json.dumps(stages, ensure_ascii=False)}",
-        )
-        response = await self.llm.chat(
-            self._messages, system_prompt=SYSTEM_PROMPTS["splitter_verifier"]
-        )
-        self._reset()
+            self._add_message(
+                MessageRole.USER,
+                f"source_chunks={json.dumps(source_chunks, ensure_ascii=False)}\n\n"
+                f"stages={json.dumps(stages, ensure_ascii=False)}",
+            )
+            response = await self.llm.chat(
+                self._messages, system_prompt=SYSTEM_PROMPTS["splitter_verifier"]
+            )
+            self._reset()
 
-        data = json.loads(extract_json(response.content))
-        if isinstance(data, list):
-            data = next((x for x in data if isinstance(x, dict)), {})
-        if not isinstance(data, dict):
-            data = {}
-        result = normalize_verifier_result(data)
-        self._log_end(ctx, t0, {
-            "aligned": result["aligned"],
-            "missing_count": len(result["missing_options"]),
-            "repair_titles_count": len(result["required_stage_titles"]),
-        })
-        return result
+            data = json.loads(extract_json(response.content))
+            if isinstance(data, list):
+                data = next((x for x in data if isinstance(x, dict)), {})
+            if not isinstance(data, dict):
+                data = {}
+            result = normalize_verifier_result(data)
+            self._log_end(ctx, t0, {
+                "aligned": result["aligned"],
+                "missing_count": len(result["missing_options"]),
+                "repair_titles_count": len(result["required_stage_titles"]),
+            })
+            return result

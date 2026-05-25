@@ -14,6 +14,7 @@ from typing import Any
 
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
+from ..llm.cache_context import llm_cache_context
 from ..utils import extract_json
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils.region_planning import plan_macro_regions
@@ -74,9 +75,10 @@ class MacroRegionPlannerAgent(BaseAgent):
             MessageRole.USER,
             json.dumps({"regions": snippets}, ensure_ascii=False),
         )
-        response = await self.llm.chat(
-            self._messages, system_prompt=SYSTEM_PROMPTS["macro_region_refiner"]
-        )
+        with llm_cache_context(agent_name="MacroRegionPlannerAgent"):
+            response = await self.llm.chat(
+                self._messages, system_prompt=SYSTEM_PROMPTS["macro_region_refiner"]
+            )
         data = json.loads(extract_json(response.content))
         refinements = data.get("refinements") or []
         ref_by_id: dict[str, dict] = {

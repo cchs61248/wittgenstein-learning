@@ -35,7 +35,11 @@ async def run_curriculum_job(ctx, session_id: str) -> dict:
         meta = (meta_ckpt or {}).get("pipeline_meta") or {}
         provider = meta.get("provider_name") or row.get("provider_name") or DEFAULT_PROVIDER
         model = meta.get("model_name") or row.get("model_name")
-        llm = create_provider(provider, model=model)
+        from ..llm.caching_provider import maybe_wrap_curriculum_llm
+        llm = maybe_wrap_curriculum_llm(
+            create_provider(provider, model=model),
+            content_hash=row.get("content_hash"),
+        )
         orch = LearningOrchestrator(llm)
 
         _log.info(

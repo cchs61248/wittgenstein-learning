@@ -4,6 +4,7 @@ import re
 from typing import Any
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import LLMMessage, MessageRole
+from ..llm.cache_context import llm_cache_context
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
 from ..utils.small_curriculum import merge_duplicate_topic_stages
@@ -319,85 +320,87 @@ class ContentSplitterAgent(BaseAgent):
                 candidate = self._extract_json_candidate(repaired.content)
 
     async def run(self, ctx: AgentContext) -> dict[str, Any]:
-        self._reset()
-        t0 = self._log_start(
-            ctx,
-            chunks=len(ctx.task_payload.get("source_chunks", [])),
-            target_depth=ctx.task_payload.get("target_depth", "?"),
-        )
-
         payload = ctx.task_payload
-        source_chunks: list[dict] = payload.get("source_chunks", [])
-        max_stages: int = payload.get("max_stages", 30)
-        target_depth: str = payload.get("target_depth", "intermediate")
-        previous_attempt_missed: list[str] = payload.get("previous_attempt_missed") or []
-        issue_chunk_ids: list[str] = payload.get("issue_chunk_ids") or []
-        verifier_reason: str = (payload.get("verifier_reason") or "").strip()
-        required_outline: dict | None = payload.get("required_outline")
-        repair_plan_struct: dict | None = payload.get("repair_plan_struct")
-        must_cover_topics: list[str] = payload.get("must_cover_topics") or []
-
-        db_chunks: dict[str, dict] = {c["chunk_id"]: c for c in source_chunks}
-
-        chunks_text = _format_chunks_with_sources(source_chunks)
-
-        system = SYSTEM_PROMPTS["content_splitter"].format(max_stages=max_stages)
-
-        outline_section = ""
-        if required_outline:
-            outline_section = (
-                "\n\n【教材骨架 required_outline】本輪切分必須遵守："
-                f"\n{json.dumps(required_outline, ensure_ascii=False)}"
+        region_id = payload.get("region_id")
+        with llm_cache_context(agent_name="ContentSplitterAgent", region_id=region_id):
+            self._reset()
+            t0 = self._log_start(
+                ctx,
+                chunks=len(ctx.task_payload.get("source_chunks", [])),
+                target_depth=ctx.task_payload.get("target_depth", "?"),
             )
 
-        must_cover_section = ""
-        if must_cover_topics:
-            cleaned = [str(t).strip() for t in must_cover_topics if str(t).strip()]
-            if cleaned:
-                must_cover_section = (
-                    "\n\n【強約束 — 本 region 必須教到的核心概念（來自 MacroRegionPlanner tier-3）】"
-                    "\n以下每個概念必須出現在至少一個 stage 的 key_concepts 內（字面 exact match）；"
-                    "概念數量 ≥ 4 個時，原則上每個概念對應獨立 stage，禁止 mash-up 壓縮："
-                    f"\n{json.dumps(cleaned, ensure_ascii=False)}"
+            source_chunks: list[dict] = payload.get("source_chunks", [])
+            max_stages: int = payload.get("max_stages", 30)
+            target_depth: str = payload.get("target_depth", "intermediate")
+            previous_attempt_missed: list[str] = payload.get("previous_attempt_missed") or []
+            issue_chunk_ids: list[str] = payload.get("issue_chunk_ids") or []
+            verifier_reason: str = (payload.get("verifier_reason") or "").strip()
+            required_outline: dict | None = payload.get("required_outline")
+            repair_plan_struct: dict | None = payload.get("repair_plan_struct")
+            must_cover_topics: list[str] = payload.get("must_cover_topics") or []
+
+            db_chunks: dict[str, dict] = {c["chunk_id"]: c for c in source_chunks}
+
+            chunks_text = _format_chunks_with_sources(source_chunks)
+
+            system = SYSTEM_PROMPTS["content_splitter"].format(max_stages=max_stages)
+
+            outline_section = ""
+            if required_outline:
+                outline_section = (
+                    "\n\n【教材骨架 required_outline】本輪切分必須遵守："
+                    f"\n{json.dumps(required_outline, ensure_ascii=False)}"
                 )
 
-        retry_hint_section = ""
-        if repair_plan_struct or previous_attempt_missed or verifier_reason:
-            parts = ["\n\n【重試提示】上一輪切分未通過 SplitterVerifier，本輪必須修正："]
-            if repair_plan_struct:
-                parts.append(
-                    f"\n  repair_plan_struct={json.dumps(repair_plan_struct, ensure_ascii=False)}"
-                )
-            if previous_attempt_missed:
-                parts.append(
-                    f"\n  previous_attempt_missed={json.dumps(previous_attempt_missed, ensure_ascii=False)}"
-                )
-            if issue_chunk_ids:
-                parts.append(
-                    f"\n  issue_chunk_ids={json.dumps(issue_chunk_ids, ensure_ascii=False)}"
-                )
-            if verifier_reason:
-                parts.append(f"\n  verifier_reason={verifier_reason}")
-            retry_hint_section = "".join(parts)
+            must_cover_section = ""
+            if must_cover_topics:
+                cleaned = [str(t).strip() for t in must_cover_topics if str(t).strip()]
+                if cleaned:
+                    must_cover_section = (
+                        "\n\n【強約束 — 本 region 必須教到的核心概念（來自 MacroRegionPlanner tier-3）】"
+                        "\n以下每個概念必須出現在至少一個 stage 的 key_concepts 內（字面 exact match）；"
+                        "概念數量 ≥ 4 個時，原則上每個概念對應獨立 stage，禁止 mash-up 壓縮："
+                        f"\n{json.dumps(cleaned, ensure_ascii=False)}"
+                    )
 
-        user_msg = (
-            f"目標難度：{target_depth}\n\n"
-            f"以下是教材的分段內容，請根據語義關係組合成學習階段：\n\n"
-            f"{chunks_text}"
-            f"{outline_section}"
-            f"{must_cover_section}"
-            f"{retry_hint_section}"
-        )
-        self._messages.append(LLMMessage(role=MessageRole.USER, content=user_msg))
+            retry_hint_section = ""
+            if repair_plan_struct or previous_attempt_missed or verifier_reason:
+                parts = ["\n\n【重試提示】上一輪切分未通過 SplitterVerifier，本輪必須修正："]
+                if repair_plan_struct:
+                    parts.append(
+                        f"\n  repair_plan_struct={json.dumps(repair_plan_struct, ensure_ascii=False)}"
+                    )
+                if previous_attempt_missed:
+                    parts.append(
+                        f"\n  previous_attempt_missed={json.dumps(previous_attempt_missed, ensure_ascii=False)}"
+                    )
+                if issue_chunk_ids:
+                    parts.append(
+                        f"\n  issue_chunk_ids={json.dumps(issue_chunk_ids, ensure_ascii=False)}"
+                    )
+                if verifier_reason:
+                    parts.append(f"\n  verifier_reason={verifier_reason}")
+                retry_hint_section = "".join(parts)
 
-        response = await self.llm.chat(self._messages, system_prompt=system)
-        self._reset()
-        result = await self._parse_or_repair_json(
-            response.content,
-            max_stages=max_stages,
-            db_chunks=db_chunks,
-            preserve_thin_stages=bool(required_outline or repair_plan_struct),
-        )
+            user_msg = (
+                f"目標難度：{target_depth}\n\n"
+                f"以下是教材的分段內容，請根據語義關係組合成學習階段：\n\n"
+                f"{chunks_text}"
+                f"{outline_section}"
+                f"{must_cover_section}"
+                f"{retry_hint_section}"
+            )
+            self._messages.append(LLMMessage(role=MessageRole.USER, content=user_msg))
 
-        self._log_end(ctx, t0, {"stages_count": len(result.get("stages", []))})
-        return result
+            response = await self.llm.chat(self._messages, system_prompt=system)
+            self._reset()
+            result = await self._parse_or_repair_json(
+                response.content,
+                max_stages=max_stages,
+                db_chunks=db_chunks,
+                preserve_thin_stages=bool(required_outline or repair_plan_struct),
+            )
+
+            self._log_end(ctx, t0, {"stages_count": len(result.get("stages", []))})
+            return result

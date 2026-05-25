@@ -10,6 +10,7 @@ from typing import Any
 
 from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import MessageRole
+from ..llm.cache_context import llm_cache_context
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
 
@@ -46,9 +47,10 @@ class ConceptCanonicalizeAgent(BaseAgent):
             f"new_concepts={json.dumps(new_concepts, ensure_ascii=False)}\n\n"
             f"historical_pool={json.dumps(historical_pool, ensure_ascii=False)}",
         )
-        response = await self.llm.chat(
-            self._messages, system_prompt=SYSTEM_PROMPTS["concept_canonicalize"]
-        )
+        with llm_cache_context(agent_name="ConceptCanonicalizeAgent"):
+            response = await self.llm.chat(
+                self._messages, system_prompt=SYSTEM_PROMPTS["concept_canonicalize"]
+            )
         self._reset()
 
         data = json.loads(extract_json(response.content))

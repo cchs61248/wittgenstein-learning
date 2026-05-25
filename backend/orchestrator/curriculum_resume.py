@@ -82,7 +82,11 @@ async def resume_generating_session_background(
         meta = meta_ckpt.get("pipeline_meta") or {}
         provider = meta.get("provider_name") or row.get("provider_name")
         model = meta.get("model_name") or row.get("model_name")
-        llm = llm_factory(provider, model)
+        from ..llm.caching_provider import maybe_wrap_curriculum_llm
+        llm = maybe_wrap_curriculum_llm(
+            llm_factory(provider, model),
+            content_hash=row.get("content_hash"),
+        )
         from .learning_orchestrator import LearningOrchestrator
 
         orch = LearningOrchestrator(llm)

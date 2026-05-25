@@ -538,7 +538,13 @@ class LearningOrchestrator:
         source_file_ids: list[str] | None = None,
     ) -> None:
         if os.getenv("CURRICULUM_PIPELINE_V2") == "1":
+            from ..llm.caching_provider import maybe_wrap_curriculum_llm
             from .curriculum_pipeline_v2 import run_start_session_v2
+            llm = getattr(self, "llm", None)
+            if llm is not None:
+                self.llm = maybe_wrap_curriculum_llm(
+                    llm, content_hash=compute_content_hash(source_chunks),
+                )
             return await run_start_session_v2(
                 self,
                 session_id=session_id,
