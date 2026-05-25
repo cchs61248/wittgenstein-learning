@@ -30,6 +30,7 @@ def create_provider(
     model: Optional[str] = None,
     **kwargs,
 ) -> BaseLLMProvider:
-    ptype = LLMProviderType(provider_type)
+    normalized = str(provider_type).strip().lower()
+    ptype = LLMProviderType(normalized)
     default_model, cls = _DEFAULTS[ptype]
     return cls(model=model or default_model, **kwargs)
