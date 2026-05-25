@@ -59,6 +59,28 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("wl.orchestrator.v2")
 
+_KM_SUMMARY_MAX_LEN = 180
+
+
+def _build_knowledge_map_summary(summary_parts: list[str], stage_count: int) -> str:
+    """產生單段知識地圖摘要，避免拼接全部 region summary 成無法閱讀的牆文。"""
+    parts = [s.strip() for s in summary_parts if s and s.strip()]
+    if not parts:
+        return f"共 {stage_count} 個學習節點" if stage_count else "V2 課程路徑"
+    head = parts[0]
+    if len(head) > _KM_SUMMARY_MAX_LEN:
+        cut = head[:_KM_SUMMARY_MAX_LEN]
+        for sep in ("。", "！", "？", ".", "!"):
+            idx = cut.rfind(sep)
+            if idx >= 40:
+                head = cut[: idx + 1]
+                break
+        else:
+            head = cut.rstrip("，,、 ") + "…"
+    if stage_count > 1:
+        return f"{head}（共 {stage_count} 個學習節點）"
+    return head
+
 
 def _dedupe_candidates(candidates: list[dict], threshold: float = 0.85) -> list[dict]:
     """合併 kc 相似 candidate；合併後 chunk 數超過 cap 則拒絕合併、保留獨立 candidate。
@@ -467,7 +489,7 @@ async def _run_per_source_split(
         if summary:
             summary_parts.append(summary)
 
-    combined = " ".join(s for s in summary_parts if s).strip()
+    combined = _build_knowledge_map_summary(summary_parts, max(len(all_candidates), 1))
     return all_candidates, combined
 
 
@@ -871,7 +893,6 @@ async def run_start_session_v2(
         })
 
     all_candidates = _dedupe_candidates(all_candidates)
-    summary = " ".join(s for s in summary_parts if s).strip() or "V2 課程路徑"
 
     chunks_lookup = {
         c["chunk_id"]: c.get("text", "")
@@ -1116,6 +1137,7 @@ async def run_start_session_v2(
         {"node_id": s["node_id"], "stage_id": s["stage_id"], "title": s["title"]}
         for s in stages
     ]
+    summary = _build_knowledge_map_summary(summary_parts, len(stages))
     orch._pending_stages = stages
     orch._pending_start_args = {
         "session_id": session_id,

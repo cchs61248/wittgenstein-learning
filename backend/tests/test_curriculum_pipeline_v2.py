@@ -2,7 +2,11 @@
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from backend.orchestrator.curriculum_pipeline_v2 import _dedupe_candidates, run_start_session_v2
+from backend.orchestrator.curriculum_pipeline_v2 import (
+    _build_knowledge_map_summary,
+    _dedupe_candidates,
+    run_start_session_v2,
+)
 from backend.orchestrator.learning_orchestrator import LearningOrchestrator
 
 
@@ -431,6 +435,24 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
                 emit=AsyncMock(),
             )
         v2_mock.assert_awaited_once()
+
+
+class TestBuildKnowledgeMapSummary(unittest.TestCase):
+    def test_uses_first_part_only_with_stage_count(self):
+        parts = [
+            "本段材料說明長期被動投資的核心主張。",
+            "本段教材說明有限理性如何影響決策。",
+        ]
+        out = _build_knowledge_map_summary(parts, 33)
+        self.assertIn("長期被動投資", out)
+        self.assertNotIn("有限理性", out)
+        self.assertIn("33", out)
+
+    def test_truncates_long_first_part(self):
+        long = "本段" + "很長" * 120 + "。"
+        out = _build_knowledge_map_summary([long], 5)
+        self.assertLessEqual(len(out), 200)
+        self.assertIn("5", out)
 
 
 if __name__ == "__main__":
