@@ -555,5 +555,96 @@ class TestBuildKnowledgeMapSummary(unittest.TestCase):
         self.assertIn("5", out)
 
 
+class TestDeterministicCleanup(unittest.TestCase):
+    """Regression: deterministic structural cleanup (orphan attach + kc trim) must
+    run even when global verify is aligned-within-tolerance. Previously gated on
+    `not aligned`, so tolerated orphans (≤ compact_orphan_limit) were silently
+    dropped and kc-heavy stages left untrimmed (live sess_81ihihq27: 5 chunks +
+    a whole '利益衝突' lesson lost; stage kc=10).
+    """
+
+    def test_tolerated_orphans_still_attached_when_aligned(self):
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        chunks = _chunks(8)  # chunk_0000..chunk_0007
+        stages = [{
+            "stage_id": 1, "node_id": "1.1", "title": "S1",
+            "key_concepts": ["alpha"],
+            "source_chunk_ids": ["chunk_0000", "chunk_0001", "chunk_0002"],
+        }]
+        # chunks 3-7 orphaned (5 ≤ tolerance → verify reports aligned=True)
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        covered = {cid for s in out for cid in (s.get("source_chunk_ids") or [])}
+        self.assertEqual(covered, {c["chunk_id"] for c in chunks})
+
+    def test_kc_heavy_stage_trimmed_when_aligned(self):
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        from backend.utils.small_curriculum import STAGE_MAX_KEY_CONCEPTS
+        chunks = _chunks(3)
+        stages = [{
+            "stage_id": 1, "node_id": "1.1", "title": "S1",
+            "key_concepts": [f"概念{i}" for i in range(10)],
+            "source_chunk_ids": ["chunk_0000", "chunk_0001", "chunk_0002"],
+        }]
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        for s in out:
+            self.assertLessEqual(
+                len(s.get("key_concepts") or []), STAGE_MAX_KEY_CONCEPTS,
+            )
+
+    @staticmethod
+    def _chunk_range(ids):
+        return [{
+            "chunk_id": f"chunk_{i:04d}",
+            "text": f"段落 {i} 內容",
+            "source_id": "src_a", "source_index": 0, "order_index": i,
+            "source_label": "書A", "section_title": f"法則 {i}",
+        } for i in ids]
+
+    def test_interior_orphan_folded_not_summary_stage(self):
+        """aligned path 的 interior orphan 應被 fold 進鄰近 stage，
+        不可變成中段的「章節總結與補充內容」fallback stage。"""
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        chunks = self._chunk_range([47, 48, 49, 50, 51])
+        stages = [
+            {"stage_id": 1, "node_id": "1.1", "title": "前節",
+             "key_concepts": ["a"],
+             "source_chunk_ids": ["chunk_0047", "chunk_0048"]},
+            {"stage_id": 2, "node_id": "1.2", "title": "後節",
+             "key_concepts": ["b"],
+             "source_chunk_ids": ["chunk_0050", "chunk_0051"]},
+        ]
+        # chunk_0049 是 interior orphan（夾在 0048 與 0050 之間）
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        covered = {cid for s in out for cid in (s.get("source_chunk_ids") or [])}
+        self.assertIn("chunk_0049", covered)
+        titles = [s.get("title") or "" for s in out]
+        self.assertNotIn("章節總結與補充內容", titles)
+
+    def test_tail_orphan_still_attached(self):
+        """真尾段 orphan（後面沒有任何 stage chunk）仍須被 attach，不可漏掉。"""
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        chunks = self._chunk_range([47, 48, 49, 50, 51, 52])
+        stages = [
+            {"stage_id": 1, "node_id": "1.1", "title": "前節",
+             "key_concepts": ["a"],
+             "source_chunk_ids": ["chunk_0047", "chunk_0048", "chunk_0049"]},
+            {"stage_id": 2, "node_id": "1.2", "title": "後節",
+             "key_concepts": ["b"],
+             "source_chunk_ids": ["chunk_0050", "chunk_0051"]},
+        ]
+        # chunk_0052 是尾段 orphan（後面沒有 stage chunk）
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        covered = {cid for s in out for cid in (s.get("source_chunk_ids") or [])}
+        self.assertIn("chunk_0052", covered)
+
+
 if __name__ == "__main__":
     unittest.main()
