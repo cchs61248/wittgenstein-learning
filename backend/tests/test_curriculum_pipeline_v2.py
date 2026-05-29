@@ -317,6 +317,51 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(qw.get("reducer_skipped"))
         self.assertIn("region_done", events)
 
+    async def test_t9_compact_same_material_cleans_orphan_enumerator_title(self):
+        """A1 鎖：compact same_material 路徑（finalize_small_file_stages）也必須經過
+        title cleanup 匯流點。若 hook 被掛回 _apply_deterministic_cleanup，compact
+        path 會 bypass → 此測試會抓到未清理的「模式二」。"""
+        orch = _mk_orch_v2()
+        chunks = _chunks(6)
+        orch.splitter.run = AsyncMock(return_value={
+            "stages": [{
+                "stage_id": 1,
+                "node_id": "1.1",
+                "title": "模式二：受託責任夥伴",
+                "teaching_goal": "理解受託責任",
+                "key_concepts": ["受託責任"],
+                "source_chunk_ids": [c["chunk_id"] for c in chunks],
+            }],
+            "summary": "V2 摘要",
+        })
+        captured, _ = await self._run_v2(orch, source_chunks=chunks, same_material=True)
+        titles = [s["title"] for s in captured["stages"]]
+        self.assertIn("受託責任夥伴", titles)
+        self.assertNotIn("模式二：受託責任夥伴", titles)
+        qw = captured["quality_warnings"] or {}
+        self.assertEqual(qw.get("title_cleanup_removed_orphan_enumerators"), 1)
+
+    async def test_t9b_non_same_material_preserves_enumerator_title(self):
+        """same_material gate：cross_material / 非同教材不跑 title cleanup。"""
+        orch = _mk_orch_v2()
+        chunks = _chunks(6)
+        orch.splitter.run = AsyncMock(return_value={
+            "stages": [{
+                "stage_id": 1,
+                "node_id": "1.1",
+                "title": "模式二：受託責任夥伴",
+                "teaching_goal": "理解受託責任",
+                "key_concepts": ["受託責任"],
+                "source_chunk_ids": [c["chunk_id"] for c in chunks],
+            }],
+            "summary": "V2 摘要",
+        })
+        captured, _ = await self._run_v2(orch, source_chunks=chunks, same_material=False)
+        titles = [s["title"] for s in captured["stages"]]
+        self.assertIn("模式二：受託責任夥伴", titles)
+        qw = captured["quality_warnings"] or {}
+        self.assertNotIn("title_cleanup_removed_orphan_enumerators", qw)
+
     async def test_start_session_routes_to_v2(self):
         orch = _mk_orch_v2()
         with patch(

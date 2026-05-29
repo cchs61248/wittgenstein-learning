@@ -1262,6 +1262,128 @@ def ensure_empty_key_concepts(stages: list[dict]) -> list[dict]:
     return out
 
 
+# --- Issue B: deterministic orphan-enumerator title cleanup (same_material only) ---
+# Title-only hygiene for per-source splitter naming drift: removes a leading local
+# sequence marker (模式X / 主題：（X）) when the final title set has no loose "一/1"
+# sibling for that series. Conservative by construction: structure / chunks /
+# key_concepts are never touched, and sibling matching is intentionally LENIENT so a
+# missed sibling never produces a wrong strip (preserving an orphan marker is the
+# acceptable error; stripping a legitimate one is not).
+_TITLE_MODE_ENUM_RE = re.compile(
+    r"^\s*模式\s*(?P<num>[二三四五六七八九十])\s*[：:、\-]\s*(?P<rest>.+?)\s*$"
+)
+_TITLE_PREFIX_PAREN_ENUM_RE = re.compile(
+    r"^\s*(?P<prefix>[^：:\n]{2,12}?)\s*[：:]\s*[（(]\s*(?P<num>[二三四五六七八九十])\s*[）)]\s*(?P<rest>.*?)\s*$"
+)
+# Formal chapter / rule / lesson numbering + continuation markers — never cleaned.
+_TITLE_PROTECTED_RE = re.compile(
+    r"(法則|第\s*[0-9一二三四五六七八九十]+\s*[章堂課節回部篇講集卷]|續|Chapter|Rule|Lesson|Part)",
+    re.IGNORECASE,
+)
+_MODE_ONE_SIBLING_RES = [
+    re.compile(r"模式\s*[一1１]"),
+    re.compile(r"模式\s*[（(]\s*[一1１]\s*[）)]"),
+    re.compile(r"模式\s*之\s*[一1１]"),
+    re.compile(r"第\s*[一1１]\s*種?\s*模式"),
+]
+_TITLE_CLEANUP_MIN_LEN = 4
+_TITLE_CLEANUP_BANNED = {
+    "補充內容", "核心概念", "章節總結", "章節補充", "總結與補充", "模式",
+}
+
+
+def _title_is_protected(title: str) -> bool:
+    return bool(_TITLE_PROTECTED_RE.search(title or ""))
+
+
+def _has_mode_one_sibling(all_titles: list[str]) -> bool:
+    return any(pat.search(t or "") for t in all_titles for pat in _MODE_ONE_SIBLING_RES)
+
+
+def _has_prefix_one_sibling(prefix: str, all_titles: list[str]) -> bool:
+    p = re.escape((prefix or "").strip())
+    if not p:
+        return False
+    pats = [
+        re.compile(rf"{p}\s*[：:]\s*[（(]\s*[一1１]\s*[）)]"),
+        re.compile(rf"{p}\s*[：:]\s*第?\s*[一1１]"),
+        re.compile(rf"{p}\s*[（(]\s*[一1１]\s*[）)]"),
+        re.compile(rf"{p}\s*之\s*[一1１]"),
+    ]
+    return any(pat.search(t or "") for t in all_titles for pat in pats)
+
+
+def _is_valid_cleaned_title(new_title: str, old_title: str) -> bool:
+    t = (new_title or "").strip()
+    if not t or t == (old_title or "").strip():
+        return False
+    if len(t) < _TITLE_CLEANUP_MIN_LEN:
+        return False
+    if t in _TITLE_CLEANUP_BANNED:
+        return False
+    return True
+
+
+def cleanup_orphan_enumerator_titles(
+    stages: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Issue B: title-only deterministic cleanup of orphan sequence markers.
+
+    Removes a leading local enumerator (模式二：X / 主題：（二）X) when the final
+    stage-title set has no loose 「一/1」 sibling for that series. Structure,
+    source_chunk_ids, key_concepts and teaching_goal are never modified. Sibling
+    matching is lenient (errs toward「sibling present → do not strip」). Intended for
+    same_material curricula, which have no global naming-coordination pass.
+
+    Returns ``(cleaned_stages, warnings)``.
+    """
+    all_titles = [str(s.get("title", "") or "") for s in stages]
+    cleaned: list[dict] = []
+    warnings: list[dict] = []
+
+    for stage in stages:
+        old_title = str(stage.get("title", "") or "")
+        if _title_is_protected(old_title):
+            cleaned.append(stage)
+            continue
+
+        new_title = None
+        pattern = None
+
+        m = _TITLE_MODE_ENUM_RE.match(old_title)
+        if m:
+            rest = m.group("rest").strip()
+            if rest and not _has_mode_one_sibling(all_titles):
+                new_title = rest
+                pattern = "mode_cn_number"
+
+        if new_title is None:
+            m = _TITLE_PREFIX_PAREN_ENUM_RE.match(old_title)
+            if m:
+                prefix = m.group("prefix").strip()
+                rest = m.group("rest").strip()
+                candidate = f"{prefix}：{rest}" if rest else prefix
+                if not _has_prefix_one_sibling(prefix, all_titles):
+                    new_title = candidate
+                    pattern = "prefix_paren_cn_number"
+
+        if new_title is not None and _is_valid_cleaned_title(new_title, old_title):
+            s = dict(stage)
+            s["title"] = new_title
+            cleaned.append(s)
+            warnings.append({
+                "stage_id": stage.get("stage_id"),
+                "old_title": old_title,
+                "new_title": new_title,
+                "reason": "removed_orphan_enumerator",
+                "pattern": pattern,
+            })
+        else:
+            cleaned.append(stage)
+
+    return cleaned, warnings
+
+
 def finalize_curriculum_stages(
     stages: list[dict],
     source_chunks: list[dict],
