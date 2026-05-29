@@ -555,5 +555,46 @@ class TestBuildKnowledgeMapSummary(unittest.TestCase):
         self.assertIn("5", out)
 
 
+class TestDeterministicCleanup(unittest.TestCase):
+    """Regression: deterministic structural cleanup (orphan attach + kc trim) must
+    run even when global verify is aligned-within-tolerance. Previously gated on
+    `not aligned`, so tolerated orphans (≤ compact_orphan_limit) were silently
+    dropped and kc-heavy stages left untrimmed (live sess_81ihihq27: 5 chunks +
+    a whole '利益衝突' lesson lost; stage kc=10).
+    """
+
+    def test_tolerated_orphans_still_attached_when_aligned(self):
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        chunks = _chunks(8)  # chunk_0000..chunk_0007
+        stages = [{
+            "stage_id": 1, "node_id": "1.1", "title": "S1",
+            "key_concepts": ["alpha"],
+            "source_chunk_ids": ["chunk_0000", "chunk_0001", "chunk_0002"],
+        }]
+        # chunks 3-7 orphaned (5 ≤ tolerance → verify reports aligned=True)
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        covered = {cid for s in out for cid in (s.get("source_chunk_ids") or [])}
+        self.assertEqual(covered, {c["chunk_id"] for c in chunks})
+
+    def test_kc_heavy_stage_trimmed_when_aligned(self):
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        from backend.utils.small_curriculum import STAGE_MAX_KEY_CONCEPTS
+        chunks = _chunks(3)
+        stages = [{
+            "stage_id": 1, "node_id": "1.1", "title": "S1",
+            "key_concepts": [f"概念{i}" for i in range(10)],
+            "source_chunk_ids": ["chunk_0000", "chunk_0001", "chunk_0002"],
+        }]
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        for s in out:
+            self.assertLessEqual(
+                len(s.get("key_concepts") or []), STAGE_MAX_KEY_CONCEPTS,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

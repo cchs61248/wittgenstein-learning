@@ -257,6 +257,49 @@ def _build_follow_up_stages(
     return new_stages
 
 
+def _apply_deterministic_cleanup(
+    stages: list[dict],
+    source_chunks: list[dict],
+    required_outline: dict | None,
+    quality_warnings: dict,
+    session_id: str,
+) -> list[dict]:
+    """確定性結構收尾（層 1）：orphan attach + 過量 kc 修剪 + oversized 拆分。
+
+    與 global verify 的 aligned 結果無關，一律執行。`verify_global_coverage` 對
+    orphan 數有容忍上限（compact_orphan_limit），aligned=True 不代表零 orphan——
+    舊版把這段綁在 `not aligned` 分支，導致容忍上限內的 orphan 被靜默丟棄、kc 過量
+    的 stage 不被修剪（live sess_81ihihq27：5 個尾 chunk 連同「利益衝突」整堂遺失、
+    stage kc=10 未修）。這些都是確定性結構修正，非語意合併——語意合併（jaccard /
+    consolidator）仍受 allow_merge 閘門控制，不在此函式。
+    """
+    orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
+    orphans_before = len(orphan_check.get("orphan_chunk_ids") or [])
+    if orphans_before:
+        stages = ensure_orphan_chunks_attached(stages, source_chunks)
+        stages = split_oversized_stages(stages, source_chunks)
+    # kc 修剪 / 拆分 / 去重不依賴 orphan，永遠跑（避免 aligned 課綱殘留 kc 過量 stage）
+    stages = split_kc_heavy_stages(stages, source_chunks)
+    stages = dedupe_key_concept_aliases(stages)
+    stages = prune_phantom_key_concepts(stages, source_chunks)
+    stages = trim_stage_key_concepts(stages)
+    if orphans_before:
+        final_check = verify_global_coverage(stages, source_chunks, required_outline)
+        orphans_after = len(final_check.get("orphan_chunk_ids") or [])
+        _log.info(
+            "v2 deterministic cleanup  session=%s  orphans before=%d  after=%d",
+            session_id, orphans_before, orphans_after,
+        )
+        if orphans_after > 0:
+            _log.warning(
+                "v2 orphan attach incomplete  session=%s  remaining=%d  ids=%s",
+                session_id, orphans_after,
+                (final_check.get("orphan_chunk_ids") or [])[:10],
+            )
+            quality_warnings["orphan_attach_incomplete"] = orphans_after
+    return stages
+
+
 def _splitter_stages_to_candidates(stages: list[dict], region: dict) -> list[dict]:
     """Convert splitter stages → reducer candidates，過濾掉 region 邊界外的 chunk_id。
 
@@ -942,31 +985,13 @@ async def run_start_session_v2(
                 session_id,
                 gverify,
             )
-    elif not initial_gverify.get("aligned"):
+    else:
+        # 非 compact 路徑：確定性收尾一律跑（不再綁 `not aligned`）。aligned-within-
+        # tolerance 的課綱也會有 orphan / kc 過量，舊版在此靜默漏掉。語意合併不在此。
         stages = normalize_stages_pre_verify(stages, source_chunks)
-        orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
-        if orphan_check.get("orphan_chunk_ids"):
-            orphans_before = len(orphan_check.get("orphan_chunk_ids") or [])
-            stages = ensure_orphan_chunks_attached(stages, source_chunks)
-            stages = split_oversized_stages(stages, source_chunks)
-            stages = split_kc_heavy_stages(stages, source_chunks)
-            stages = dedupe_key_concept_aliases(stages)
-            stages = prune_phantom_key_concepts(stages, source_chunks)
-            stages = trim_stage_key_concepts(stages)
-            # P2b: re-verify after attach to surface any chunks that escaped recovery
-            final_check = verify_global_coverage(stages, source_chunks, required_outline)
-            orphans_after = len(final_check.get("orphan_chunk_ids") or [])
-            _log.info(
-                "v2 full path orphan attach  session=%s  before=%d  after=%d",
-                session_id, orphans_before, orphans_after,
-            )
-            if orphans_after > 0:
-                _log.warning(
-                    "v2 orphan attach incomplete  session=%s  remaining=%d  ids=%s",
-                    session_id, orphans_after,
-                    (final_check.get("orphan_chunk_ids") or [])[:10],
-                )
-                quality_warnings["orphan_attach_incomplete"] = orphans_after
+        stages = _apply_deterministic_cleanup(
+            stages, source_chunks, required_outline, quality_warnings, session_id,
+        )
 
     if is_listicle_source(source_chunks):
         stages = prune_toc_listicle_chunks(stages, source_chunks)
