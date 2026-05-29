@@ -4210,3 +4210,28 @@ textarea:disabled {
   color: var(--text-muted);
   margin: 0;
 }
+
+/* ── UploadModal：是否同教材 radio 區塊 ── */
+.modal-material-choice {
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.modal-material-q {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.modal-material-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+
+.modal-material-radio input {
+  margin: 0;
+}

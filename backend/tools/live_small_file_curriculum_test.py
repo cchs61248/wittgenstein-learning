@@ -157,17 +157,6 @@ def _env_file_value(key: str) -> str | None:
     return None
 
 
-def _apply_small_file_threshold(*, full_v2: bool) -> None:
-    """Apply threshold from backend/.env; avoid stale shell SMALL_FILE_CHUNK_THRESHOLD=0."""
-    if full_v2:
-        os.environ["SMALL_FILE_CHUNK_THRESHOLD"] = "0"
-        return
-    from backend.utils.small_curriculum import DEFAULT_SMALL_FILE_CHUNK_THRESHOLD
-
-    raw = _env_file_value("SMALL_FILE_CHUNK_THRESHOLD")
-    os.environ["SMALL_FILE_CHUNK_THRESHOLD"] = raw or str(DEFAULT_SMALL_FILE_CHUNK_THRESHOLD)
-
-
 async def run_live_curriculum(
     source_paths: list[Path],
     *,
@@ -176,7 +165,6 @@ async def run_live_curriculum(
     run_stage1: bool,
     user_id: str = DEFAULT_USER_ID,
 ) -> LiveRunResult:
-    _apply_small_file_threshold(full_v2=full_v2)
     source_chunks, per_source = probe_multi_source_chunks(source_paths)
     probe = _chunk_probe(source_chunks)
     print(
@@ -194,9 +182,6 @@ async def run_live_curriculum(
         t = msg.get("type")
         if t in ("region_done", "reduce_done", "composer_done", "session_generating"):
             print("EVENT", t, json.dumps(msg.get("payload", {}), ensure_ascii=False)[:300])
-
-    os.environ["CURRICULUM_PIPELINE_V2"] = "1"
-    os.environ.setdefault("MACRO_REGION_USE_LLM", "0")
 
     from backend.llm.provider_factory import create_provider, LLMProviderType
     from backend.orchestrator.learning_orchestrator import LearningOrchestrator

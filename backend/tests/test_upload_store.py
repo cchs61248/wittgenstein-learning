@@ -1,5 +1,4 @@
 """upload_store 純文字 sidecar 與 load_upload_text 測試。"""
-import json
 
 import pytest
 

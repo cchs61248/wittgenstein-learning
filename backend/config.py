@@ -46,6 +46,9 @@ UPLOAD_ORPHAN_MAX_AGE_HOURS: float = float(os.getenv("UPLOAD_ORPHAN_MAX_AGE_HOUR
 # 上傳解析後允許的最大字元數（與 URL 擷取一致）
 UPLOAD_MAX_CHAR_COUNT: int = int(os.getenv("UPLOAD_MAX_CHAR_COUNT", "500000"))
 
+# 單一上傳檔案大小上限（MB）；超過回 413
+UPLOAD_MAX_FILE_MB: int = int(os.getenv("UPLOAD_MAX_FILE_MB", "10"))
+
 REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CURRICULUM_USE_ARQ: bool = os.getenv("CURRICULUM_USE_ARQ", "0").strip().lower() in (
     "1", "true", "yes",
@@ -58,3 +61,10 @@ LLM_CACHE_ENABLED: bool = os.getenv("LLM_CACHE_ENABLED", "0").strip().lower() in
 )
 CURRICULUM_PROMPT_VERSION: str = os.getenv("CURRICULUM_PROMPT_VERSION", "1")
 LLM_CACHE_EVICT_DAYS: int = int(os.getenv("LLM_CACHE_EVICT_DAYS", "90"))
+
+# LLM 全域併發上限（0 = 關閉限流，維持舊行為）
+LLM_MAX_CONCURRENT: int = int(os.getenv("LLM_MAX_CONCURRENT", "0"))
+# 等待 slot 最長秒數（Teacher 串流可設較長，預設 120）
+LLM_SLOT_WAIT_TIMEOUT_S: float = float(os.getenv("LLM_SLOT_WAIT_TIMEOUT_S", "120"))
+# Redis slot lease TTL（防止 worker crash 後 slot 永久佔用）
+LLM_SLOT_LEASE_S: int = int(os.getenv("LLM_SLOT_LEASE_S", "600"))

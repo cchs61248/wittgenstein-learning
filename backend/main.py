@@ -1,8 +1,6 @@
 import asyncio
 import hashlib
 import json
-import os
-import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
@@ -39,13 +37,11 @@ from .memory import session_memory
 from .files.upload_store import load_upload_meta, load_upload_text
 from .files.upload_gc import gc_unreferenced_uploads
 from .utils.chunker import build_source_chunks
-from .utils.logger import setup_logging, ws_logger
+from .utils.source_order import resolve_source_order
+from .utils.logger import ingest_logger, setup_logging, ws_logger
 from .ws.connection_manager import WebSocketManager
 from .ws.generation_handle import (
-    register as _gen_register,
     get_active as _gen_get,
-    finish as _gen_finish,
-    cancel as _gen_cancel,
     register_async as _gen_register_async,
     finish_async as _gen_finish_async,
     cancel_async as _gen_cancel_async,
@@ -176,18 +172,21 @@ async def _log_unhandled_exception(request: Request, exc: Exception) -> JSONResp
 
 
 ws_manager = WebSocketManager()
+_ingest_log = ingest_logger()
 
 
 async def _build_source_chunks_from_payload(
     p: dict,
     emit,
-) -> tuple[list[dict], list[str]] | None:
+) -> tuple[list[dict], list[str], dict] | None:
     """
     從 start_session payload 組裝 source_chunks。
     支援新格式（sources 陣列）與舊格式（uploaded_file_id / content）。
-    回傳 (all_chunks, file_ids)；file_ids 供 generating stub 追蹤，chunk 入庫後即 purge。
+    回傳 (all_chunks, file_ids, order_decision)；file_ids 供 generating stub 追蹤，chunk 入庫後即 purge。
     回傳 None 表示已向客戶端送出錯誤，呼叫方應 continue。
     """
+    order_decision = {"applied": False, "certain": False, "signal": None,
+                      "order": None, "reason": "not_initialized"}
     sources_raw: list[dict] = p.get("sources") or []
     file_ids: list[str] = []
 
@@ -197,6 +196,7 @@ async def _build_source_chunks_from_payload(
         for i, src in enumerate(sources_raw):
             src_type = src.get("type", "file")
             label = src.get("label") or f"來源 {i + 1}"
+            chapter_hint: dict = {}
             if src_type == "text":
                 text = src.get("content", "").strip()
                 if not text:
@@ -218,8 +218,20 @@ async def _build_source_chunks_from_payload(
                     return None
                 file_ids.append(file_id)
                 label = label or meta.get("filename", label)
+                # P1b: forward EPUB chapter metadata into chunks so per-source split
+                # can hint Splitter with chapter context.
+                if meta.get("source_type") == "epub_chapter":
+                    chapter_hint = {
+                        "epub_filename": meta.get("epub_filename"),
+                        "chapter_index": meta.get("chapter_index"),
+                        "chapter_title": meta.get("chapter_title"),
+                    }
+                    chapter_hint = {k: v for k, v in chapter_hint.items() if v is not None}
             if text:
-                source_infos.append({"label": label, "text": text, "index": i})
+                source_infos.append({
+                    "label": label, "text": text, "index": i,
+                    "chapter_hint": chapter_hint,
+                })
 
         if not source_infos:
             await emit({"type": "error", "payload": {"message": "資料源內容為空，請確認上傳的檔案或文字"}})
@@ -249,12 +261,20 @@ async def _build_source_chunks_from_payload(
             label = "貼上的文字"
         source_infos = [{"label": label, "text": text, "index": 0}]
 
+    same_material = bool(p.get("same_material", True))
+    if same_material and len(source_infos) > 1:
+        source_infos, order_decision = resolve_source_order(source_infos)
+    else:
+        order_decision = {"applied": False, "certain": False, "signal": None,
+                          "order": None, "reason": "single_source_or_cross_material"}
+
     # 每個來源獨立 chunking，全域重新編號，附上來源 metadata
     all_chunks: list[dict] = []
     global_offset = 0
     for src_info in source_infos:
         label = src_info["label"]
         idx = src_info["index"]
+        chapter_hint: dict = src_info.get("chapter_hint") or {}
         source_id = hashlib.sha256(f"{label}:{idx}".encode()).hexdigest()[:12]
         chunks = build_source_chunks(src_info["text"])
         for c in chunks:
@@ -263,6 +283,10 @@ async def _build_source_chunks_from_payload(
             c["source_label"] = label
             c["source_index"] = idx
             c["source_id"] = source_id
+            # P1b: propagate EPUB chapter metadata onto every chunk so per-source
+            # split can pick it up from subset[0] later.
+            for k, v in chapter_hint.items():
+                c.setdefault(k, v)
             global_offset += 1
         all_chunks.extend(chunks)
 
@@ -270,7 +294,17 @@ async def _build_source_chunks_from_payload(
         await emit({"type": "error", "payload": {"message": "無法從文件中抽取內容，請確認檔案格式"}})
         return None
 
-    return all_chunks, file_ids
+    sample_titles = [
+        (c.get("section_title") or c["chunk_id"]) for c in all_chunks[:5]
+    ]
+    _ingest_log.info(
+        "source_chunks built  count=%d  sources=%d  sample_titles=%s",
+        len(all_chunks),
+        len(source_infos),
+        sample_titles,
+    )
+
+    return all_chunks, file_ids, order_decision
 
 
 async def _build_orchestrator_for_session(
@@ -435,12 +469,20 @@ async def websocket_endpoint(
                 built = await _build_source_chunks_from_payload(p, emit)
                 if built is None:
                     continue  # emit already sent
-                source_chunks, source_file_ids = built
+                source_chunks, source_file_ids, order_decision = built
+                _ingest_log.info(
+                    "start_session: ready for curriculum  session=%s  chunks=%d  "
+                    "upload_files=%d",
+                    session_id,
+                    len(source_chunks),
+                    len(source_file_ids),
+                )
 
                 target_depth = p.get("target_depth", "intermediate")
                 question_mode = p.get("question_mode", "short_answer")
+                same_material: bool = bool(p.get("same_material", True))
 
-                if CURRICULUM_USE_ARQ and os.getenv("CURRICULUM_PIPELINE_V2") == "1":
+                if CURRICULUM_USE_ARQ:
                     from arq import create_pool
                     from arq.connections import RedisSettings
                     from .jobs.session_prepare import prepare_curriculum_session
@@ -462,6 +504,8 @@ async def websocket_endpoint(
                             model_name=model,
                             source_file_ids=source_file_ids,
                             sources_json=sources_manifest,
+                            same_material=same_material,
+                            order_decision=order_decision,
                         )
                         pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
                         try:
@@ -501,6 +545,8 @@ async def websocket_endpoint(
                             provider_name=provider_name,
                             model_name=model,
                             emit=emit,
+                            same_material=same_material,
+                            order_decision=order_decision,
                         )
                     except asyncio.CancelledError:
                         _ws_log.info(

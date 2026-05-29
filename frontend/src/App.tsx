@@ -736,7 +736,8 @@ export default function App() {
     depth: DepthType,
     model: string,
     questionMode: 'short_answer' | 'multiple_choice',
-    sources: Array<{ type: string; file_id?: string; content?: string; label: string }>
+    sources: Array<{ type: string; file_id?: string; content?: string; label: string }>,
+    sameMaterial: boolean,
   ) => {
     if (!token) return;
 
@@ -749,6 +750,7 @@ export default function App() {
       target_depth: depth,
       question_mode: questionMode,
       model,
+      same_material: sameMaterial,
     };
 
     // 背景模式：當前已有學習中的 session，新材料在背景生成，不中斷現有學習

@@ -1,12 +1,9 @@
 """Small-file curriculum helpers — API Design.pdf regression."""
-import os
 import unittest
-from unittest.mock import patch
 
 from backend.agents.global_curriculum_verifier import verify_global_coverage
 from backend.orchestrator.curriculum_pipeline_v2 import _build_follow_up_stages
 from backend.utils.small_curriculum import (
-    case_covered_in_stages,
     dedupe_key_concept_aliases,
     ensure_key_concept_chunk_coverage,
     ensure_orphan_chunks_attached,
@@ -16,12 +13,9 @@ from backend.utils.small_curriculum import (
     ensure_empty_key_concepts,
     finalize_curriculum_stages,
     sort_stages_by_chunk_order,
-    is_compact_curriculum,
     is_small_file,
     merge_duplicate_topic_stages,
     source_count,
-    use_per_source_split_path,
-    use_single_split_path,
     merge_empty_chunk_stages,
     normalize_stages_pre_verify,
     prune_intro_chunk_sharing,
@@ -33,7 +27,6 @@ from backend.utils.small_curriculum import (
     is_epub_nav_junk_chunk,
     filter_epub_nav_junk_chunks,
     KC_HEAVY_SPLIT_CHUNK_THRESHOLD,
-    zero_region_overlaps,
     ORPHAN_STAGE_MAX_CHUNKS,
     STAGE_MAX_KEY_CONCEPTS,
 )
@@ -99,14 +92,6 @@ def _api_design_reroll_stages() -> list[dict]:
 
 
 class TestSmallFileDetection(unittest.TestCase):
-    def setUp(self):
-        self._env_patch = patch.dict(
-            os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False,
-        )
-        self._env_patch.start()
-
-    def tearDown(self):
-        self._env_patch.stop()
     def test_four_chunks_is_small(self):
         self.assertTrue(is_small_file(_api_design_chunks()))
 
@@ -117,16 +102,6 @@ class TestSmallFileDetection(unittest.TestCase):
     def test_fifty_one_chunks_not_small(self):
         chunks = [{"chunk_id": f"c{i}", "text": "x" * 800} for i in range(51)]
         self.assertFalse(is_small_file(chunks))
-        regions = [{"region_id": "r0", "overlap_before": 2, "overlap_after": 2}]
-        zero_region_overlaps(regions)
-        self.assertEqual(regions[0]["overlap_before"], 0)
-        self.assertEqual(regions[0]["overlap_after"], 0)
-
-    def test_compact_curriculum_when_full_v2_forces_threshold_zero(self):
-        chunks = [{"chunk_id": f"chunk_{i:04d}", "text": "x"} for i in range(23)]
-        with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "0"}, clear=False):
-            self.assertFalse(is_small_file(chunks))
-            self.assertTrue(is_compact_curriculum(chunks))
 
 
 class TestSmallFilePathHelpers(unittest.TestCase):
@@ -144,27 +119,6 @@ class TestSmallFilePathHelpers(unittest.TestCase):
             {"chunk_id": "b", "source_index": 1},
         ]
         self.assertEqual(source_count(chunks), 2)
-
-    def test_single_split_one_source(self):
-        chunks = [{"chunk_id": f"c{i}", "source_id": "only"} for i in range(10)]
-        with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
-            self.assertTrue(use_single_split_path(chunks))
-            self.assertFalse(use_per_source_split_path(chunks))
-
-    def test_per_source_split_multi(self):
-        chunks = [
-            {"chunk_id": "a", "source_id": "s1"},
-            {"chunk_id": "b", "source_id": "s2"},
-        ]
-        with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
-            self.assertFalse(use_single_split_path(chunks))
-            self.assertTrue(use_per_source_split_path(chunks))
-
-    def test_large_file_neither_small_path(self):
-        chunks = [{"chunk_id": f"c{i}", "source_id": f"s{i % 2}"} for i in range(51)]
-        with patch.dict(os.environ, {"SMALL_FILE_CHUNK_THRESHOLD": "50"}, clear=False):
-            self.assertFalse(use_single_split_path(chunks))
-            self.assertFalse(use_per_source_split_path(chunks))
 
 
 class TestFuzzyNamedCase(unittest.TestCase):

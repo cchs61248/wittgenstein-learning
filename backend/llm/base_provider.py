@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import AsyncGenerator, Optional
 
+from .concurrency import llm_slot
+
 
 class MessageRole(str, Enum):
     SYSTEM = "system"
@@ -67,33 +69,47 @@ class BaseLLMProvider(ABC):
             _SEP,
         )
 
-        t0 = time.perf_counter()
         try:
-            response = await self._do_chat(messages, system_prompt)
-        except Exception as exc:
-            log.error(
-                "LLM CHAT ERROR  call_id=%s  provider=%s  model=%s\n%s",
+            async with llm_slot(purpose=f"chat:{provider}:{self.model}"):
+                t0 = time.perf_counter()
+                try:
+                    response = await self._do_chat(messages, system_prompt)
+                except TimeoutError as exc:
+                    log.warning(
+                        "LLM slot wait timeout  call_id=%s  provider=%s  model=%s  %s",
+                        call_id, provider, self.model, exc,
+                    )
+                    raise
+                except Exception as exc:
+                    log.error(
+                        "LLM CHAT ERROR  call_id=%s  provider=%s  model=%s\n%s",
+                        call_id, provider, self.model, exc,
+                        exc_info=True,
+                    )
+                    raise
+
+                elapsed = time.perf_counter() - t0
+                log.debug(
+                    "%s\nLLM CHAT RESPONSE  call_id=%s  provider=%s  model=%s\n"
+                    "  elapsed=%.2fs  in_tokens=%d  out_tokens=%d  finish=%s\n"
+                    "── CONTENT ──\n%s\n%s",
+                    _SEP, call_id, provider, self.model,
+                    elapsed, response.input_tokens, response.output_tokens,
+                    response.finish_reason, response.content, _SEP,
+                )
+                log.info(
+                    "LLM chat  call_id=%s  provider=%s  model=%s  "
+                    "in=%d  out=%d  elapsed=%.2fs",
+                    call_id, provider, self.model,
+                    response.input_tokens, response.output_tokens, elapsed,
+                )
+                return response
+        except TimeoutError as exc:
+            log.warning(
+                "LLM slot wait timeout  call_id=%s  provider=%s  model=%s  %s",
                 call_id, provider, self.model, exc,
-                exc_info=True,
             )
             raise
-
-        elapsed = time.perf_counter() - t0
-        log.debug(
-            "%s\nLLM CHAT RESPONSE  call_id=%s  provider=%s  model=%s\n"
-            "  elapsed=%.2fs  in_tokens=%d  out_tokens=%d  finish=%s\n"
-            "── CONTENT ──\n%s\n%s",
-            _SEP, call_id, provider, self.model,
-            elapsed, response.input_tokens, response.output_tokens,
-            response.finish_reason, response.content, _SEP,
-        )
-        log.info(
-            "LLM chat  call_id=%s  provider=%s  model=%s  "
-            "in=%d  out=%d  elapsed=%.2fs",
-            call_id, provider, self.model,
-            response.input_tokens, response.output_tokens, elapsed,
-        )
-        return response
 
     async def stream_chat(
         self,
@@ -119,34 +135,48 @@ class BaseLLMProvider(ABC):
             call_id, provider, self.model,
         )
 
-        t0 = time.perf_counter()
-        chunks: list[str] = []
         try:
-            async for chunk in self._do_stream_chat(messages, system_prompt):
-                chunks.append(chunk)
-                yield chunk
-        except Exception as exc:
-            log.error(
-                "LLM STREAM ERROR  call_id=%s  provider=%s  model=%s\n%s",
+            async with llm_slot(purpose=f"stream:{provider}:{self.model}"):
+                t0 = time.perf_counter()
+                chunks: list[str] = []
+                try:
+                    async for chunk in self._do_stream_chat(messages, system_prompt):
+                        chunks.append(chunk)
+                        yield chunk
+                except TimeoutError as exc:
+                    log.warning(
+                        "LLM slot wait timeout  call_id=%s  provider=%s  model=%s  %s",
+                        call_id, provider, self.model, exc,
+                    )
+                    raise
+                except Exception as exc:
+                    log.error(
+                        "LLM STREAM ERROR  call_id=%s  provider=%s  model=%s\n%s",
+                        call_id, provider, self.model, exc,
+                        exc_info=True,
+                    )
+                    raise
+                finally:
+                    elapsed = time.perf_counter() - t0
+                    full = "".join(chunks)
+                    log.debug(
+                        "%s\nLLM STREAM RESPONSE  call_id=%s  provider=%s  model=%s\n"
+                        "  elapsed=%.2fs  chars=%d\n"
+                        "── FULL CONTENT ──\n%s\n%s",
+                        _SEP, call_id, provider, self.model,
+                        elapsed, len(full), full, _SEP,
+                    )
+                    log.info(
+                        "LLM stream end  call_id=%s  provider=%s  model=%s  "
+                        "chars=%d  elapsed=%.2fs",
+                        call_id, provider, self.model, len(full), elapsed,
+                    )
+        except TimeoutError as exc:
+            log.warning(
+                "LLM slot wait timeout  call_id=%s  provider=%s  model=%s  %s",
                 call_id, provider, self.model, exc,
-                exc_info=True,
             )
             raise
-        finally:
-            elapsed = time.perf_counter() - t0
-            full = "".join(chunks)
-            log.debug(
-                "%s\nLLM STREAM RESPONSE  call_id=%s  provider=%s  model=%s\n"
-                "  elapsed=%.2fs  chars=%d\n"
-                "── FULL CONTENT ──\n%s\n%s",
-                _SEP, call_id, provider, self.model,
-                elapsed, len(full), full, _SEP,
-            )
-            log.info(
-                "LLM stream end  call_id=%s  provider=%s  model=%s  "
-                "chars=%d  elapsed=%.2fs",
-                call_id, provider, self.model, len(full), elapsed,
-            )
 
     # ── abstract implementation hooks ─────────────────────────────────────
 

@@ -8,20 +8,22 @@ from __future__ import annotations
 import os
 import re
 import unicodedata
-from typing import Any
 
-from .fuzzy_match import similarity
+from .fuzzy_match import concept_jaccard, similarity
 
 DEFAULT_SMALL_FILE_CHUNK_THRESHOLD = 50
-DEFAULT_SMALL_FILE_TEXT_CHARS = 12_000
 # ≤50 chunks: run finalize orphan recovery even on forced full V2 path.
 COMPACT_FINALIZE_CHUNK_MAX = 50
 # ≤30 chunks: global verifier requires zero orphan chunks.
 COMPACT_ZERO_ORPHAN_CHUNK_MAX = 30
 CASE_MATCH_THRESHOLD = 0.72
-DUPLICATE_TITLE_THRESHOLD = 0.92
+DUPLICATE_TITLE_THRESHOLD = 0.85  # default fallback
+# P0b-1: cross-source stage merge when key_concepts jaccard ≥ THRESHOLD
+DEFAULT_CONCEPT_OVERLAP_THRESHOLD = 0.6
 # Bulk orphan attach: cap per-stage growth so narrative EPUBs don't mash 20+ chunks into one stage.
-ORPHAN_BULK_MAX_ATTACH_PER_STAGE = 3
+# P2b: raised 3 -> 5 to absorb more orphans into thematically-near stages
+# instead of dumping them into generic「補充段落（N）」overflow stages.
+ORPHAN_BULK_MAX_ATTACH_PER_STAGE = 5
 ORPHAN_STAGE_MAX_CHUNKS = 14
 STAGE_MAX_KEY_CONCEPTS = 8
 # Split mash-up stages that hit kc cap but still pack too many chunks (e.g. 8 kc + 11 chunks).
@@ -590,24 +592,31 @@ def best_chunk_for_case(
     return best_id
 
 
-def small_file_chunk_threshold() -> int:
-    raw = os.getenv("SMALL_FILE_CHUNK_THRESHOLD", str(DEFAULT_SMALL_FILE_CHUNK_THRESHOLD))
+def duplicate_title_threshold() -> float:
+    raw = os.getenv("STAGE_TITLE_MERGE_THRESHOLD", str(DUPLICATE_TITLE_THRESHOLD))
     try:
-        return max(1, int(raw))
-    except ValueError:
-        return DEFAULT_SMALL_FILE_CHUNK_THRESHOLD
+        v = float(raw)
+        if 0.0 < v <= 1.0:
+            return v
+    except (TypeError, ValueError):
+        pass
+    return DUPLICATE_TITLE_THRESHOLD
 
 
-def small_file_text_char_threshold() -> int:
-    raw = os.getenv("SMALL_FILE_TEXT_CHARS", str(DEFAULT_SMALL_FILE_TEXT_CHARS))
+def concept_overlap_threshold() -> float:
+    """P0b-1: env-tuned threshold for cross-source stage merge via concept jaccard."""
+    raw = os.getenv("STAGE_CONCEPT_OVERLAP_THRESHOLD", str(DEFAULT_CONCEPT_OVERLAP_THRESHOLD))
     try:
-        return max(1000, int(raw))
-    except ValueError:
-        return DEFAULT_SMALL_FILE_TEXT_CHARS
+        v = float(raw)
+        if 0.0 < v <= 1.0:
+            return v
+    except (TypeError, ValueError):
+        pass
+    return DEFAULT_CONCEPT_OVERLAP_THRESHOLD
 
 
 def is_small_file(source_chunks: list[dict]) -> bool:
-    return len(source_chunks) <= small_file_chunk_threshold()
+    return len(source_chunks) <= DEFAULT_SMALL_FILE_CHUNK_THRESHOLD
 
 
 def source_count(source_chunks: list[dict]) -> int:
@@ -620,12 +629,21 @@ def source_count(source_chunks: list[dict]) -> int:
     }) or 1
 
 
-def use_single_split_path(source_chunks: list[dict]) -> bool:
-    return is_small_file(source_chunks) and source_count(source_chunks) <= 1
+def choose_postprocess_mode(n_sources: int, same_material: bool | None) -> str:
+    """Phase 1: pick the stage post-processing mode.
 
+    - single source（含單檔，無論 same_material）→ 保留 splitter 邊界，不合併。
+    - multi source + same_material is True → 只協調順序/命名（Phase 2+），暫不合併。
+    - multi source + same_material 非 True（False / None legacy）→ 受控跨教材合併。
 
-def use_per_source_split_path(source_chunks: list[dict]) -> bool:
-    return is_small_file(source_chunks) and source_count(source_chunks) > 1
+    `same_material is True` 是刻意嚴格比對：多 source 但旗標缺失（NULL legacy）
+    保守視為不同教材，避免漏掉必要合併（設計文件 18.1）。
+    """
+    if n_sources <= 1:
+        return "single_source_finalize_only"
+    if same_material is True:
+        return "same_material_coordinate_only"
+    return "cross_material_merge_and_coordinate"
 
 
 def is_compact_curriculum(source_chunks: list[dict]) -> bool:
@@ -764,15 +782,6 @@ def filter_missing_named_cases(
     ]
 
 
-def zero_region_overlaps(regions: list[dict]) -> None:
-    """Single-region small files do not need neighbor overlap context."""
-    if len(regions) != 1:
-        return
-    region = regions[0]
-    region["overlap_before"] = 0
-    region["overlap_after"] = 0
-
-
 _INTRO_TITLE_RE = re.compile(
     r"框架|選型|導論|概述|總覽|introduction|overview|framework|"
     r"前言|序言|導言|緒論|投資心法|富人思維|行為財務學|決策偏誤",
@@ -836,9 +845,11 @@ def _merge_stage_into(target: dict, incoming: dict) -> None:
 def merge_duplicate_topic_stages(
     stages: list[dict],
     *,
-    threshold: float = DUPLICATE_TITLE_THRESHOLD,
+    threshold: float | None = None,
 ) -> list[dict]:
-    """合併標題相同或高度相似的 stage（對齊 global verifier duplicate check）。"""
+    """合併標題相同或高度相似的 stage。threshold None → 用 env / 預設 0.85。"""
+    if threshold is None:
+        threshold = duplicate_title_threshold()
     if len(stages) <= 1:
         return stages
 
@@ -875,6 +886,220 @@ def merge_duplicate_topic_stages(
         if not merged:
             result.append(dict(stage))
     return _renumber_stages(result)
+
+
+def merge_by_concept_overlap(
+    stages: list[dict],
+    *,
+    threshold: float | None = None,
+) -> list[dict]:
+    """P0b-1: Cross-source merge by key_concepts jaccard.
+
+    `merge_duplicate_topic_stages` only catches near-identical titles. Per-source
+    splitter often invents different prefixes for the same topic across chapters
+    (e.g. "借錢外掛（一）：信用貸款" vs "借錢工具解析（一）：股票質押") so the
+    titles never collide. This pass merges stages whose key_concepts overlap
+    ≥ THRESHOLD (default 0.6) regardless of title wording.
+
+    `_merge_stage_into` keeps the EARLIER stage's title (target), so the first
+    occurrence's prefix wins — this stabilises the final naming.
+    """
+    if threshold is None:
+        threshold = concept_overlap_threshold()
+    if len(stages) <= 1:
+        return stages
+
+    result: list[dict] = []
+    for stage in stages:
+        kc = stage.get("key_concepts") or []
+        merged = False
+        if kc:
+            for existing in result:
+                ekc = existing.get("key_concepts") or []
+                if not ekc:
+                    continue
+                if concept_jaccard(kc, ekc) >= threshold:
+                    _merge_stage_into(existing, stage)
+                    merged = True
+                    break
+        if not merged:
+            result.append(dict(stage))
+    return _renumber_stages(result)
+
+
+# P3b: deterministic ordering applied AFTER LLM consolidator. LLM may violate
+# "（一） must precede （二）" or reading-order constraints; this layer enforces.
+_ORDINAL_MAP = {
+    "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
+_ORDINAL_RE = re.compile(r"[（(]([一二三四五六七八九十]+|\d+)[）)]")
+# P4a: «（續）» / «（續 N）» comes from _append_orphan_overflow_stages — overflow
+# of the SAME base stage. Must stay glued to base regardless of chunk_id span.
+_FOLLOWUP_RE = re.compile(r"^(.+?)（續(?:\s*(\d+))?）$")
+
+
+def _stage_min_chunk(stage: dict) -> str:
+    """Smallest chunk_id string for ordering. Zero-padded chunk_NNNN sorts lexicographically."""
+    cids = stage.get("source_chunk_ids") or []
+    return min(cids) if cids else "chunk_zzzz"
+
+
+def _extract_ordinal_group(title: str) -> tuple[str, int] | None:
+    """Parse '借錢工具（二）：股票質押' -> ('借錢工具', 2). None if no ordinal marker."""
+    if not title:
+        return None
+    m = _ORDINAL_RE.search(title)
+    if not m:
+        return None
+    raw = m.group(1)
+    n = int(raw) if raw.isdigit() else _ORDINAL_MAP.get(raw)
+    if n is None:
+        return None
+    prefix = title[:m.start()].strip().rstrip("：:").strip()
+    if not prefix:
+        return None
+    return prefix, n
+
+
+def _extract_followup(stage: dict) -> tuple[str, int] | None:
+    """Detect '案例：肥羊與診所護士實戰（續 2）' style overflow stages.
+
+    Returns (base_title, batch_num) so we can glue back to the base stage.
+    Trigger conditions (either):
+      - kind == follow_up_orphan with title matching the （續 N） pattern
+      - title matches the （續 N） pattern regardless of kind
+    """
+    title = (stage.get("title") or "").strip()
+    if not title:
+        return None
+    m = _FOLLOWUP_RE.match(title)
+    if not m:
+        return None
+    base = m.group(1).strip()
+    if not base:
+        return None
+    batch = int(m.group(2)) if m.group(2) else 1
+    return base, batch
+
+
+def enforce_stage_ordering(stages: list[dict]) -> list[dict]:
+    """Force stages into reading order. Runs after consolidator since LLM may violate.
+
+    Rules:
+    1. Stages sharing a '（N）' prefix form an ordinal group, sorted by N ascending.
+    2. Each group's position = min(first_chunk_id) of its members.
+    3. Non-group stages position by their own first_chunk_id.
+    4. Stages with '（續）' / '（續 N）' suffix glue to their base stage (P4a):
+       base goes through normal ordering, follow-ups are appended immediately
+       after, sorted by batch number ascending.
+    5. node_id re-assigned via `_renumber_stages` (groups stay contiguous).
+
+    Singleton groups (only '（一）' with no sibling) degrade to non-group ordering.
+    Follow-ups whose base title cannot be matched degrade to standalone stages.
+    """
+    if len(stages) <= 1:
+        return stages
+
+    # P4a: separate follow-up overflow stages first; they attach to base later.
+    followups_by_base: dict[str, list[tuple[int, dict]]] = {}
+    orderable: list[dict] = []
+    for s in stages:
+        fu = _extract_followup(s)
+        if fu is not None:
+            base_title, batch = fu
+            followups_by_base.setdefault(base_title, []).append((batch, s))
+        else:
+            orderable.append(s)
+
+    groups: dict[str, list[tuple[int, dict]]] = {}
+    singles: list[dict] = []
+    for s in orderable:
+        key = _extract_ordinal_group(s.get("title") or "")
+        if key is None:
+            singles.append(s)
+            continue
+        prefix, n = key
+        groups.setdefault(prefix, []).append((n, s))
+
+    # Build (sort_key, [stage,...]) buckets
+    buckets: list[tuple[str, list[dict]]] = []
+    for prefix, members in groups.items():
+        if len(members) <= 1:
+            singles.extend(s for _, s in members)
+            continue
+        members.sort(key=lambda pair: pair[0])
+        group_stages = [s for _, s in members]
+        buckets.append((min(_stage_min_chunk(s) for s in group_stages), group_stages))
+    for s in singles:
+        buckets.append((_stage_min_chunk(s), [s]))
+
+    buckets.sort(key=lambda b: b[0])
+    flat: list[dict] = []
+    for _, group_stages in buckets:
+        flat.extend(group_stages)
+
+    # P4a: now insert each follow-up right after its base (matched by title).
+    # Unmatched follow-ups fall through to the tail sorted by their own chunk_id.
+    if followups_by_base:
+        matched_bases: set[str] = set()
+        inserted: list[dict] = []
+        for s in flat:
+            inserted.append(s)
+            base_title = (s.get("title") or "").strip()
+            fus = followups_by_base.get(base_title)
+            if fus:
+                fus.sort(key=lambda pair: pair[0])
+                inserted.extend(f for _, f in fus)
+                matched_bases.add(base_title)
+        # Append unmatched follow-ups at end, ordered by their own min chunk_id
+        unmatched: list[dict] = []
+        for base, fus in followups_by_base.items():
+            if base in matched_bases:
+                continue
+            for _, f in sorted(fus, key=lambda pair: pair[0]):
+                unmatched.append(f)
+        unmatched.sort(key=_stage_min_chunk)
+        inserted.extend(unmatched)
+        flat = inserted
+
+    return _renumber_stages(flat)
+
+
+def merge_singleton_chunk_stages(stages: list[dict]) -> list[dict]:
+    """P4c: middle stages with exactly 1 chunk are merged into the previous stage.
+
+    Why: LLM consolidator/splitter sometimes leaves a single chunk as its own stage
+    when it could naturally fold into the adjacent topic (observed in sess_pmulzyche
+    where stage 1 = chunk_0000 alone). 1-chunk stages are too thin for a useful
+    teaching round (6 questions on 1 chunk = artificial padding).
+
+    Head and tail singletons are preserved: chunk_0000 is often a 序章/intro that
+    legitimately stands alone, and the final chunk is often a closing remark.
+    Follow-up overflow stages (kind=follow_up_orphan) are also preserved — they
+    were intentionally split out by `_append_orphan_overflow_stages`.
+
+    Caller responsibility: run AFTER `enforce_stage_ordering` so "previous" means
+    "previous in reading order".
+    """
+    if len(stages) <= 2:
+        return stages
+
+    n = len(stages)
+    out: list[dict] = [dict(stages[0])]  # head always kept
+
+    for i in range(1, n - 1):
+        s = stages[i]
+        cids = s.get("source_chunk_ids") or []
+        if len(cids) != 1 or (s.get("kind") in ("follow_up_orphan", "summary")):
+            out.append(dict(s))
+            continue
+        # Singleton in the middle: merge into the just-appended previous stage
+        prev = out[-1]
+        _merge_stage_into(prev, s)
+
+    out.append(dict(stages[-1]))  # tail always kept
+    return _renumber_stages(out)
 
 
 def merge_empty_chunk_stages(stages: list[dict]) -> list[dict]:
@@ -997,7 +1222,9 @@ def _summary_kc_from_title(title: str) -> str:
     title = (title or "").strip()
     if not title:
         return _SUMMARY_KC_FALLBACK
-    for sep in ("與", "及", "和", "：", "—", "-"):
+    # P4b: ':' / '—' / '-' split first (X:Y → X is main topic, Y is detail);
+    # 與/及/和 are same-level conjunctions, lower priority.
+    for sep in ("：", "—", "-", "與", "及", "和"):
         if sep in title:
             head = title.split(sep, 1)[0].strip()
             if head and head not in _META_ONLY_KC and len(head) >= 2:
@@ -1025,7 +1252,10 @@ def ensure_empty_key_concepts(stages: list[dict]) -> list[dict]:
             s["key_concepts"] = [_summary_kc_from_title(title)]
             s.setdefault("kind", "summary")
         elif title:
-            s["key_concepts"] = [title[:8]]
+            # P4b: avoid naive title[:8] which mangles "X：Y" into "X：先 4 字"
+            # (e.g. "借錢炒股：致富框架與心態" -> "借錢炒股：致富框"). _summary_kc_from_title
+            # already splits on "：" / "—" / "與" before truncating.
+            s["key_concepts"] = [_summary_kc_from_title(title)]
         else:
             s["key_concepts"] = [_SUMMARY_KC_FALLBACK]
         out.append(s)
@@ -1235,7 +1465,11 @@ def _append_orphan_overflow_stages(
     by_id: dict[str, dict],
     batch_size: int = ORPHAN_OVERFLOW_BATCH_SIZE,
 ) -> list[dict]:
-    """Split excess orphans into dedicated follow-up stages instead of one mega-stage."""
+    """Split excess orphans into dedicated follow-up stages instead of one mega-stage.
+
+    P2b: title is derived from the first chunk's chapter_title / source_label
+    when available, so EPUB chapter context isn't lost in the bucket.
+    """
     if not orphan_ids:
         return stages
     out = [dict(s) for s in stages]
@@ -1253,10 +1487,20 @@ def _append_orphan_overflow_stages(
             for cid in batch
             if cid in by_id
         ]
+        # P2b: prefer chapter-aware title; fall back to generic numbering.
+        first_meta = by_id.get(batch[0], {}) if batch else {}
+        chap_title = first_meta.get("chapter_title") or first_meta.get("source_label") or ""
+        chap_title = str(chap_title).strip()
+        if chap_title:
+            # cap length and dedupe across batches by appending batch num only when many overflows
+            short = chap_title[:14]
+            title = f"補充：{short}" if batch_num == 1 else f"補充：{short}（{batch_num}）"
+        else:
+            title = f"補充段落（{batch_num}）"
         out.append({
             "stage_id": next_stage_id,
             "node_id": f"orphan.{batch_num}",
-            "title": f"補充段落（{batch_num}）",
+            "title": title,
             "key_concepts": ["章節補充"],
             "source_chunk_ids": batch,
             "source_chunks": orphan_meta,
@@ -1380,6 +1624,98 @@ def ensure_orphan_chunks_attached(
     return trim_stage_key_concepts(out)
 
 
+def fold_interior_orphan_chunks(
+    stages: list[dict],
+    source_chunks: list[dict],
+) -> list[dict]:
+    """Fold orphan chunks that sit *inside* the reading span into the adjacent stage.
+
+    An orphan is "interior" when some stage owns a chunk that comes after it in
+    reading order — it reads as part of the surrounding narrative, so it belongs in
+    a neighbouring content stage rather than a generic summary/filler stage.
+    Preference: the preceding content stage (largest max-order ≤ orphan order); if
+    none exists, the nearest following content stage. Intro/framework stages are
+    skipped as targets so the overview isn't bloated. Trailing orphans (after every
+    stage's chunks) are left untouched — those are genuine closing remarks handled
+    by the summary path.
+
+    sess_vtfl3q4il: chunk_0008 sat between stage [5,6,7] and stage [9]; this folds it
+    into the [5,6,7] stage instead of spawning a「章節總結與補充內容」filler stage.
+    """
+    if not stages or not source_chunks:
+        return stages
+
+    order = {
+        c["chunk_id"]: int(c.get("order_index", 0))
+        for c in source_chunks
+        if isinstance(c, dict) and c.get("chunk_id")
+    }
+    referenced: set[str] = set()
+    for s in stages:
+        referenced.update(s.get("source_chunk_ids") or [])
+    orphans = sorted(
+        (cid for cid in order if cid not in referenced),
+        key=lambda cid: order[cid],
+    )
+    if not orphans:
+        return stages
+
+    by_id = chunks_lookup(source_chunks)
+    out = [dict(s) for s in stages]
+
+    def _smax(s: dict) -> int:
+        ids = s.get("source_chunk_ids") or []
+        return max((order.get(c, -1) for c in ids), default=-1)
+
+    def _smin(s: dict) -> int:
+        ids = s.get("source_chunk_ids") or []
+        return min((order.get(c, 10**9) for c in ids), default=10**9)
+
+    changed = False
+    for cid in orphans:
+        oidx = order[cid]
+        if not any(_smax(s) > oidx for s in out):
+            continue  # trailing orphan — leave for the summary path
+
+        target_i: int | None = None
+        # 1. a stage whose chunk span already brackets the orphan position owns it
+        #    (e.g. chunk_0008 between 1.2's chunk_0007 and chunk_0009)
+        for i, s in enumerate(out):
+            if _is_intro_framework_stage(s) or not s.get("source_chunk_ids"):
+                continue
+            if _smin(s) < oidx < _smax(s):
+                target_i = i
+                break
+
+        # 2. else the preceding content stage (largest max-order ≤ orphan order)
+        best_max = -1
+        if target_i is None:
+            for i, s in enumerate(out):
+                if _is_intro_framework_stage(s) or not s.get("source_chunk_ids"):
+                    continue
+                smax = _smax(s)
+                if smax <= oidx and smax > best_max:
+                    best_max = smax
+                    target_i = i
+
+        if target_i is None:  # no preceding content stage → nearest following
+            best_min = 10**9
+            for i, s in enumerate(out):
+                if _is_intro_framework_stage(s) or not s.get("source_chunk_ids"):
+                    continue
+                smin = _smin(s)
+                if smin > oidx and smin < best_min:
+                    best_min = smin
+                    target_i = i
+
+        if target_i is None:
+            continue
+        out[target_i] = _attach_chunk_to_stage(out[target_i], cid, by_id)
+        changed = True
+
+    return trim_stage_key_concepts(out) if changed else stages
+
+
 def reassign_case_stage_chunks(
     stages: list[dict],
     source_chunks: list[dict],
@@ -1453,32 +1789,6 @@ def _kc_covered_in_chunks(
                 if phrase.lower() in combined_lower:
                     return True
     return False
-
-
-def _minimal_contiguous_chunks_for_kc(
-    anchor_cid: str,
-    key_concepts: list[str],
-    source_chunks: list[dict],
-    *,
-    max_forward_span: int = _INTRO_KC_MAX_FORWARD_SPAN,
-) -> list[str]:
-    """Expand forward from anchor chunk until key_concepts are evidenced (contiguous span)."""
-    ordered = sorted(source_chunks, key=lambda c: c.get("order_index", 0))
-    ordered_ids = [c["chunk_id"] for c in ordered if c.get("chunk_id")]
-    if anchor_cid not in ordered_ids:
-        return [anchor_cid] if anchor_cid else []
-    by_id = chunks_lookup(source_chunks)
-    kcs = [kc for kc in (key_concepts or []) if kc]
-    start_idx = ordered_ids.index(anchor_cid)
-    end_idx = start_idx
-    for _ in range(max_forward_span):
-        span_ids = ordered_ids[start_idx : end_idx + 1]
-        if not kcs or all(_kc_covered_in_chunks(kc, span_ids, by_id) for kc in kcs):
-            break
-        if end_idx + 1 >= len(ordered_ids):
-            break
-        end_idx += 1
-    return ordered_ids[start_idx : end_idx + 1]
 
 
 def _attach_source_chunks_meta(stage: dict, chunk_ids: list[str], by_id: dict[str, dict]) -> dict:

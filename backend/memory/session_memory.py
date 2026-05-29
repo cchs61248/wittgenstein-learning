@@ -69,20 +69,27 @@ async def create_generating_stub(
     model_name: str | None = None,
     question_mode: str | None = None,
     target_depth: str | None = None,
+    same_material: bool | None = None,
 ) -> None:
-    """ContentSplitter 執行前建立佔位記錄，讓書櫃在 LLM 呼叫期間持久顯示「生成中」。"""
+    """ContentSplitter 執行前建立佔位記錄，讓書櫃在 LLM 呼叫期間持久顯示「生成中」。
+
+    `same_material`：使用者「是否同教材」的選擇，供 resume 流程還原。
+    None = legacy 未紀錄；True/False = 使用者明確選擇。
+    """
     db = await get_db()
     file_ids_json = json.dumps(source_file_ids or [], ensure_ascii=False)
     sources_json_str = json.dumps(sources_json or [], ensure_ascii=False)
+    # 1/0/NULL：None 代表呼叫端沒提供（保留 NULL）
+    same_material_val = None if same_material is None else (1 if same_material else 0)
     await db.execute(
         """INSERT OR IGNORE INTO sessions
            (session_id, user_id, content_hash, total_stages, status, title,
             source_file_ids_json, sources_json, provider_name, model_name,
-            question_mode, target_depth)
-           VALUES (?, ?, ?, 0, 'generating', '生成中…', ?, ?, ?, ?, ?, ?)""",
+            question_mode, target_depth, same_material)
+           VALUES (?, ?, ?, 0, 'generating', '生成中…', ?, ?, ?, ?, ?, ?, ?)""",
         (
             session_id, user_id, content_hash, file_ids_json, sources_json_str,
-            provider_name, model_name, question_mode, target_depth,
+            provider_name, model_name, question_mode, target_depth, same_material_val,
         ),
     )
     # 若 stub 已存在（重試），補寫 file_ids 與 start 參數
@@ -93,7 +100,8 @@ async def create_generating_stub(
                provider_name = COALESCE(?, provider_name),
                model_name = COALESCE(?, model_name),
                question_mode = COALESCE(?, question_mode),
-               target_depth = COALESCE(?, target_depth)
+               target_depth = COALESCE(?, target_depth),
+               same_material = COALESCE(?, same_material)
            WHERE session_id = ? AND status = 'generating'""",
         (
             file_ids_json,
@@ -102,6 +110,7 @@ async def create_generating_stub(
             model_name,
             question_mode,
             target_depth,
+            same_material_val,
             session_id,
         ),
     )

@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（最後更新：2026-05-25，含 **Curriculum Pipeline 背景化**：region checkpoint 斷點續跑（Migration 022–023）、Arq + Redis 背景 worker（`CURRICULUM_USE_ARQ=1`）、LLM result cache（Migration 024 / `LLM_CACHE_ENABLED=1`）、`docker-compose.yml`（Redis :6380 + curriculum-worker）；**inflight PID 檢查 Windows 相容**（`OpenProcess` 取代 `os.kill`）；以及 2026-05-24 既有 **Curriculum Pipeline V2** 強化：GlobalCurriculumReducer Step B/C、Go/No-Go、`CURRICULUM_PIPELINE_V2` feature flag 等（詳下）**）
+> 適用版本：2026-05 feature 分支（最後更新：2026-05-27，**Curriculum Pipeline 統一化**：V1 / V2 大檔 / Plan B / Reducer 全部刪除，唯一路徑是 V2 小檔逐檔切（`single_split` 或 `per_source_split`），由前端「是否同一教材」radio 控制 ContentOutline 是否跑；EPUB 在上傳階段就由 `split_epub_by_toc` 切成多章節獨立 file_id；標題去重閾值改為 env `STAGE_TITLE_MERGE_THRESHOLD`（預設 0.85），ConceptCanonicalize 改為 env `CONCEPT_CANONICALIZE` 開關（預設 off）。設計文件：`docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md`。較早保留的能力：region checkpoint 斷點續跑（Migration 022–023）、Arq + Redis 背景 worker（`CURRICULUM_USE_ARQ=1`）、LLM result cache（Migration 024 / `LLM_CACHE_ENABLED=1`）、`docker-compose.yml`（Redis :6380 + curriculum-worker）、**LLM 流量治理**（`LLM_MAX_CONCURRENT` + Redis ZSET semaphore，見 [§13](#13-llm-流量治理)）。**
 
 ---
 
@@ -26,6 +26,7 @@
 10. [設定與環境變數](#10-設定與環境變數)
 11. [WS 基礎設施（Phase 1–3 增補）](#11-ws-基礎設施phase-13-增補)
 12. [Curriculum 背景化（Checkpoint / Arq / LLM Cache）](#12-curriculum-背景化checkpoint--arq--llm-cache)
+13. [LLM 流量治理](#13-llm-流量治理)
 
 ---
 
@@ -479,7 +480,7 @@ class WorkingMemory:
 
 ### `POST /upload`（需 `Authorization: Bearer <token>`）
 - 接收：multipart/form-data，欄位 `file`
-- 允許格式：`.txt .md .pdf .docx .pptx .html .htm .epub`；單檔限 10 MB
+- 允許格式：`.txt .md .pdf .docx .pptx .html .htm .epub`；單檔限 `UPLOAD_MAX_FILE_MB` MB（預設 10）
 - 將原始 bytes + filename + mime_type 寫入磁碟 `data/uploads/{file_id}.bin` + `{file_id}.meta.json`（跨重啟可讀）
 - `meta.json` 結構：`{file_id, filename, mime_type, size, ...extra_meta}`
 - 回傳：`{file_id: "upl_<hex>", filename, size, mime_type}`
@@ -607,7 +608,7 @@ class WorkingMemory:
 
 ### 7.1 上傳資料源
 
-**方式 A：檔案上傳**
+**方式 A：檔案上傳（一般檔案 .txt/.md/.pdf/.docx/.pptx/.html/.htm）**
 ```
 前端 POST /upload（multipart）
     │
@@ -619,6 +620,28 @@ class WorkingMemory:
 前端收到 {file_id, filename, size, mime_type}
     └── 加入 sources 陣列：{type: "file", file_id, label: filename}
 ```
+
+**方式 A'：EPUB 上傳（按 TOC 切多章節）**
+```
+前端 POST /upload（multipart，file=book.epub）
+    │
+    └── split_epub_by_toc(raw) → [(章節標題, 純文字), ...]
+        每章獨立 _save_parsed_upload：
+            ├── filename=f"{idx:03d}_{safe_title}.txt"
+            ├── extra_meta={source_type:"epub_chapter", epub_filename, chapter_index, chapter_title}
+            └── 取得 file_id（每章一個）
+
+前端收到 {epub_chapters: [{file_id, filename, char_count, size, mime_type}, ...],
+         total_chapters: N,
+         parent_filename: "book.epub"}
+    └── UploadModal `addFileSources` 偵測 `epub_chapters` 鍵 → 把單一 placeholder
+        展開為 N 個 source items（每個 ✕ 可獨立移除）
+```
+
+- EPUB 無 TOC → `group_by_toc` fallback「每個 spine document 一章」
+- 0 章 → HTTP 422
+- 章節數 > 50 不擋（前端 `console.warn` 提示），使用者可手動刪不想學的章
+- `_extract_epub` 已刪除；`extract_text(".epub", ...)` 退化為呼叫 `split_epub_by_toc` 並 join 章節文字（僅本地 chunker 測試/工具會走到）
 
 **方式 B：URL 擷取**
 ```
@@ -665,84 +688,85 @@ class WorkingMemory:
 前端 WebSocket send: {
   type: "start_session",
   payload: {
-    sources: [                                          # 新格式（向下相容舊版 uploaded_file_id/content）
+    sources: [
       {type: "file", file_id: "upl_abc", label: "report.pdf"},
-      {type: "url",  file_id: "upl_def", label: "Example Article"},
+      {type: "file", file_id: "upl_def", label: "001_第一章.txt"},  # EPUB 拆出的章節以一般 file 形式進來
+      {type: "url",  file_id: "upl_ghi", label: "Example Article"},
       {type: "text", content: "直接貼上的文字...",      label: "貼上的文字"}
     ],
+    same_material: true | false,                        # 必選；1 source 時前端自動視為 true
     provider, target_depth, question_mode, model
   }
 }
     │
     main.py
         ├── 驗證 JWT
+        ├── _build_source_chunks_from_payload(p, emit)   # 多來源切 chunk + 全域編號（同前）
+        ├── same_material = bool(p.get("same_material", True))   # 讀 payload；預設 True
+        ├── create_provider(provider_name, model?)
         │
-        ├── _build_source_chunks_from_payload(p, emit)   # 封裝多來源邏輯
-        │   ├── 讀取 sources 陣列（若無，fallback 到舊版 uploaded_file_id / content）
-        │   ├── 每個 source：
-        │   │   ├── type="file" | "url" → load_upload(file_id) → extract_text(filename, raw)
-        │   │   └── type="text"          → 直接使用 content 字串
-        │   ├── 每個來源獨立執行 build_source_chunks(text)
-        │   ├── chunk_id 全域重新編號（chunk_0000, chunk_0001, ...，跨來源連續）
-        │   └── 每個 chunk 附加：
-        │           source_id: str        # 穩定 hash(label:index)，Migration 019 寫入 DB
-        │           source_label: str     # 來源名稱
-        │           source_index: int     # 來源順序
+        ├── 【Arq 路徑】CURRICULUM_USE_ARQ=1：
+        │       prepare_curriculum_session(..., same_material=same_material)
+        │           → 寫 sessions（含 same_material INTEGER）/ source_chunks / checkpoint pipeline_meta
+        │       enqueue_curriculum_job(redis, session_id)
+        │       emit session_generating；不 create_task（worker resume_generating_session）
         │
-        ├── create_provider(provider_name, model?)   # provider 名稱會 .lower() 正規化
-        │
-        ├── 【Arq 路徑】CURRICULUM_USE_ARQ=1 且 CURRICULUM_PIPELINE_V2=1：
-        │       prepare_curriculum_session(...)  → 寫 sessions / source_chunks / checkpoint meta
-        │       enqueue_curriculum_job(redis, session_id)  → Redis 佇列
-        │       emit session_generating
-        │       continue（不 create_task；由 worker 執行 resume_generating_session）
-        │
-        ├── 【In-process 路徑】（預設）
+        ├── 【In-process 路徑】
         │       LearningOrchestrator(llm)
-        │       asyncio.create_task(orchestrator.start_session(...))
+        │       asyncio.create_task(orchestrator.start_session(..., same_material=same_material))
         │
-        └── （以下為 start_session 內部，in-process 或 worker resume 共用）
-                orchestrator.start_session(...) / resume_generating_session(...)
-                │
-                ├── 【V1 預設路徑】`_start_session_v1`（`CURRICULUM_PIPELINE_V2` 未設）
-                │   ├── ContentOutlineAgent（preventive hint）
-                │   ├── compute_dynamic_max_stages(chunks, outline) → max_stages（非固定 30）
-                │   ├── ContentSplitterAgent + SplitterVerifier（MAX retries=2）
-                │   │   fail-hard（預設）或 SPLITTER_FAIL_MODE=soft → 保留最末切分 + quality_warnings
-                │   └── emit knowledge_map（可含 quality_warnings → 前端 QualityWarningBanner）
-                │
-                └── 【V2 路徑】`curriculum_pipeline_v2.run_start_session_v2`（`CURRICULUM_PIPELINE_V2=1`）
-                        ├── **小檔三路徑**（`len(chunks) ≤ SMALL_FILE_CHUNK_THRESHOLD`，預設 50）：
-                        │     │ `use_single_split_path`（1 source）→ `_run_single_split`（bypass outline / macro / reducer）
-                        │     │ `use_per_source_split_path`（2+ sources）→ `_run_per_source_split`（每 source 各跑 single-split，合併 candidates）
-                        │     │ else → **full V2**（見下）
-                        │     log：`v2 small_file path (single-split|per-source-split)`；`quality_warnings` 含 `small_file_path`、`multi_source_split`、`source_count`
-                        │     `--full-v2` / `SMALL_FILE_CHUNK_THRESHOLD=0` 強制 full path（live 工具 `live_small_file_curriculum_test.py --full-v2`）
-                        ├── MacroRegionPlannerAgent → `plan_macro_regions` + 可選 LLM refinement
-                        │     tier (a) source_id + section_title 分組；oversized group（>40 chunks）強制 fixed-size 切（避免 epub 共用 section_title 退化為 1-region）
-                        │     tier (b) 無 section_title → fixed-size 25 chunks 切
-                        │     tier (c) `MACRO_REGION_USE_LLM=1` 或 payload `use_llm_refinement=True` 啟用 LLM metadata refinement（每 region 首尾 300 字 → 補 title / expected_stage_count / must_cover_topics；不重切邊界；LLM 失敗 fallback 為 tier-1/2）
-                        ├── per-region ContentSplitter：context 含 region.must_cover_topics（tier-3 LLM 強約束 → splitter user_msg 加「【強約束】每概念對應獨立 stage」段，避免 mash-up）+ region SplitterVerifier
-                        │     splitter prompt 規則重點：R8 chunk 主軸對齊優先、R9 並列方案數量保留、R10 概念命名簡潔（≤ 8 字、禁子句式）、
-                        │     **R11 禁實體名稱作為 kc**（作者名 / 書名 / 章節編號 / 修辭性引用人物 — 避免污染 concept_mastery）、
-                        │     **R12 stage 1 不包山包海**（key_concepts ≤ 5，衍生概念分散到後續 stage）
-                        ├── `_splitter_stages_to_candidates`（per-region 後）：過濾掉不在 `region.chunk_ids` 範圍的 chunk_id，避免跨 region 重複正主
-                        ├── `_dedupe_candidates`（all regions 收齊後）：`concepts_match` 相似度 ≥ 0.85 合併同主題 candidate；
-                        │     **合併前計算 projected chunk total，超過 `MAX_MERGED_OUTCOME_CHUNKS=20` 拒絕合併**（防 cross-region mega candidate）
-                        ├── GlobalCurriculumReducer
-                        │     Step A：`rule_merge_candidates`（Union-Find，threshold 見 `reducer_constants.py`）
-                        │     Step B：LLM 處理 unsure pairs（`MAX_UNSURE_PAIRS_LLM=20`）
-                        │     Step C：confidence &lt; 0.8 → 保留 Step A split，不丟 stage
-                        │     **`integrate_llm_outcomes` chunk cap**：LLM merge 合併後超過 `MAX_MERGED_OUTCOME_CHUNKS=20` 即拒絕、保留 split
-                        │     `REDUCER_FAIL_MODE=hard`：LLM 失敗 → `GlobalCurriculumReducerError`（session 中止）
-                        │     conflict / comparison stage → **V2.1 deferred**（降級為 split + `conflict_deferred`）
-                        ├── StageComposerAgent（prerequisites 推斷）
-                        ├── `assess_reducer_health` → log `curriculum_health_alert` + 可選寫入 `quality_warnings.health_signals`
-                        ├── `CurriculumLlmMeter`：每次 curriculum agent `run()` 後 `meter.record`；session 結束寫入 `quality_warnings.curriculum_llm_calls` / `curriculum_tier` / `curriculum_llm_over_budget`；超 tier budget 時 `curriculum_cost_alert` WARNING
-                        ├── `verify_global_coverage`（named_cases + orphan chunks + duplicate titles）
-                        ├── Plan B（**手動** `CURRICULUM_V2_PLAN_B=1`）：主 source 骨架 + fuzzy attach；`plan_b_recommended` 僅告警
-                        └── WS：`region_done` / `reduce_done`（含 health）/ `composer_done`
+        └── orchestrator.start_session(...) 直接 delegate `run_start_session_v2`
+            （`_start_session_v1` 已刪；不再有 `CURRICULUM_PIPELINE_V2` env 分叉）
+
+`curriculum_pipeline_v2.run_start_session_v2(..., same_material)`：
+    │
+    ├── checkpoint 載入；resume 從 DB session row 讀 same_material（NULL = legacy → True）
+    │
+    ├── ContentOutlineAgent（**只在 `same_material=False` 時跑**；Phase 3 2026-05-29 收斂自 P0a）
+    │     產物：required_outline = {named_cases, required_stage_titles, must_cover_topics}
+    │     `run_outline = not same_material`。同教材（含 ≥3 章 EPUB）一律跳過：
+    │     global outline 的跨章 named_cases 會把不同章同主題 chunk 併進同一 stage
+    │     （章節邊界破壞器，live sess_f9qt8rac9 7.1=第6+8章），章序改由 SourceOrderResolver 處理
+    │
+    ├── 唯一切分分支（n_sources 決定）：
+    │     n_sources <= 1 → `_run_single_split`（整包一次 Splitter+Verifier）
+    │     n_sources >  1 → `_run_per_source_split`（每 source 各跑一次，**P1b: 帶 chapter_title hint**）
+    │     兩者都把 required_outline 餵給 splitter 當 hint
+    │     verifier 失敗：`SPLITTER_FAIL_MODE=hard` 中止；`soft` 放行 + `quality_warnings`
+    │     **P2a**：filtered missing 數 < `SPLITTER_VERIFIER_MIN_MISSES`（預設 2）→ soft-pass 省 reroll
+    │
+    ├── `candidates_to_stages_flat`（無 LLM reducer）
+    ├── quality_warnings = {small_file_path: True, reducer_skipped: True, multi_source_split?, source_count?}
+    ├── `assess_reducer_health`（vestigial：candidate/outcome/unsure 都 0，僅輸出 healthy 狀態）
+    │
+    ├── **Phase 1 mode-aware 後處理（2026-05-29）**：`postprocess_mode = choose_postprocess_mode(n_sources, same_material)`
+    │     `allow_merge = postprocess_mode == "cross_material_merge_and_coordinate"`（只有「多本不同書」為 True）
+    │     單 source / 同教材：`allow_merge=False` → **跳過下面所有語意合併**，只做確定性排序 + 收尾
+    │     寫入 quality_warnings.postprocess_mode / source_order / outline_skipped_same_material（同教材 ≥3 章）
+    │
+    ├── `merge_duplicate_topic_stages(threshold=duplicate_title_threshold())`（一律跑，純標題去重）
+    │     env `STAGE_TITLE_MERGE_THRESHOLD`（預設 0.85；越界值 fallback 至預設）
+    ├── **P0b-1**: `merge_by_concept_overlap(...)`（**僅 allow_merge**）
+    │     env `STAGE_CONCEPT_OVERLAP_THRESHOLD`（預設 0.6）— jaccard 抓跨 source 命名漂移
+    ├── `enforce_stage_ordering` + `merge_singleton_chunk_stages`（一律跑，確定性排序/薄節清理，非語意合併）
+    ├── **P0b-2**: **allow_merge 且** chunks ≥ 30 時跑 `StageConsolidatorAgent`（LLM 全局 rename + reorder + merge；legacy，Phase 4 將改 plan-based）
+    │     硬約束：不可新增/移除 chunk_id；驗證失敗 fallback 沿用原 stages，記到 `quality_warnings`
+    ├── `verify_global_coverage`（named_cases + orphan chunks + duplicate titles）
+    ├── 若 missing named_cases / orphan chunks → `_build_follow_up_stages` 補節再 merge
+    ├── `finalize_small_file_stages`（compact 路徑）或 `finalize_curriculum_stages`（路徑收尾規則）
+    ├── **P2b**：orphan attach 後 re-verify；剩餘 orphan 寫 `quality_warnings.orphan_attach_incomplete`
+    ├── 條件式 `ConceptCanonicalizeAgent`（env `CONCEPT_CANONICALIZE=1` 才跑；預設 off）
+    ├── `assess_curriculum_cost` → `quality_warnings.curriculum_llm_calls` / `_tier` / `_over_budget`
+    └── WS：`reduce_done`（含 small_file 健康狀態）/ `knowledge_map` / `composer_done`
 ```
+
+> 已刪除（2026-05-27 unify-v2-small-file-pipeline 分支起）：
+> - V1 整套（`_start_session_v1` + 五檔一次切 + V1 ConceptCanonicalize）
+> - V2 大檔流程：`MacroRegionPlannerAgent` / `GlobalCurriculumReducer` / Step A/B/C / `_splitter_stages_to_candidates` / `_dedupe_candidates`
+> - Plan B / Plan B 自動 fallback
+> - 對應 env：`CURRICULUM_PIPELINE_V2` / `SMALL_FILE_CHUNK_THRESHOLD` / `SMALL_FILE_FORCE_OUTLINE` / `MACRO_REGION_USE_LLM` / `CURRICULUM_V2_PLAN_B` / `CURRICULUM_V2_PLAN_B_AUTO` / `REDUCER_FAIL_MODE`
+>
+> 詳見 `docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md` §5
 
 ### 7.3 確認知識地圖（confirm_map）
 
@@ -1559,15 +1583,12 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `JWT_EXPIRE_DAYS` | `7` | JWT 有效期天數 |
 | `CORS_ORIGINS` | （見 config.py） | 允許 CORS 來源；逗號分隔，未設則用 Vite dev server 預設清單 |
 | `CORS_ORIGIN_REGEX` | `https://.*\.trycloudflare\.com` | 動態 Quick Tunnel 子網域用 regex 白名單；設為空字串可關閉 |
-| `CURRICULUM_PIPELINE_V2` | `0` | `1` 啟用 V2 macro region + reducer pipeline |
 | `SPLITTER_FAIL_MODE` | `hard` | `soft` 時 verifier 失敗仍進 pending，附 `quality_warnings` |
-| `REDUCER_FAIL_MODE` | `hard` | V2：`soft` 時 reducer 空結果平鋪 candidate；`hard` 時 LLM 失敗 raise |
-| `CURRICULUM_V2_PLAN_B` | `0` | **手動**啟用 Plan B；不自動切換（見 `plan_b_recommended` 告警） |
-| `GO_NOGO_LLM_PROVIDER` | — | 真 LLM Go/No-Go 測試用 provider 覆寫（預設 `DEFAULT_PROVIDER`） |
 | `RUN_LLM_TESTS` | — | 設 `1` 才執行 `pytest -m llm_live` 真 LLM gate |
-| `MACRO_REGION_USE_LLM` | `0` | V2 tier-3：`1` 啟用 MacroRegionPlanner LLM metadata refinement（補 title/expected_stage_count/must_cover_topics，不重切邊界） |
-| `SMALL_FILE_CHUNK_THRESHOLD` | `50` | `len(chunks) ≤ N` 走 small_file 路徑（single / per-source）；`0` 強制 full V2 |
-| `SMALL_FILE_FORCE_OUTLINE` | `0` | 測試用：`1` 時 small_file 仍額外跑 ContentOutline（production 預設 off） |
+| `STAGE_TITLE_MERGE_THRESHOLD` | `0.85` | stage 標題去重合併閾值（0~1）；高=保守、低=積極合併；越界值 fallback 至預設 |
+| `STAGE_CONCEPT_OVERLAP_THRESHOLD` | `0.6` | P0b-1：跨 source stage 用 key_concepts jaccard 合併閾值（0~1） |
+| `SPLITTER_VERIFIER_MIN_MISSES` | `2` | P2a：Splitter verifier 觸發 reroll 的最少 missing 數；missing ≤ 1 直接 soft-pass 省一輪 LLM |
+| `CONCEPT_CANONICALIZE` | `0` | `1` 時 stage 合併後再跑 ConceptCanonicalizeAgent 統一關鍵詞命名（耗一次 LLM） |
 | `CURRICULUM_USE_ARQ` | `0` | `1` 時 start_session 改 enqueue 至 Redis，由 Arq worker 執行 pipeline |
 | `REDIS_URL` | `redis://localhost:6379/0` | Arq 佇列；本機 docker compose 用 `redis://localhost:6380/0` |
 | `ARQ_MAX_JOBS` | `1` | Arq worker 同時執行 job 數 |
@@ -1575,52 +1596,38 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `LLM_CACHE_ENABLED` | `0` | `1` 啟用 curriculum LLM result cache |
 | `CURRICULUM_PROMPT_VERSION` | `1` | cache key 一部分；prompt 改版時遞增以失效舊 cache |
 | `LLM_CACHE_EVICT_DAYS` | `90` | startup 清掉超過 N 天的 cache entry；`0` 關閉 |
+| `LLM_MAX_CONCURRENT` | `0` | 全域 LLM 同時呼叫上限；`0` 關閉限制。與 worker 併用時請與 curriculum-worker 設相同值（建議 Monica 共用時為 `3`） |
+| `LLM_SLOT_WAIT_TIMEOUT_S` | `120` | 等待 Redis slot 的最長秒數（逾時拋錯） |
+| `LLM_SLOT_LEASE_S` | `600` | 每個佔用 slot 的租約秒數（過期自動釋放，防 worker 當掉卡死） |
 | `SQLITE_JOURNAL_MODE` | `WAL` | SQLite journal mode（Docker worker volume 內建議 WAL） |
 
-> Schema contract：`docs/superpowers/specs/2026-05-22-curriculum-v2-schema.md`
+> 歷史 schema 參考：`docs/superpowers/specs/2026-05-22-curriculum-v2-schema.md`（內含 large-file path / Reducer schema，2026-05-27 起停用）
+> 統一架構 spec：`docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md`
 
-### V2 測試與 Go/No-Go
+### 切分流程的 Cap / 防護
 
-| 類型 | 指令 | 用途 |
-|------|------|------|
-| CI mock baseline | `pytest backend/tests/test_reducer_go_nogo.py` | 驗證 `integrate_llm_outcomes`、Step C、hard fail（mock LLM） |
-| Fixture 結構驗證（CI） | `pytest backend/tests/test_go_nogo_fixture_validation.py` | 驗證 `reducer_go_nogo_live_pairs.json` v2：merge/negative 數量、drift_pattern 覆蓋、merge case 必須 hit unsure path |
-| 真 LLM gate（手動） | `RUN_LLM_TESTS=1 pytest -m llm_live backend/tests/test_reducer_go_nogo_live.py` | 三指標 per baseline（avg）：**merge 準確率**、**split 準確率**（negative cases）、**unsure 率**；fixture 每 baseline ≥5 merge + ≥3 negative |
-| Nightly LLM gate | `.github/workflows/reducer-go-nogo-nightly.yml` | cron 18:00 UTC + `workflow_dispatch`；需 repo secrets |
-| 健康監控 | `orchestrator.log` grep `curriculum_health_alert` | outcome 比例異常 / fallback / `plan_b_recommended` |
-
-**Go/No-Go 門檻**（`reducer_constants.py`）：
-
-| 指標 | same_source | multi_source | 備註 |
-|------|-------------|--------------|------|
-| merge 準確率 min | 0.90 | 0.75 | |
-| split 準確率 min | 0.80 | 0.80 | negative cases，防 false merge |
-| unsure 率 max | 0.20 | 0.30 | LLM 有 unsure 但零 accepted outcome |
-| conflict 誤判率 | — | — | **V2.1 deferred** |
-
-**Mega-stage 防護 cap**：
+統一架構下只剩小檔限制；reducer / region 相關 cap 已隨 D2 刪除。
 
 | cap | 預設 | 定義位置 | 作用位置 | 觸發行為 |
 |-----|------|---------|---------|---------|
-| `MAX_MERGED_OUTCOME_CHUNKS` | 20 | `reducer_constants.py` | `_dedupe_candidates`（跨 region 合併）/ `integrate_llm_outcomes`（LLM merge） | 合併後 chunk 數超過 → 拒絕合併、保留 split，並 WARNING log |
-| `MAX_UNSURE_PAIRS_LLM` | 20 | `reducer_constants.py` | reducer Step B LLM 輸入 | unsure pairs 過多時 truncate |
 | `STAGE_MAX_KEY_CONCEPTS` | 8 | `small_curriculum.py` | orphan attach 寫入 stage 時的 kc 上限 | 超過時新建 `kind=follow_up_orphan` overflow stage |
 | `ORPHAN_STAGE_MAX_CHUNKS` | 14 | `small_curriculum.py` | orphan attach 寫入 stage 時的 chunk 上限 | 超過時拆「補充段落（N）」overflow stage |
+| `MAX_MERGED_OUTCOME_CHUNKS` | 20 | `reducer_constants.py`（殘留 const） | `stage_composer.outcomes_to_stages` 仍引用 | 合併後 chunk 數超過 → 保留 split |
 
-> 預設 `pytest.ini` 排除 `llm_live`；一般 CI 不呼叫真 LLM。Nightly workflow 可選啟用。
+### 監控信號（`backend/utils/curriculum_health.py`）
 
-### V2 監控信號（`backend/utils/curriculum_health.py`）
-
-Reducer 完成後寫 log 並可選附加至 `pending_map_json.quality_warnings`：
+`assess_reducer_health` 在小檔路徑仍會跑（vestigial），但 candidate/outcome/unsure 都是 0，通常 healthy。可選附加至 `pending_map_json.quality_warnings`：
 
 | signal | 意義 |
 |--------|------|
-| `reducer_fallback_flat` | `REDUCER_FAIL_MODE=soft` 平鋪 candidate |
-| `reducer_outcome_ratio_low` | outcome 數 &lt; 50% candidate 數 |
-| `llm_reducer_no_accepted_outcomes` | 有 unsure pairs 但 LLM 無 accepted outcome |
-| `plan_b_recommended` | 建議人工評估是否改 `CURRICULUM_V2_PLAN_B=1`（**不自動切**） |
+| `splitter_verifier_failed` | `SPLITTER_FAIL_MODE=soft` 時 verifier 失敗仍放行，附 missing chunk_ids |
+| `small_file_path` | 走小檔路徑（永遠 True） |
+| `reducer_skipped` | reducer 已棄用 |
+| `post_process_added_stages` | `_build_follow_up_stages` 補了 N 個 stage |
 
-> 進階門檻分數與重試上限目前寫死在 orchestrator 中（`pass_threshold=0.75`、`max_attempts=3`），不再由環境變數覆寫。
+`assess_curriculum_cost` 仍輸出 `curriculum_llm_calls` / `curriculum_tier` / `curriculum_llm_over_budget` / `curriculum_llm_budget`（用於 cost 監控）。
+
+> 進階門檻分數與重試上限寫死在 orchestrator 中（`pass_threshold=0.75`、`max_attempts=3`），不由環境變數覆寫。
 
 ### 外部工具
 
@@ -1815,3 +1822,47 @@ CURRICULUM_USE_ARQ=1
 REDIS_URL=redis://localhost:6380/0
 LLM_CACHE_ENABLED=1
 ```
+
+---
+
+## 13. LLM 流量治理
+
+### 問題
+
+多個 WebSocket 會話、背景 curriculum worker、以及教學／評量等路徑會**同時呼叫 Monica（或其他上游 LLM 代理）**，易造成 burst 與限速、排隊混亂或上游不穩。
+
+### 解法概要
+
+- **`LLM_MAX_CONCURRENT`**：設定全域「同時進行中的 LLM 請求」上限；設為 `0` 表示關閉限制（與舊行為相容）。
+- **Redis ZSET 分散式訊號量**：所有 process 透過同一 **`REDIS_URL`** 協調；Redis key 為 **`wittgenstein:llm:global_slots`**（實作見 `backend/llm/concurrency.py`）。長時間 LLM 呼叫期間會以背景任務約每 **60 秒**續租（更新該 holder 之 ZSET 分數至 `現在 + LLM_SLOT_LEASE_S`）；Redis 可否用的同步連線探測則**成功結果快取 300 秒、失敗結果快取 30 秒**，過期後自動重試，避免離線 Redis 一直被快取為不可用。
+
+### 部署要點
+
+| 要點 | 說明 |
+|------|------|
+| **API 與 worker 一致** | 跑 uvicorn 的本機／容器與 **`curriculum-worker`** 必須使用**相同的** `LLM_MAX_CONCURRENT` 與 **`REDIS_URL`**，否則兩邊各自以為還有 quota，實際會打爆上游。 |
+| **快取不佔 slot** | **`CachingLLMProvider`** 在 cache **命中**時不會進入內層 provider，因此**不會佔用** LLM slot（僅實際對上游發請求時才.acquire）。 |
+| **與 `ARQ_MAX_JOBS=1` 的關係** | **`ARQ_MAX_JOBS=1`** 表示 worker **一次只跑一個 curriculum job**（job 層序）；**LLM 流量治理**限制的是**跨 process 的並發 LLM HTTP 呼叫**。兩者互補：後者避免多 session + worker 同時打滿 Monica。 |
+
+### 可觀測性
+
+檢視目前 slot 使用量（需可連到與後端相同的 Redis）：
+
+```powershell
+# 於 wittgenstein-learning 根目錄；使用 backend\.venv
+.\backend\.venv\Scripts\python.exe backend/tools/llm_concurrency_stats.py
+```
+
+等同於以專案虛擬環境執行：`python backend/tools/llm_concurrency_stats.py`（將 `python` 換成 `backend\.venv\Scripts\python.exe` 即可）。
+
+### 環境變數（摘錄）
+
+詳見 [§10](#10-設定與環境變數) 主表；與本節直接相關者：
+
+| 環境變數 | 預設（見 `config.py`） | 用途 |
+|----------|------------------------|------|
+| `LLM_MAX_CONCURRENT` | `0`（關閉） | 全域並發上限；Docker worker 建議與本機一致設為 `3` 等正值 |
+| `LLM_SLOT_WAIT_TIMEOUT_S` | `120` | 等待取得 slot 的上限秒數 |
+| `LLM_SLOT_LEASE_S` | `600` | 持有 slot 的租約；到期 Redis 端可視為釋放，降低 crash 後卡死 |
+
+> **`docker-compose.yml`** 內 `curriculum-worker` 可依長任務將 `LLM_SLOT_WAIT_TIMEOUT_S` 設為 **`300`**（較長等待），與預設 API 本機 `120` 可分開調校；**`LLM_MAX_CONCURRENT` 與 `REDIS_URL` 仍須與 API 對齊。**

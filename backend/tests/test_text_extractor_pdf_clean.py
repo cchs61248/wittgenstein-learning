@@ -1,7 +1,9 @@
-"""PDF text extraction cleanup — vertical watermark glyphs & inline noise."""
+"""PDF markdown postprocess — vertical watermark glyphs & inline noise."""
 import unittest
 
-from backend.utils.text_extractor import _clean_pdf_text
+from backend.utils.text_extractor import postprocess_pdf_markdown
+
+_clean_pdf_text = postprocess_pdf_markdown
 
 
 # 取自 Consistent Hashing.pdf 實際 chunk 噪音樣本
@@ -94,6 +96,20 @@ class TestCleanPdfText(unittest.TestCase):
         self.assertIn("16384", out)
         self.assertNotRegex(out, r"16384 t\b")
         self.assertIn("分散式", out)
+
+    def test_strips_markdown_image_only_lines(self):
+        sample = "## Section\n\n![image 1](<foo_images/a.png>)\n\nBody text.\n"
+        out = postprocess_pdf_markdown(sample)
+        self.assertNotIn("![image", out)
+        self.assertIn("## Section", out)
+        self.assertIn("Body text.", out)
+
+    def test_removes_watermark_domain_lines(self):
+        sample = "Content\nmoat.org\nbuildmoat.org\nbiuld\nMore"
+        out = postprocess_pdf_markdown(sample)
+        self.assertNotRegex(out, r"(?m)^moat\.org")
+        self.assertIn("Content", out)
+        self.assertIn("More", out)
 
 
 if __name__ == "__main__":

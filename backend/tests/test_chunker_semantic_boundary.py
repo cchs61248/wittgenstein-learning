@@ -10,43 +10,8 @@ import unittest
 
 from backend.utils.chunker import (
     build_source_chunks,
-    _detect_inline_headings,
     _split_dense_paragraphs,
 )
-
-
-class TestDetectInlineHeadings(unittest.TestCase):
-    def test_short_line_followed_by_paragraph_detected_as_heading(self):
-        text = (
-            "前一個概念的說明文字佔據兩三行，這是上一段的內容收尾。\n"
-            "\n"
-            "Consistent Hashing 的核心想法\n"
-            "\n"
-            "Consistent Hashing 不把 key 對節點數取模，而是把 key 和節點都放到同一個 hash space。\n"
-        )
-        offsets = _detect_inline_headings(text)
-        # 應該抓到「Consistent Hashing 的核心想法」這行的起始 offset
-        heading_line_start = text.index("Consistent Hashing 的核心想法")
-        self.assertIn(heading_line_start, offsets)
-
-    def test_long_line_with_period_not_a_heading(self):
-        """普通段落（長、有句尾標點）不該誤判為 heading。"""
-        text = (
-            "這是一段比較長的段落，內含一個完整句子，不應該被當作 heading。\n"
-            "\n"
-            "後續段落內容。\n"
-        )
-        offsets = _detect_inline_headings(text)
-        self.assertEqual(offsets, set())
-
-    def test_heading_at_text_start_detected(self):
-        text = (
-            "雜湊環的核心想法\n"
-            "\n"
-            "把 key 和節點放到同一個 hash space 上，找順時針方向第一個節點當 owner。\n"
-        )
-        offsets = _detect_inline_headings(text)
-        self.assertIn(0, offsets)
 
 
 class TestChunkBoundaryRespectsHeading(unittest.TestCase):

@@ -1,7 +1,6 @@
 import json
-import time
 from typing import Any, AsyncGenerator
-from .base_agent import BaseAgent, AgentContext
+from .base_agent import BaseAgent
 from ..llm.base_provider import MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
@@ -127,49 +126,6 @@ class TeacherAgent(BaseAgent):
             "selection_reason_text": selection_reason_text,
             "lesson_mode_text": lesson_mode_text,
         }
-
-    async def stream_explanation(
-        self, ctx: AgentContext
-    ) -> AsyncGenerator[str, None]:
-        self._reset()
-        payload = ctx.task_payload
-        stage = payload["stage"]
-        prev_stage_title: str | None = payload.get("prev_stage_title")
-
-        self._log.info(
-            "TeacherAgent stream_explanation START  session=%s  stage_id=%s  title=%s",
-            ctx.session_id, stage.get("stage_id", "?"), stage.get("title", "")[:40],
-        )
-        t0 = time.perf_counter()
-
-        prompt_params = self._build_prompt_params(payload)
-        system = SYSTEM_PROMPTS["teacher"].format(**prompt_params)
-
-        allowed_evidence = (payload.get("adaptive_context") or {}).get("allowed_evidence", [])
-        evidence_text = self._format_allowed_evidence(allowed_evidence) or self._format_source_chunks(stage)
-
-        prev_note = f"前一節點：「{prev_stage_title}」" if prev_stage_title else "本節是第一個節點"
-        self._add_message(
-            MessageRole.USER,
-            f"節點 {stage.get('node_id', stage['stage_id'])}：{stage['title']}\n\n"
-            f"{prev_note}\n\n"
-            f"學習材料：\n{stage.get('content', '')}\n\n"
-            f"關鍵概念：{', '.join(stage.get('key_concepts', []))}\n\n"
-            f"source_chunks（請在敘述後標記 chunk_id）：\n{evidence_text}",
-        )
-
-        total_chars = 0
-        async for chunk in self.llm.stream_chat(self._messages, system_prompt=system):
-            total_chars += len(chunk)
-            yield chunk
-        self._reset()
-
-        elapsed = time.perf_counter() - t0
-        self._log.info(
-            "TeacherAgent stream_explanation END  session=%s  stage_id=%s  "
-            "chars=%d  elapsed=%.2fs",
-            ctx.session_id, stage.get("stage_id", "?"), total_chars, elapsed,
-        )
 
     async def stream_explanation_with_intent(
         self, ctx

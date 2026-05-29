@@ -26,3 +26,25 @@ def concept_overlap_score(concepts_a: list[str], concepts_b: list[str]) -> float
 
 def concepts_match(concepts_a: list[str], concepts_b: list[str], threshold: float = 0.85) -> bool:
     return concept_overlap_score(concepts_a, concepts_b) >= threshold
+
+
+def _normalize_concept(c: str) -> str:
+    return str(c or "").strip().lower()
+
+
+def concept_jaccard(concepts_a: list[str], concepts_b: list[str]) -> float:
+    """Set jaccard with case-insensitive exact match for cross-source stage merge.
+
+    Used for P0b-1: when two stages from different sources share ≥ THRESHOLD
+    of their key_concepts after lowercase+strip, they describe the same topic
+    and should merge.
+    """
+    set_a = {_normalize_concept(c) for c in (concepts_a or []) if c}
+    set_b = {_normalize_concept(c) for c in (concepts_b or []) if c}
+    set_a.discard("")
+    set_b.discard("")
+    if not set_a or not set_b:
+        return 0.0
+    inter = set_a & set_b
+    union = set_a | set_b
+    return len(inter) / len(union)

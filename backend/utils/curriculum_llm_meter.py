@@ -9,15 +9,6 @@ from .small_curriculum import is_small_file, source_count
 
 _log = logging.getLogger("wl.orchestrator.v2.health")
 
-CURRICULUM_LLM_AGENTS = (
-    "ContentOutlineAgent",
-    "MacroRegionPlannerAgent",
-    "ContentSplitterAgent",
-    "SplitterVerifierAgent",
-    "GlobalCurriculumReducerAgent",
-    "ConceptCanonicalizeAgent",
-)
-
 TIER_LLM_BUDGET: dict[str, int] = {
     "small": 8,
     "small_multi": 20,

@@ -2,7 +2,6 @@ import asyncio
 import unittest
 
 from backend.ws.generation_handle import (
-    _GenerationHandle,
     register,
     cancel,
     finish,

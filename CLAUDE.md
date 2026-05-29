@@ -63,10 +63,10 @@ Bash 工具底層為 Git Bash，**只接受 Unix 格式路徑**（`/c/Users/...`
 
 ```bash
 # ❌ Windows 路徑
-ls C:\Users\<username>\Documents\aaron\learn\
+ls C:\Users\<username>\Documents\aaron\wittgenstein-learning\
 
 # ✅ Unix 絕對路徑
-ls /c/Users/<username>/Documents/aaron/learn/wittgenstein-learning/
+ls /c/Users/<username>/Documents/aaron/wittgenstein-learning/
 ```
 
 ### PowerShell 5.1 陷阱（Windows 內建 powershell.exe）
@@ -147,7 +147,7 @@ if (Test-Path $path) { ... } else { "not found" }
 ### 執行 pytest / Python（必須用 PowerShell）
 
 ```powershell
-Set-Location "c:\Users\<username>\Documents\aaron\learn\wittgenstein-learning\backend"
+Set-Location "c:\Users\<username>\Documents\aaron\wittgenstein-learning\backend"
 & ".\.venv\Scripts\pytest.exe" tests/ -v
 
 # 只取最後幾行輸出（不加 2>&1，避免 stderr 被 wrap）

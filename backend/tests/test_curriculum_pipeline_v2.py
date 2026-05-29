@@ -1,4 +1,9 @@
-"""V2 curriculum pipeline E2E tests (mocked LLM)."""
+"""V2 curriculum pipeline E2E tests (mocked LLM).
+
+D1: pipeline is unified to small-file paths (single_split + per_source_split).
+The large-file branch (MacroRegionPlanner + GlobalCurriculumReducer + Plan B)
+has been removed; tests targeting those paths are deleted accordingly.
+"""
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +22,7 @@ def _chunks(n: int = 30, source_id: str = "src_a") -> list[dict]:
             "text": f"段落 {i} 關於概念 alpha beta gamma",
             "source_id": source_id,
             "source_index": 0,
+            "order_index": i,
             "source_label": "書A",
             "section_title": f"第 {i // 10 + 1} 章",
         }
@@ -26,6 +32,7 @@ def _chunks(n: int = 30, source_id: str = "src_a") -> list[dict]:
 
 def _multi_source_chunks(n_per_source: int = 10) -> list[dict]:
     chunks: list[dict] = []
+    order = 0
     for src_idx, src_id in enumerate(["src_a", "src_b"]):
         for i in range(n_per_source):
             chunks.append({
@@ -33,9 +40,31 @@ def _multi_source_chunks(n_per_source: int = 10) -> list[dict]:
                 "text": f"段落 {i} 關於概念 alpha beta gamma",
                 "source_id": src_id,
                 "source_index": src_idx,
+                "order_index": order,
                 "source_label": f"書{src_id}",
                 "section_title": f"第 {i // 5 + 1} 章",
             })
+            order += 1
+    return chunks
+
+
+def _n_source_chunks(n_sources: int, n_per_source: int = 8) -> list[dict]:
+    """n 個 source（每個視為一章）的 source_chunks，用於 ≥3 章 outline 閘門測試。"""
+    chunks: list[dict] = []
+    order = 0
+    for src_idx in range(n_sources):
+        src_id = f"src_{src_idx}"
+        for i in range(n_per_source):
+            chunks.append({
+                "chunk_id": f"chunk_{src_id}_{i:04d}",
+                "text": f"段落 {i} 關於概念 alpha beta gamma",
+                "source_id": src_id,
+                "source_index": src_idx,
+                "order_index": order,
+                "source_label": f"第{src_idx + 1}章",
+                "section_title": f"第 {src_idx + 1} 章",
+            })
+            order += 1
     return chunks
 
 
@@ -126,6 +155,52 @@ class TestInterimDedup(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(len(merged[0]["source_chunk_ids"]), 10)
 
+    def test_dedupe_same_material_no_cross_source(self):
+        # Phase 2.5：same_material 時，kc 相同但 source_id 不同 → 不跨章合併
+        # （sess_85qxyltir「星期三郵局」貫穿兩章被誤併的 root case）
+        candidates = [
+            {"source_id": "src_a", "title": "星期三郵局（1章）",
+             "key_concepts": ["星期三郵局", "文字淨化"],
+             "source_chunk_ids": ["chunk_0001"]},
+            {"source_id": "src_b", "title": "星期三郵局（2章）",
+             "key_concepts": ["星期三郵局", "文字淨化"],
+             "source_chunk_ids": ["chunk_0034"]},
+        ]
+        merged = _dedupe_candidates(candidates, same_material=True)
+        self.assertEqual(len(merged), 2, "不同 source 不應跨章合併")
+        for m in merged:
+            self.assertEqual(len(m["source_chunk_ids"]), 1, "chunk 不應被 union")
+
+    def test_dedupe_same_material_within_source_still_merges(self):
+        # same_material 時，同一 source_id 內 kc 相似 → 仍去重合併
+        candidates = [
+            {"source_id": "src_a", "title": "A",
+             "key_concepts": ["星期三郵局", "文字淨化"],
+             "source_chunk_ids": ["chunk_0001"]},
+            {"source_id": "src_a", "title": "B",
+             "key_concepts": ["星期三郵局", "文字淨化"],
+             "source_chunk_ids": ["chunk_0002"]},
+        ]
+        merged = _dedupe_candidates(candidates, same_material=True)
+        self.assertEqual(len(merged), 1, "同 source 內 kc 相似仍應合併")
+        self.assertIn("chunk_0001", merged[0]["source_chunk_ids"])
+        self.assertIn("chunk_0002", merged[0]["source_chunk_ids"])
+
+    def test_dedupe_cross_material_still_merges(self):
+        # same_material=False（cross_material / 預設）：跨 source kc 相似 → 仍合併（原行為）
+        candidates = [
+            {"source_id": "src_a", "title": "A",
+             "key_concepts": ["alpha", "beta"],
+             "source_chunk_ids": ["chunk_0001"]},
+            {"source_id": "src_b", "title": "B",
+             "key_concepts": ["alpha", "beta"],
+             "source_chunk_ids": ["chunk_0002"]},
+        ]
+        merged = _dedupe_candidates(candidates, same_material=False)
+        self.assertEqual(len(merged), 1, "cross_material 跨 source 仍應合併")
+        self.assertIn("chunk_0001", merged[0]["source_chunk_ids"])
+        self.assertIn("chunk_0002", merged[0]["source_chunk_ids"])
+
 
 class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
     async def _run_v2(
@@ -134,8 +209,7 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         *,
         source_chunks: list[dict] | None = None,
         env: dict | None = None,
-        reducer_outcomes=None,
-        reducer_result: dict | None = None,
+        same_material: bool = True,
     ):
         captured = {"stages": None, "quality_warnings": None}
         events: list[str] = []
@@ -147,29 +221,7 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
             captured["stages"] = kwargs["stages"]
             captured["quality_warnings"] = kwargs.get("quality_warnings")
 
-        if reducer_result is None:
-            if reducer_outcomes is None:
-                reducer_outcomes = [{
-                    "outcome_id": "lo_001",
-                    "title": "Stage 1",
-                    "teaching_goal": "理解 alpha",
-                    "key_concepts": ["alpha"],
-                    "primary_evidence": {"source_id": "src_a", "chunk_ids": ["chunk_0000"]},
-                    "supporting_evidence": [],
-                    "merge_decision": "merged",
-                    "merge_confidence": 0.9,
-                }]
-            reducer_result = {"outcomes": reducer_outcomes}
-        reducer_mock = MagicMock()
-        reducer_mock.run = AsyncMock(return_value=reducer_result)
-
-        env_patch = {
-            "CURRICULUM_PIPELINE_V2": "1",
-            "CURRICULUM_V2_PLAN_B": "0",
-            "REDUCER_FAIL_MODE": "hard",
-            "SPLITTER_FAIL_MODE": "hard",
-            "SMALL_FILE_CHUNK_THRESHOLD": "0",
-        }
+        env_patch = {"SPLITTER_FAIL_MODE": "hard"}
         if env:
             env_patch.update(env)
 
@@ -197,9 +249,6 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         ), patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.purge_source_uploads",
             new=AsyncMock(),
-        ), patch(
-            "backend.orchestrator.curriculum_pipeline_v2.GlobalCurriculumReducerAgent",
-            return_value=reducer_mock,
         ), patch.dict("os.environ", env_patch, clear=False):
             await run_start_session_v2(
                 orch,
@@ -212,6 +261,7 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
                 model_name="m",
                 emit=_emit,
                 source_file_ids=["upl_1"],
+                same_material=same_material,
             )
         return captured, events
 
@@ -228,74 +278,36 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(captured["stages"]), 1)
         self.assertIsNotNone(orch._pending_stages)
 
-    async def test_v2_small_file_skips_macro_region_planner(self):
-        """sess_live_e106b1a4 觀察：Rate Limiter 20 chunks 仍跑 MacroRegion + per-region
-        splitter（13 splitter + 10 verify = 23 LLM）。優化後 small_file 應 bypass
-        MacroRegionPlanner，直接 single split (1-2 splitter + 1-2 verify)。
-        """
+    async def test_v2_single_source_uses_single_split(self):
+        """D1: single-source input → single_split path. 1 splitter call, no outline."""
         orch = _mk_orch_v2()
-        macro_called = {"count": 0}
+        captured, events = await self._run_v2(orch)
 
-        class _MacroSpy:
-            def __init__(self, *a, **kw): pass
-            async def run(self, ctx):
-                macro_called["count"] += 1
-                return {"regions": []}
-
-        with patch(
-            "backend.orchestrator.curriculum_pipeline_v2.MacroRegionPlannerAgent",
-            _MacroSpy,
-        ):
-            # default _chunks(30) 屬 small_file (threshold 50)。
-            # _run_v2 預設 SMALL_FILE_CHUNK_THRESHOLD=0 強制 large path，
-            # 這裡 override 回 default 觸發 small_file branch。
-            captured, events = await self._run_v2(
-                orch, env={"SMALL_FILE_CHUNK_THRESHOLD": "50"},
-            )
-
-        self.assertEqual(
-            macro_called["count"], 0,
-            "small_file 應 bypass MacroRegionPlanner",
-        )
-        # 仍應 emit region_done（single pseudo region）
-        self.assertIn("region_done", events)
-        # splitter 應只被呼叫 1 次（無 per-region 多次，本 test mock verifier 永遠 aligned）
+        # splitter called exactly once (verifier always aligned → no reroll)
         self.assertEqual(
             orch.splitter.run.await_count, 1,
-            "small_file 應只跑 1 次 splitter (mock verifier 永遠 aligned，無 reroll)",
+            "single_split should call splitter exactly once",
         )
-        # outline 也應被 skip（C）
+        # outline skipped because default same_material=True
         self.assertEqual(
             orch.content_outliner.run.await_count, 0,
-            "small_file 應 bypass ContentOutline",
+            "ContentOutline should be skipped when same_material=True",
         )
-        self.assertEqual(captured["quality_warnings"].get("curriculum_llm_calls"), 2)
+        self.assertIn("region_done", events)
+        qw = captured["quality_warnings"] or {}
+        self.assertTrue(qw.get("small_file_path"))
+        self.assertTrue(qw.get("reducer_skipped"))
+        # multi_source flag should NOT be set for single source
+        self.assertFalse(qw.get("multi_source_split"))
 
-    async def test_v2_multi_source_small_file_per_source_split(self):
-        """2 sources × 10 chunks：per-source split，各 1 次 splitter，無 outline/reducer。"""
+    async def test_v2_multi_source_uses_per_source_split(self):
+        """D1: multi-source input → per_source_split path. 1 splitter per source."""
         orch = _mk_orch_v2()
-        macro_called = {"count": 0}
+        captured, events = await self._run_v2(
+            orch,
+            source_chunks=_multi_source_chunks(10),
+        )
 
-        class _MacroSpy:
-            def __init__(self, *a, **kw): pass
-            async def run(self, ctx):
-                macro_called["count"] += 1
-                return {"regions": []}
-
-        with patch(
-            "backend.orchestrator.curriculum_pipeline_v2.MacroRegionPlannerAgent",
-            _MacroSpy,
-        ), patch(
-            "backend.orchestrator.curriculum_pipeline_v2.GlobalCurriculumReducerAgent",
-        ) as reducer_cls:
-            captured, events = await self._run_v2(
-                orch,
-                source_chunks=_multi_source_chunks(10),
-                env={"SMALL_FILE_CHUNK_THRESHOLD": "50"},
-            )
-
-        self.assertEqual(macro_called["count"], 0)
-        reducer_cls.assert_not_called()
         self.assertEqual(orch.splitter.run.await_count, 2)
         self.assertEqual(orch.content_outliner.run.await_count, 0)
         qw = captured["quality_warnings"] or {}
@@ -304,29 +316,33 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(qw.get("source_count"), 2)
         self.assertTrue(qw.get("reducer_skipped"))
         self.assertIn("region_done", events)
-        self.assertEqual(captured["quality_warnings"].get("curriculum_llm_calls"), 4)
 
-    async def test_v2_plan_b_skips_reducer(self):
+    async def test_start_session_routes_to_v2(self):
         orch = _mk_orch_v2()
-        chunks = _chunks(20, "src_a") + [
-            {
-                "chunk_id": f"chunk_b{i:04d}",
-                "text": f"補充 alpha beta {i}",
-                "source_id": "src_b",
-                "source_index": 1,
-                "source_label": "書B",
-                "section_title": "補充",
-            }
-            for i in range(5)
-        ]
-        captured = {"quality_warnings": None}
-        events: list[str] = []
+        with patch(
+            "backend.orchestrator.curriculum_pipeline_v2.run_start_session_v2",
+            new=AsyncMock(),
+        ) as v2_mock:
+            await orch.start_session(
+                session_id="s1",
+                user_id="u1",
+                source_chunks=_chunks(5),
+                target_depth="standard",
+                question_mode="multiple_choice",
+                provider_name=None,
+                model_name=None,
+                emit=AsyncMock(),
+            )
+        v2_mock.assert_awaited_once()
 
-        async def _emit(msg):
-            events.append(msg.get("type", ""))
+    async def test_order_decision_written_to_quality_warnings(self):
+        orch = _mk_orch_v2()
+        decision = {"applied": True, "certain": True, "signal": ["filename_regex"],
+                    "order": ["第一章.txt", "第二章.txt"], "reason": None}
+        captured = {"qw": None}
 
         async def _capture_pending(**kwargs):
-            captured["quality_warnings"] = kwargs.get("quality_warnings")
+            captured["qw"] = kwargs.get("quality_warnings")
 
         with patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.create_generating_stub",
@@ -352,89 +368,173 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         ), patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.purge_source_uploads",
             new=AsyncMock(),
-        ), patch(
-            "backend.orchestrator.curriculum_pipeline_v2.GlobalCurriculumReducerAgent",
-        ) as reducer_cls, patch.dict(
-            "os.environ",
-            {
-                "CURRICULUM_V2_PLAN_B": "1",
-                "SPLITTER_FAIL_MODE": "hard",
-                "SMALL_FILE_CHUNK_THRESHOLD": "0",
-            },
-            clear=False,
         ):
             await run_start_session_v2(
-                orch,
-                session_id="sess_planb",
-                user_id="u1",
-                source_chunks=chunks,
-                target_depth="standard",
-                question_mode="multiple_choice",
-                provider_name=None,
-                model_name=None,
-                emit=_emit,
+                orch, session_id="s", user_id="u",
+                source_chunks=_chunks(5), target_depth="standard",
+                question_mode="multiple_choice", provider_name="claude",
+                model_name="m", emit=AsyncMock(), source_file_ids=[],
+                order_decision=decision,
             )
-        reducer_cls.assert_not_called()
-        self.assertTrue(captured["quality_warnings"].get("plan_b_active"))
-        self.assertIn("primary_source_id", captured["quality_warnings"])
+        self.assertEqual((captured["qw"] or {}).get("source_order"), decision)
 
-    async def test_v2_reducer_fail_soft_flattens_candidates(self):
-        orch = _mk_orch_v2()
-        captured, _ = await self._run_v2(
-            orch,
-            env={"REDUCER_FAIL_MODE": "soft"},
-            reducer_outcomes=[],
-        )
-        self.assertTrue(captured["quality_warnings"].get("reducer_fallback_flat"))
-        self.assertGreaterEqual(len(captured["stages"]), 1)
 
-    async def test_v2_auto_plan_b_on_reducer_no_llm_outcomes(self):
-        orch = _mk_orch_v2()
-        outcomes = [
+def _mk_orch_v2_gating() -> LearningOrchestrator:
+    """orch whose splitter returns 2 distinct-concept stages per call and that
+    has a stage_consolidator mock — so the ≥30-chunk consolidator gate is
+    reachable and we can assert whether it ran per postprocess mode."""
+    orch = _mk_orch_v2()
+
+    async def _split(ctx):
+        chunks = ctx.task_payload.get("source_chunks") or []
+        ids = [c["chunk_id"] for c in chunks[:2]] or ["chunk_0000"]
+        src = (chunks[0].get("source_id") if chunks else "x") or "x"
+        stages = [
             {
-                "outcome_id": f"lo_{i + 1:03d}",
-                "title": f"Stage {i + 1}",
-                "teaching_goal": f"goal {i}",
-                "key_concepts": [f"kc{i}"],
-                "primary_evidence": {"source_id": "src_a", "chunk_ids": [f"chunk_{i:04d}"]},
-                "supporting_evidence": [],
-                "merge_decision": "split",
-                "merge_confidence": 1.0,
+                "stage_id": i + 1,
+                "node_id": f"1.{i + 1}",
+                "title": f"Stage {src} {i}",
+                "teaching_goal": "理解概念",
+                "key_concepts": [f"c_{src}_{i}"],
+                "source_chunk_ids": [cid],
             }
-            for i in range(3)
+            for i, cid in enumerate(ids)
         ]
+        return {"stages": stages, "summary": "V2 摘要"}
+
+    orch.splitter.run = AsyncMock(side_effect=_split)
+    orch.stage_consolidator = MagicMock()
+    orch.stage_consolidator.run = AsyncMock(return_value={"skipped": True})
+    return orch
+
+
+class TestPostprocessModeGating(TestCurriculumPipelineV2):
+    """Phase 1: single source / same_material=True 跳過合併與 consolidator；
+    only cross_material（多 source + same_material=False）維持合併流程。"""
+
+    def _spy_merges(self):
+        import backend.orchestrator.curriculum_pipeline_v2 as v2mod
+        return (
+            patch.object(
+                v2mod, "merge_by_concept_overlap",
+                wraps=v2mod.merge_by_concept_overlap,
+            ),
+            patch.object(
+                v2mod, "merge_singleton_chunk_stages",
+                wraps=v2mod.merge_singleton_chunk_stages,
+            ),
+        )
+
+    async def test_single_source_skips_semantic_merges_and_consolidator(self):
+        # Refinement: singleton cleanup runs in every mode (it's thin-stage
+        # cleanup, not a semantic merge); only jaccard + consolidator are gated.
+        orch = _mk_orch_v2_gating()
+        p_jaccard, p_singleton = self._spy_merges()
+        with p_jaccard as mj, p_singleton as ms:
+            captured, _ = await self._run_v2(orch, source_chunks=_chunks(30))
+        qw = captured["quality_warnings"] or {}
+        self.assertEqual(qw.get("postprocess_mode"), "single_source_finalize_only")
+        self.assertEqual(orch.stage_consolidator.run.await_count, 0)
+        self.assertEqual(mj.call_count, 0, "jaccard merge must not run for single source")
+        self.assertGreaterEqual(ms.call_count, 1, "singleton cleanup still runs")
+
+    async def test_same_material_multi_skips_semantic_merges_and_consolidator(self):
+        orch = _mk_orch_v2_gating()
+        p_jaccard, p_singleton = self._spy_merges()
+        with p_jaccard as mj, p_singleton as ms:
+            captured, _ = await self._run_v2(
+                orch, source_chunks=_multi_source_chunks(15), same_material=True,
+            )
+        qw = captured["quality_warnings"] or {}
+        self.assertEqual(qw.get("postprocess_mode"), "same_material_coordinate_only")
+        self.assertEqual(orch.stage_consolidator.run.await_count, 0)
+        self.assertEqual(mj.call_count, 0)
+        self.assertGreaterEqual(ms.call_count, 1, "singleton cleanup still runs")
+
+    async def test_cross_material_multi_runs_merges_and_consolidator(self):
+        orch = _mk_orch_v2_gating()
+        p_jaccard, p_singleton = self._spy_merges()
+        with p_jaccard as mj, p_singleton as ms:
+            captured, _ = await self._run_v2(
+                orch, source_chunks=_multi_source_chunks(15), same_material=False,
+            )
+        qw = captured["quality_warnings"] or {}
+        self.assertEqual(
+            qw.get("postprocess_mode"), "cross_material_merge_and_coordinate"
+        )
+        self.assertGreaterEqual(orch.stage_consolidator.run.await_count, 1)
+        self.assertGreaterEqual(mj.call_count, 1)
+        self.assertGreaterEqual(ms.call_count, 1)
+
+    async def test_interior_orphan_folds_instead_of_filler_stage(self):
+        # splitter leaves chunk_0002 uncovered between [0,1] and [3,4]; the interior
+        # orphan must fold into the preceding stage, not spawn a「章節總結」filler.
+        orch = _mk_orch_v2()
+        orch.stage_consolidator = MagicMock()
+        orch.stage_consolidator.run = AsyncMock(return_value={"skipped": True})
+
+        async def _split(ctx):
+            return {
+                "stages": [
+                    {"stage_id": 1, "node_id": "1.1", "title": "前半",
+                     "teaching_goal": "g", "key_concepts": ["a"],
+                     "source_chunk_ids": ["chunk_0000", "chunk_0001"]},
+                    {"stage_id": 2, "node_id": "1.2", "title": "後半",
+                     "teaching_goal": "g", "key_concepts": ["b"],
+                     "source_chunk_ids": ["chunk_0003", "chunk_0004"]},
+                ],
+                "summary": "s",
+            }
+
+        orch.splitter.run = AsyncMock(side_effect=_split)
+        captured, _ = await self._run_v2(orch, source_chunks=_chunks(5))
+        stages = captured["stages"]
+        kinds = [s.get("kind") for s in stages]
+        titles = [s.get("title") or "" for s in stages]
+        self.assertNotIn("follow_up_orphan", kinds,
+                         "interior orphan should fold, not spawn a filler stage")
+        self.assertFalse(any("章節總結" in t for t in titles))
+        covered = {c for s in stages for c in (s.get("source_chunk_ids") or [])}
+        self.assertIn("chunk_0002", covered)
+
+
+class TestOutlineGating(TestCurriculumPipelineV2):
+    """Phase 3: same_material 永不跑 ContentOutline（含 ≥3 章）。
+
+    根因（live sess_f9qt8rac9，8 章理財書）：run_outline 在 n_sources>=3 時
+    即使 same_material 也跑全局 outline，named_cases 變成跨章主題桶，被各
+    per-source splitter 共用 → 同主題的不同章 chunk 併進同一 stage（7.1=第6+8章）。
+    對齊 same_material 保章節邊界原則：same_material 一律不跑 outline；
+    cross_material 仍跑（取全局骨架）。"""
+
+    async def test_same_material_three_sources_skips_outline(self):
+        orch = _mk_orch_v2()
+        await self._run_v2(
+            orch, source_chunks=_n_source_chunks(3), same_material=True,
+        )
+        self.assertEqual(
+            orch.content_outliner.run.await_count, 0,
+            "same_material 不論章數都不應跑 ContentOutline",
+        )
+
+    async def test_same_material_three_sources_records_skip_warning(self):
+        orch = _mk_orch_v2()
         captured, _ = await self._run_v2(
-            orch,
-            env={"CURRICULUM_V2_PLAN_B_AUTO": "1"},
-            reducer_result={
-                "outcomes": outcomes,
-                "unsure_pair_count": 4,
-                "llm_outcome_count": 0,
-            },
+            orch, source_chunks=_n_source_chunks(3), same_material=True,
         )
         qw = captured["quality_warnings"] or {}
-        self.assertTrue(qw.get("plan_b_auto_fallback"))
-        self.assertTrue(qw.get("plan_b_active"))
+        self.assertIn("outline_skipped_same_material", qw)
+        self.assertEqual(qw["outline_skipped_same_material"]["n_sources"], 3)
 
-    async def test_start_session_routes_to_v2(self):
-        orch = _mk_orch_v2()
-        with patch(
-            "backend.orchestrator.curriculum_pipeline_v2.run_start_session_v2",
-            new=AsyncMock(),
-        ) as v2_mock, patch.dict(
-            "os.environ", {"CURRICULUM_PIPELINE_V2": "1"}, clear=False
-        ):
-            await orch.start_session(
-                session_id="s1",
-                user_id="u1",
-                source_chunks=_chunks(5),
-                target_depth="standard",
-                question_mode="multiple_choice",
-                provider_name=None,
-                model_name=None,
-                emit=AsyncMock(),
-            )
-        v2_mock.assert_awaited_once()
+    async def test_cross_material_three_sources_still_runs_outline(self):
+        orch = _mk_orch_v2_gating()
+        await self._run_v2(
+            orch, source_chunks=_n_source_chunks(3), same_material=False,
+        )
+        self.assertEqual(
+            orch.content_outliner.run.await_count, 1,
+            "cross_material 仍應跑 ContentOutline 取全局骨架",
+        )
 
 
 class TestBuildKnowledgeMapSummary(unittest.TestCase):

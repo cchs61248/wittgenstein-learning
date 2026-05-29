@@ -131,7 +131,6 @@ class TestDriftVerifierUserMsgContainsForbiddenFuture(unittest.IsolatedAsyncioTe
 
 # ── L2: orchestrator 整合 ──────────────────────────────────────
 
-from unittest.mock import patch
 from backend.orchestrator.learning_orchestrator import LearningOrchestrator
 
 

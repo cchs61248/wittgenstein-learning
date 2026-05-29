@@ -42,6 +42,9 @@ async def resume_generating_session(
     )
     provider_name = meta.get("provider_name") or row.get("provider_name")
     model_name = meta.get("model_name") or row.get("model_name")
+    # same_material: None / NULL = legacy 未紀錄 → 預設 True（與 V2 fast path 行為一致）
+    same_material_raw = row.get("same_material")
+    same_material = True if same_material_raw is None else bool(same_material_raw)
 
     _log.info(
         "resume_generating_session  session=%s  skip_regions=%d",
@@ -59,6 +62,8 @@ async def resume_generating_session(
         provider_name=provider_name,
         model_name=model_name,
         emit=emit,
+        same_material=same_material,
+        order_decision=meta.get("order_decision"),
     )
     return True
 

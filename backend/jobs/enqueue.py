@@ -14,6 +14,16 @@ def inflight_key(session_id: str) -> str:
     return f"{session_id}:start"
 
 
+def arq_job_id(session_id: str) -> str:
+    return f"curriculum:{session_id}"
+
+
+async def clear_stale_arq_job(redis, session_id: str) -> int:
+    """Remove failed/completed Arq keys so the fixed _job_id can be re-enqueued."""
+    job_id = arq_job_id(session_id)
+    return await redis.delete(f"arq:job:{job_id}", f"arq:result:{job_id}")
+
+
 async def enqueue_curriculum_job(redis, session_id: str) -> str | None:
     """
     Enqueue run_curriculum_job for session_id.
@@ -27,7 +37,7 @@ async def enqueue_curriculum_job(redis, session_id: str) -> str | None:
         job = await redis.enqueue_job(
             "run_curriculum_job",
             session_id,
-            _job_id=f"curriculum:{session_id}",
+            _job_id=arq_job_id(session_id),
         )
         if job is None:
             await release(key)

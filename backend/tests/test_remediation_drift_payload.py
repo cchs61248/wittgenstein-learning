@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 from backend.orchestrator.learning_orchestrator import LearningOrchestrator
 

@@ -1,7 +1,6 @@
 """upload_gc 與 abandon_generating_stub 清理行為測試。"""
 import json
 import sqlite3
-from pathlib import Path
 
 import pytest
 

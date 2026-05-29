@@ -1,14 +1,13 @@
 import aiosqlite
+import logging
 import os
+import sys
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 _DB_PATH: str | None = None
 _connection: aiosqlite.Connection | None = None
-
-
-def set_db_path(path: str) -> None:
-    global _DB_PATH
-    _DB_PATH = path
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -27,8 +26,18 @@ async def init_db(db_path: str) -> None:
 
     _connection = await aiosqlite.connect(db_path)
     _connection.row_factory = aiosqlite.Row
-    journal = os.getenv("SQLITE_JOURNAL_MODE", "WAL").strip().upper()
-    await _connection.execute(f"PRAGMA journal_mode={journal}")
+    journal = os.getenv("SQLITE_JOURNAL_MODE", "").strip().upper()
+    if not journal:
+        # Windows host + Docker bind-mount: WAL 常導致 disk I/O error
+        journal = "DELETE" if sys.platform == "win32" else "WAL"
+    try:
+        await _connection.execute(f"PRAGMA journal_mode={journal}")
+    except Exception as exc:
+        _log.warning(
+            "PRAGMA journal_mode=%s failed (%s); continuing with existing journal mode",
+            journal,
+            exc,
+        )
     await _connection.execute("PRAGMA busy_timeout=30000")
     await _connection.execute("PRAGMA foreign_keys=ON")
 
@@ -319,6 +328,17 @@ async def init_db(db_path: str) -> None:
     try:
         await _connection.execute(
             "ALTER TABLE sessions ADD COLUMN target_depth TEXT DEFAULT NULL"
+        )
+        await _connection.commit()
+    except Exception:
+        pass
+
+    # Migration 025：sessions 加入 same_material 欄位（0/1/NULL）
+    # 紀錄使用者「是否同教材」選擇，供 resume 流程還原；
+    # NULL = legacy 未紀錄（resume 時視為 True）；1 = 同教材；0 = 換教材
+    try:
+        await _connection.execute(
+            "ALTER TABLE sessions ADD COLUMN same_material INTEGER"
         )
         await _connection.commit()
     except Exception:

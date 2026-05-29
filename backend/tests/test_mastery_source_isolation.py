@@ -167,18 +167,18 @@ class TestPromptRules(unittest.TestCase):
     def test_teacher_prompt_includes_enumeration_completeness(self):
         from backend.utils.prompt_templates import SYSTEM_PROMPTS
         prompt = SYSTEM_PROMPTS["teacher"]
-        self.assertIn("並列方案完整性", prompt)
+        # 重構後措辭：【並列方案與決策框架】段
+        self.assertIn("並列方案", prompt)
         self.assertIn("教材列了 N 種", prompt)
-        # 範例必須包含「漏第 3」這種具體案例
-        self.assertIn("漏第", prompt)
+        # 規則語意：宣告 N 種後必須依序展開每一種
+        self.assertIn("依序展開每一種", prompt)
 
     def test_qg_prompt_forbids_chinese_english_bracket_mix(self):
         from backend.utils.prompt_templates import SYSTEM_PROMPTS
         prompt = SYSTEM_PROMPTS["question_generator"]
-        self.assertIn("禁止中英括弧混雜", prompt)
-        # 必須點到具體反面案例
-        self.assertIn("差價合約(CFD)", prompt)
-        # 必須說明清單裡若已有混雜命名要照原樣使用，不要自創
+        # 重構後措辭：禁止自創「中文 (English縮寫)」格式
+        self.assertIn("中文 (English縮寫)", prompt)
+        # 規則語意：清單裡若已有該格式才可照原樣使用，不主動補英文縮寫
         self.assertIn("照原樣使用", prompt)
 
 

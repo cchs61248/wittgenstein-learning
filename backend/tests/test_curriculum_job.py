@@ -57,6 +57,7 @@ class TestCurriculumJob(unittest.IsolatedAsyncioTestCase):
             model_name="m",
             source_file_ids=None,
             sources_json=[{"source_id": "src_a", "source_index": 0, "source_label": "A"}],
+            same_material=True,
         )
 
         orch_mock = MagicMock()
@@ -86,23 +87,7 @@ class TestCurriculumJob(unittest.IsolatedAsyncioTestCase):
         orch_mock._pending_start_args = None
         orch_mock._check_stage_quality = MagicMock(return_value=[])
 
-        reducer_mock = MagicMock()
-        reducer_mock.run = AsyncMock(return_value={
-            "outcomes": [{
-                "outcome_id": "lo_001", "title": "S1", "teaching_goal": "g",
-                "key_concepts": ["alpha"],
-                "primary_evidence": {"source_id": "src_a", "chunk_ids": ["chunk_0000"]},
-                "supporting_evidence": [], "merge_decision": "merged", "merge_confidence": 0.9,
-            }],
-        })
-
-        env_patch = {
-            "CURRICULUM_PIPELINE_V2": "1",
-            "CURRICULUM_V2_PLAN_B": "0",
-            "REDUCER_FAIL_MODE": "hard",
-            "SPLITTER_FAIL_MODE": "hard",
-            "SMALL_FILE_CHUNK_THRESHOLD": "0",
-        }
+        env_patch = {"SPLITTER_FAIL_MODE": "hard"}
 
         with patch("backend.jobs.curriculum_job.init_db", new=AsyncMock()), patch(
             "backend.jobs.curriculum_job.close_db", new=AsyncMock(),
@@ -111,25 +96,12 @@ class TestCurriculumJob(unittest.IsolatedAsyncioTestCase):
         ), patch(
             "backend.jobs.curriculum_job.LearningOrchestrator", return_value=orch_mock,
         ), patch(
-            "backend.orchestrator.curriculum_pipeline_v2.MacroRegionPlannerAgent",
-        ) as planner_cls, patch(
-            "backend.orchestrator.curriculum_pipeline_v2.GlobalCurriculumReducerAgent",
-            return_value=reducer_mock,
-        ), patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.create_pending_session",
             new=AsyncMock(),
         ), patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.purge_source_uploads",
             new=AsyncMock(),
         ), patch.dict("os.environ", env_patch, clear=False):
-            planner_inst = MagicMock()
-            planner_inst.run = AsyncMock(return_value={
-                "regions": [{
-                    "region_id": "region_000",
-                    "chunk_ids": [f"chunk_{i:04d}" for i in range(30)],
-                }],
-            })
-            planner_cls.return_value = planner_inst
             result = await run_curriculum_job({"job_try": 1}, session_id)
 
         self.assertEqual(result["status"], "done")

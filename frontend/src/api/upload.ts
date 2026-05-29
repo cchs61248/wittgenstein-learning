@@ -2,12 +2,32 @@ import { getApiBase } from './apiBase';
 
 const BASE = getApiBase();
 
-export interface UploadFileResult {
+export interface SingleUploadResult {
   file_id: string;
   filename: string;
   size: number;
   char_count: number;
   mime_type: string;
+}
+
+export interface EpubChapter {
+  file_id: string;
+  filename: string;
+  char_count: number;
+  size: number;
+  mime_type: string;
+}
+
+export interface EpubUploadResult {
+  epub_chapters: EpubChapter[];
+  total_chapters: number;
+  parent_filename: string;
+}
+
+export type UploadFileResult = EpubUploadResult | SingleUploadResult;
+
+export function isEpubUploadResult(r: UploadFileResult): r is EpubUploadResult {
+  return 'epub_chapters' in r && Array.isArray((r as EpubUploadResult).epub_chapters);
 }
 
 export interface UploadUrlResult {
@@ -132,6 +152,3 @@ export async function streamYoutubeAsr(
 
   throw new Error('YouTube 音訊轉寫未完成（連線中斷）');
 }
-
-// 向下相容舊程式碼
-export type UploadResult = UploadFileResult;
