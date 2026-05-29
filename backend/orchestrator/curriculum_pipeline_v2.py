@@ -276,7 +276,23 @@ def _apply_deterministic_cleanup(
     orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
     orphans_before = len(orphan_check.get("orphan_chunk_ids") or [])
     if orphans_before:
-        stages = ensure_orphan_chunks_attached(stages, source_chunks)
+        # 先把「夾在閱讀區間內」的 interior orphan 折進鄰近 content stage，
+        # 避免它被 ensure_orphan_chunks_attached 變成中段假「章節總結與補充內容」
+        # stage（live sess_dra3xubdr：chunk_0049 夾在 stage 間卻成了第 15/20 的假總結）。
+        # fold 後一定要重新計算 orphan，剩下的（真尾段 orphan）才走 fallback attach。
+        folded = fold_interior_orphan_chunks(stages, source_chunks)
+        if folded is not stages:
+            after_fold = verify_global_coverage(folded, source_chunks, required_outline)
+            folded_count = orphans_before - len(after_fold.get("orphan_chunk_ids") or [])
+            stages = folded
+            if folded_count > 0:
+                _log.info(
+                    "v2 deterministic cleanup folded interior orphans  session=%s  count=%d",
+                    session_id, folded_count,
+                )
+        if (verify_global_coverage(stages, source_chunks, required_outline)
+                .get("orphan_chunk_ids")):
+            stages = ensure_orphan_chunks_attached(stages, source_chunks)
         stages = split_oversized_stages(stages, source_chunks)
     # kc 修剪 / 拆分 / 去重不依賴 orphan，永遠跑（避免 aligned 課綱殘留 kc 過量 stage）
     stages = split_kc_heavy_stages(stages, source_chunks)
