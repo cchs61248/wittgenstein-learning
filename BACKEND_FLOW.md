@@ -722,9 +722,11 @@ class WorkingMemory:
     │
     ├── checkpoint 載入；resume 從 DB session row 讀 same_material（NULL = legacy → True）
     │
-    ├── ContentOutlineAgent（**`same_material=False` 或 `n_sources >= 3` 時跑**；P0a 2026-05-27）
+    ├── ContentOutlineAgent（**只在 `same_material=False` 時跑**；Phase 3 2026-05-29 收斂自 P0a）
     │     產物：required_outline = {named_cases, required_stage_titles, must_cover_topics}
-    │     1~2 source 同教材才會跳過省 LLM；EPUB 多章一定跑骨架
+    │     `run_outline = not same_material`。同教材（含 ≥3 章 EPUB）一律跳過：
+    │     global outline 的跨章 named_cases 會把不同章同主題 chunk 併進同一 stage
+    │     （章節邊界破壞器，live sess_f9qt8rac9 7.1=第6+8章），章序改由 SourceOrderResolver 處理
     │
     ├── 唯一切分分支（n_sources 決定）：
     │     n_sources <= 1 → `_run_single_split`（整包一次 Splitter+Verifier）
@@ -736,11 +738,18 @@ class WorkingMemory:
     ├── `candidates_to_stages_flat`（無 LLM reducer）
     ├── quality_warnings = {small_file_path: True, reducer_skipped: True, multi_source_split?, source_count?}
     ├── `assess_reducer_health`（vestigial：candidate/outcome/unsure 都 0，僅輸出 healthy 狀態）
-    ├── `merge_duplicate_topic_stages(threshold=duplicate_title_threshold())`
+    │
+    ├── **Phase 1 mode-aware 後處理（2026-05-29）**：`postprocess_mode = choose_postprocess_mode(n_sources, same_material)`
+    │     `allow_merge = postprocess_mode == "cross_material_merge_and_coordinate"`（只有「多本不同書」為 True）
+    │     單 source / 同教材：`allow_merge=False` → **跳過下面所有語意合併**，只做確定性排序 + 收尾
+    │     寫入 quality_warnings.postprocess_mode / source_order / outline_skipped_same_material（同教材 ≥3 章）
+    │
+    ├── `merge_duplicate_topic_stages(threshold=duplicate_title_threshold())`（一律跑，純標題去重）
     │     env `STAGE_TITLE_MERGE_THRESHOLD`（預設 0.85；越界值 fallback 至預設）
-    ├── **P0b-1**: `merge_by_concept_overlap(threshold=concept_overlap_threshold())`
+    ├── **P0b-1**: `merge_by_concept_overlap(...)`（**僅 allow_merge**）
     │     env `STAGE_CONCEPT_OVERLAP_THRESHOLD`（預設 0.6）— jaccard 抓跨 source 命名漂移
-    ├── **P0b-2**: chunks ≥ 30 時跑 `StageConsolidatorAgent`（LLM 全局 rename + reorder + merge）
+    ├── `enforce_stage_ordering` + `merge_singleton_chunk_stages`（一律跑，確定性排序/薄節清理，非語意合併）
+    ├── **P0b-2**: **allow_merge 且** chunks ≥ 30 時跑 `StageConsolidatorAgent`（LLM 全局 rename + reorder + merge；legacy，Phase 4 將改 plan-based）
     │     硬約束：不可新增/移除 chunk_id；驗證失敗 fallback 沿用原 stages，記到 `quality_warnings`
     ├── `verify_global_coverage`（named_cases + orphan chunks + duplicate titles）
     ├── 若 missing named_cases / orphan chunks → `_build_follow_up_stages` 補節再 merge
