@@ -2,7 +2,7 @@
 import os
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from backend.db.database import init_db, close_db, get_db
 from backend.memory import curriculum_checkpoint as ckpt
@@ -47,6 +47,7 @@ class TestSessionPrepare(unittest.IsolatedAsyncioTestCase):
             model_name="m",
             source_file_ids=["upl_1"],
             sources_json=[{"source_id": "src_a", "source_index": 0, "source_label": "A"}],
+            same_material=True,
         )
         row = await session_memory.get_session("sess_prep")
         assert row is not None

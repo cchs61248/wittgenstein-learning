@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent, ChangeEvent, KeyboardEvent } from 'react';
 import { useSessionStore } from '../store/sessionStore';
-import { uploadFile, uploadUrl, streamYoutubeAsr, type UploadUrlResult, type YoutubeAsrRequired, type YoutubeAsrEvent } from '../api/upload';
+import { uploadFile, uploadUrl, streamYoutubeAsr, isEpubUploadResult, type UploadUrlResult, type YoutubeAsrRequired, type YoutubeAsrEvent, type EpubChapter } from '../api/upload';
 import { fetchDefaultProvider } from '../api/config';
 import type { ProviderType, DepthType } from '../types/messages';
 
@@ -26,7 +26,8 @@ interface Props {
     depth: DepthType,
     model: string,
     questionMode: 'short_answer' | 'multiple_choice',
-    sources: Array<{ type: SourceType; file_id?: string; content?: string; label: string }>
+    sources: Array<{ type: SourceType; file_id?: string; content?: string; label: string }>,
+    sameMaterial: boolean,
   ) => void;
   onClose?: () => void;
 }
@@ -140,6 +141,7 @@ export function UploadModal({ onStart, onClose }: Props) {
   const [model, setModel] = useState(PROVIDER_MODELS.claude[0].id);
   const [depth, setDepth] = useState<DepthType>('intermediate');
   const [questionMode, setQuestionMode] = useState<'short_answer' | 'multiple_choice'>('short_answer');
+  const [materialMode, setMaterialMode] = useState<'same' | 'different' | null>(null);
 
   // 從後端取得預設 provider
   useEffect(() => {
@@ -208,19 +210,52 @@ export function UploadModal({ onStart, onClose }: Props) {
       const placeholder = placeholders[i];
       try {
         const result = await uploadFile(file, token);
-        setSources((prev) =>
-          prev.map((s) =>
-            s.id === placeholder.id
-              ? {
-                  ...s,
-                  fileId: result.file_id,
-                  charCount: result.char_count,
-                  uploading: false,
-                  error: undefined,
-                }
-              : s
-          )
-        );
+        if (isEpubUploadResult(result)) {
+          // EPUB → expand placeholder into N chapter sources
+          const chapterSources: Source[] = result.epub_chapters.map((chap: EpubChapter) => {
+            if (!chap.file_id) {
+              return {
+                id: genId(),
+                type: 'file' as SourceType,
+                label: chap.filename || 'unknown chapter',
+                uploading: false,
+                error: 'EPUB 章節缺少 file_id',
+              };
+            }
+            return {
+              id: genId(),
+              type: 'file' as SourceType,
+              label: chap.filename,
+              fileId: chap.file_id,
+              charCount: chap.char_count,
+              uploading: false,
+            };
+          });
+          const expandedTotal = sources.length - 1 + chapterSources.length;
+          if (expandedTotal > MAX_SOURCES) {
+            console.warn(
+              `[UploadModal] EPUB expansion pushes total sources to ${expandedTotal} (cap ${MAX_SOURCES}). Per design, not blocked — user must remove unwanted chapters.`
+            );
+          }
+          setSources((prev) => [
+            ...prev.filter((s) => s.id !== placeholder.id),
+            ...chapterSources,
+          ]);
+        } else {
+          setSources((prev) =>
+            prev.map((s) =>
+              s.id === placeholder.id
+                ? {
+                    ...s,
+                    fileId: result.file_id,
+                    charCount: result.char_count,
+                    uploading: false,
+                    error: undefined,
+                  }
+                : s
+            )
+          );
+        }
       } catch (e) {
         setSources((prev) =>
           prev.map((s) =>
@@ -390,7 +425,10 @@ export function UploadModal({ onStart, onClose }: Props) {
   // ── 啟動學習 ───────────────────────────────────────────────
 
   const readySources = sources.filter((s) => !s.uploading && !s.error);
-  const canStart = readySources.length > 0;
+  // 1 source 自動視為同教材
+  const needsMaterialChoice = sources.length > 1;
+  const effectiveMaterialMode: 'same' | 'different' = sources.length <= 1 ? 'same' : (materialMode ?? 'same');
+  const canStart = readySources.length > 0 && (!needsMaterialChoice || materialMode !== null);
 
   const handleStart = () => {
     if (!canStart) return;
@@ -404,7 +442,8 @@ export function UploadModal({ onStart, onClose }: Props) {
         file_id: s.fileId,
         content: s.content,
         label: s.label,
-      }))
+      })),
+      effectiveMaterialMode === 'same',
     );
   };
 
@@ -619,6 +658,30 @@ export function UploadModal({ onStart, onClose }: Props) {
               </li>
             ))}
           </ul>
+        )}
+
+        {needsMaterialChoice && (
+          <div className="modal-material-choice">
+            <p className="modal-material-q">這幾份是同一教材嗎？(必選)</p>
+            <label className="modal-material-radio">
+              <input
+                type="radio"
+                name="material-mode"
+                checked={materialMode === 'same'}
+                onChange={() => setMaterialMode('same')}
+              />
+              <span>是 — 同一本書 / 同一篇文章拆檔</span>
+            </label>
+            <label className="modal-material-radio">
+              <input
+                type="radio"
+                name="material-mode"
+                checked={materialMode === 'different'}
+                onChange={() => setMaterialMode('different')}
+              />
+              <span>否 — 多個獨立主題</span>
+            </label>
+          </div>
         )}
 
         {/* ── AI 設定 ── */}

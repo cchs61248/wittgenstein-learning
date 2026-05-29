@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backend.db.database import close_db, init_db
-from backend.files.upload_store import save_upload_binary, UPLOAD_DIR
+from backend.files.upload_store import save_upload_binary
 from backend.memory import session_memory
 
 

@@ -6,7 +6,6 @@
 - 補強節點（key_concepts 只 1 個）不注入 quota（avoid noise）
 - QG 回傳後若違規（單一概念超量），log warning（不 retry）
 """
-import asyncio
 import logging
 import unittest
 from unittest.mock import AsyncMock, MagicMock
@@ -54,7 +53,8 @@ class TestPromptHasDistributionRule(unittest.TestCase):
     def test_qg_system_prompt_has_distribution_rule(self):
         from backend.utils.prompt_templates import SYSTEM_PROMPTS
         prompt = SYSTEM_PROMPTS["question_generator"]
-        self.assertIn("題目分布均勻化", prompt)
+        # 重構後措辭：【題目分配優先序】段
+        self.assertIn("題目分配優先序", prompt)
         self.assertIn("每個概念至少出 1 題", prompt)
 
 

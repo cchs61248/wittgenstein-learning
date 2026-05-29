@@ -14,8 +14,8 @@ from backend.utils.prompt_templates import SYSTEM_PROMPTS
 class TestContentSplitterPromptHasRetryHintRule(unittest.TestCase):
     def test_prompt_has_retry_hint_rule(self):
         prompt = SYSTEM_PROMPTS["content_splitter"]
-        # 規則段標題
-        self.assertIn("重試提示", prompt)
+        # 重構後措辭：【repair_plan 處理規則】（previous_attempt_missed 表示上一輪未過）
+        self.assertIn("上一輪切分未通過", prompt)
         self.assertIn("previous_attempt_missed", prompt)
         # 必須要求「不可 mash-up」與「各自獨立 stage」
         self.assertIn("獨立 stage", prompt)
@@ -33,9 +33,11 @@ class TestContentSplitterPromptHasRetryHintRule(unittest.TestCase):
 
     def test_prompt_has_summary_stage_kc_anchor_rule(self):
         prompt = SYSTEM_PROMPTS["content_splitter"]
-        self.assertIn("summary / 面試 / 總結 stage", prompt)
+        # 重構後措辭：「summary / checklist / 面試類 stage 規則」
+        self.assertIn("面試類 stage", prompt)
         self.assertIn("章節總結", prompt)
-        self.assertIn("routing layer", prompt)
+        # 規則語意：summary stage 的 kc 必須能在原文找到 anchor，不可只用 meta 標籤
+        self.assertIn("字面或同義 anchor", prompt)
 
 
 # ── L2: user message 注入 ──────────────────────────────────────

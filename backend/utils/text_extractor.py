@@ -1,12 +1,18 @@
 """
-本地文件解析模組：將上傳的檔案轉換為純文字。
-後端掌控文字抽取，不依賴 LLM Files API 作為主要教材來源。
+本地文件解析模組：將上傳的檔案轉換為可切分的文字。
+PDF 一律經 opendataloader-pdf（fast / Java）輸出 Markdown，再去做噪。
+需本機 Java 11+。
 """
 import re
+import tempfile
 from pathlib import Path
 
 # PDF 垂直水印常拆成單字元行（如 Notion/BuildMoat 匯出的 grow.tao 側欄）
 _PDF_GLYPH_NOISE_LINE = re.compile(r"^[\.\-a-z]{1,2}$")
+# 側欄水印整行
+_PDF_WATERMARK_LINE = re.compile(r"^(?:moat\.org|buildmoat\.org|biuld)\s*$", re.I)
+# 僅圖片引用、無文字描述的 markdown 行（不做 OCR / 圖片描述）
+_PDF_IMAGE_ONLY_LINE = re.compile(r"^\s*!\[[^\]]*\]\(<[^>]+>\)\s*$")
 # 側欄水印插入中文詞內：不l均、分散i式、加入時u會、簡單m。
 _PDF_CJK_INLINE_ASCII = re.compile(r"([\u4e00-\u9fff])([a-z])([\u4e00-\u9fff])")
 # 中文後多一個 ascii（簡單m、加入時u）再接標點/空白/中文
@@ -31,12 +37,21 @@ _PDF_INLINE_FIXES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bmodurlo\b", re.I), "modulo"),
     (re.compile(r"\bhotu\b", re.I), "hot"),
     (re.compile(r"grow\.tao", re.I), ""),
+    (re.compile(r"\bcaler\b", re.I), "caller"),
+    (re.compile(r"\bwebhok\b", re.I), "webhook"),
+    (re.compile(r"\bHTP\b"), "HTTP"),
+    (re.compile(r"\btoling\b", re.I), "tooling"),
+    (re.compile(r"\bcomand\b", re.I), "command"),
+    (re.compile(r"\beventualy\b", re.I), "eventually"),
+    (re.compile(r"\beror\b", re.I), "error"),
+    (re.compile(r"\bofset\b", re.I), "offset"),
+    (re.compile(r"\bchanel\b", re.I), "channel"),
 )
 
 
 def extract_text(filename: str, raw_bytes: bytes) -> str:
     """
-    從檔案 bytes 抽取純文字。
+    從檔案 bytes 抽取文字。
     優先使用對應格式的 parser；若失敗，fallback 到 utf-8 decode。
     """
     suffix = Path(filename).suffix.lower()
@@ -44,7 +59,7 @@ def extract_text(filename: str, raw_bytes: bytes) -> str:
         if suffix in (".txt", ".md"):
             return _extract_text_plain(raw_bytes)
         elif suffix == ".pdf":
-            return _extract_pdf(raw_bytes)
+            return _extract_pdf(raw_bytes, filename=filename)
         elif suffix == ".docx":
             return _extract_docx(raw_bytes)
         elif suffix == ".pptx":
@@ -52,7 +67,11 @@ def extract_text(filename: str, raw_bytes: bytes) -> str:
         elif suffix in (".html", ".htm"):
             return _extract_html(raw_bytes)
         elif suffix == ".epub":
-            return _extract_epub(raw_bytes)
+            # EPUB 在 upload router 已被切成多章節獨立檔；這條路徑只剩本機 chunker
+            # 測試 / 一次性脫離 upload pipeline 的工具會走，因此用 epub_splitter
+            # 並把章節接起來給 chunker。
+            from .epub_splitter import split_epub_by_toc
+            return "\n\n".join(text for _, text in split_epub_by_toc(raw_bytes))
         else:
             return _fallback_decode(raw_bytes)
     except Exception:
@@ -68,45 +87,50 @@ def _extract_text_plain(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _extract_pdf(raw: bytes) -> str:
-    import io
-    try:
-        import pdfplumber
-        with pdfplumber.open(io.BytesIO(raw)) as pdf:
-            pages = []
-            for page in pdf.pages:
-                text = page.extract_text(x_tolerance=2, y_tolerance=2)
-                if text:
-                    pages.append(text.strip())
-            return _clean_pdf_text("\n\n".join(pages))
-    except ImportError:
-        pass
+def _extract_pdf(raw: bytes, *, filename: str) -> str:
+    """opendataloader-pdf fast 模式 → Markdown（不啟用 hybrid / OCR）。"""
+    import opendataloader_pdf
 
-    # fallback to pypdf
-    import pypdf
-    reader = pypdf.PdfReader(io.BytesIO(raw))
-    pages = []
-    for page in reader.pages:
-        text = page.extract_text()
-        if text:
-            pages.append(text.strip())
-    return _clean_pdf_text("\n\n".join(pages))
+    safe_name = Path(filename).name or "upload.pdf"
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name = f"{safe_name}.pdf"
+
+    with tempfile.TemporaryDirectory(prefix="odpdf_") as tmpdir:
+        tmp = Path(tmpdir)
+        pdf_path = tmp / safe_name
+        pdf_path.write_bytes(raw)
+        out_dir = tmp / "out"
+        out_dir.mkdir()
+        opendataloader_pdf.convert(
+            input_path=[str(pdf_path)],
+            output_dir=str(out_dir),
+            format="markdown",
+        )
+        md_files = sorted(out_dir.glob("*.md"))
+        if not md_files:
+            raise RuntimeError("opendataloader-pdf 未產生 markdown 輸出")
+        text = md_files[0].read_text(encoding="utf-8", errors="replace")
+    return postprocess_pdf_markdown(text)
 
 
-def _clean_pdf_text(text: str) -> str:
-    """移除 PDF 抽取常見噪音：垂直水印單字元行、已知行內水印殘留。"""
+def postprocess_pdf_markdown(text: str) -> str:
+    """PDF Markdown 去噪：水印行、圖片佔位、行內水印殘留、常見 OCR 誤字。"""
     kept: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
             kept.append("")
             continue
+        if _PDF_WATERMARK_LINE.match(stripped):
+            continue
         if _PDF_GLYPH_NOISE_LINE.match(stripped):
             continue
-        kept.append(stripped)
+        if _PDF_IMAGE_ONLY_LINE.match(stripped):
+            continue
+        kept.append(line.rstrip())
 
     merged = "\n".join(kept)
-    merged = re.sub(r"\n{3,}", "\n\n", merged)
+    merged = re.sub(r"\n{4,}", "\n\n\n", merged)
     merged = _fix_inline_watermark_chars(merged)
 
     for pattern, replacement in _PDF_INLINE_FIXES:
@@ -115,8 +139,12 @@ def _clean_pdf_text(text: str) -> str:
     return merged.strip()
 
 
+# 測試與舊呼叫點相容
+_clean_pdf_text = postprocess_pdf_markdown
+
+
 def _fix_inline_watermark_chars(text: str) -> str:
-    """第二輪：移除側欄水印插入中文/英文詞內的孤立 ascii。"""
+    """移除側欄水印插入中文/英文詞內的孤立 ascii。"""
     prev = None
     while prev != text:
         prev = text
@@ -177,44 +205,6 @@ def _extract_html(raw: bytes) -> str:
     for tag in soup(["script", "style", "head", "nav", "footer"]):
         tag.decompose()
     return soup.get_text(separator="\n", strip=True)
-
-
-def _extract_epub(raw: bytes) -> str:
-    import io
-    import tempfile
-    from pathlib import Path as _Path
-    from bs4 import BeautifulSoup
-    from ebooklib import epub, ITEM_DOCUMENT
-
-    # ebooklib 只接受路徑（不接受 BytesIO），用臨時檔承接
-    with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
-        tmp.write(raw)
-        tmp_path = tmp.name
-    try:
-        book = epub.read_epub(tmp_path)
-        parts: list[str] = []
-        title = book.get_metadata("DC", "title")
-        if title:
-            parts.append(f"# {title[0][0]}")
-
-        for item in book.get_items_of_type(ITEM_DOCUMENT):
-            # 用 get_body_content() 只取 body 內容片段（HTML fragment），
-            # 避免完整 XHTML 文件的 XML 宣告觸發 XMLParsedAsHTMLWarning
-            body = item.get_body_content()
-            if not body:
-                continue
-            soup = BeautifulSoup(body, "lxml")
-            for tag in soup(["script", "style", "nav", "footer"]):
-                tag.decompose()
-            text = soup.get_text(separator="\n", strip=True)
-            if text:
-                parts.append(text)
-        return "\n\n".join(parts)
-    finally:
-        try:
-            _Path(tmp_path).unlink()
-        except OSError:
-            pass
 
 
 def _fallback_decode(raw: bytes) -> str:

@@ -193,6 +193,7 @@ export interface StartSessionMessage {
     target_depth: DepthType;
     question_mode?: 'short_answer' | 'multiple_choice';
     model?: string;
+    same_material?: boolean;
   };
 }
 

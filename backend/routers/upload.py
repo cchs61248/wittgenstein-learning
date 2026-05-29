@@ -1,6 +1,9 @@
 from pathlib import Path
 import asyncio
 import json
+import re
+import time
+import zipfile
 from typing import Optional
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
@@ -8,19 +11,32 @@ from pydantic import BaseModel
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..auth.utils import decode_token_active
-from ..config import UPLOAD_MAX_CHAR_COUNT
+from ..config import UPLOAD_MAX_CHAR_COUNT, UPLOAD_MAX_FILE_MB
 from ..files.upload_store import (
     is_plain_upload,
     save_upload_binary,
     save_upload_plain,
 )
+from ..utils.epub_splitter import split_epub_by_toc
 from ..utils.text_extractor import extract_text
 from ..utils.url_fetcher import YoutubeTranscriptUnavailable, fetch_url_content
+from ..utils.logger import fmt_elapsed, ingest_logger, text_preview
 
 router = APIRouter(prefix="/upload", tags=["upload"])
+_log = ingest_logger()
 
 _ALLOWED = {".txt", ".md", ".pdf", ".docx", ".pptx", ".html", ".htm", ".epub"}
-_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+_MAX_BYTES = UPLOAD_MAX_FILE_MB * 1024 * 1024
+
+
+def _sanitize_chapter_filename(name: str, max_len: int = 80) -> str:
+    """章節檔名清洗：移除 Windows 不合法字元、壓縮空白、截長。
+
+    來源：aaron/epub/split_epub.py 同名函式（保留在 upload.py，依 plan §4.1）。
+    """
+    name = re.sub(r'[<>:"/\\|?*]', "_", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return (name or "untitled")[:max_len]
 
 
 def _save_parsed_upload(
@@ -69,11 +85,65 @@ async def upload_file(
 
     raw = await file.read()
     if len(raw) > _MAX_BYTES:
-        raise HTTPException(status_code=413, detail="檔案超過 10 MB 上限")
+        raise HTTPException(
+            status_code=413,
+            detail=f"檔案超過 {UPLOAD_MAX_FILE_MB} MB 上限",
+        )
 
     mime_type = file.content_type or "application/octet-stream"
+
+    if suffix == ".epub":
+        try:
+            chapters = await asyncio.to_thread(split_epub_by_toc, raw)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except (KeyError, zipfile.BadZipFile, UnicodeDecodeError) as e:
+            raise HTTPException(status_code=422, detail=f"EPUB 解析失敗：{e}")
+
+        epub_chapters: list[dict] = []
+        for idx, (title, chapter_text) in enumerate(chapters, 1):
+            safe_title = _sanitize_chapter_filename(title)
+            chapter_name = f"{idx:03d}_{safe_title}.txt"
+            chunk_bytes = chapter_text.encode("utf-8")
+            meta = {
+                "source_type": "epub_chapter",
+                "epub_filename": filename,
+                "chapter_index": idx,
+                "chapter_title": title,
+            }
+            try:
+                chap_file_id, chap_chars = await asyncio.to_thread(
+                    lambda: _save_parsed_upload(
+                        chapter_name,
+                        "text/plain; charset=utf-8",
+                        chunk_bytes,
+                        chapter_text,
+                        extra_meta=meta,
+                    )
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            epub_chapters.append({
+                "file_id": chap_file_id,
+                "filename": chapter_name,
+                "char_count": chap_chars,
+                "size": len(chunk_bytes),
+                "mime_type": "text/plain; charset=utf-8",
+            })
+            _log.info(
+                "upload EPUB chapter  parent=%s  chapter=%s  chars=%d",
+                filename, chapter_name, chap_chars,
+            )
+        return {
+            "epub_chapters": epub_chapters,
+            "total_chapters": len(epub_chapters),
+            "parent_filename": filename,
+        }
+
     try:
+        t0 = time.perf_counter()
         text = await asyncio.to_thread(extract_text, filename, raw)
+        elapsed = fmt_elapsed(t0)
         file_id, char_count = await asyncio.to_thread(
             _save_parsed_upload,
             filename,
@@ -81,6 +151,28 @@ async def upload_file(
             raw,
             text,
         )
+        if suffix == ".pdf":
+            _log.info(
+                "upload PDF → markdown  file_id=%s  file=%s  bytes=%d  chars=%d  "
+                "elapsed=%s  preview=%r",
+                file_id,
+                filename,
+                len(raw),
+                char_count,
+                elapsed,
+                text_preview(text),
+            )
+        else:
+            _log.info(
+                "upload extracted  file_id=%s  file=%s  suffix=%s  bytes=%d  "
+                "chars=%d  elapsed=%s",
+                file_id,
+                filename,
+                suffix,
+                len(raw),
+                char_count,
+                elapsed,
+            )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

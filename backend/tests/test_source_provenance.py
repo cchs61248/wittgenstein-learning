@@ -17,7 +17,7 @@ class TestSourceProvenance(unittest.IsolatedAsyncioTestCase):
         }
         result = await _build_source_chunks_from_payload(p, emit)
         self.assertIsNotNone(result)
-        chunks, _ = result
+        chunks, _, _order = result
         ids = {c.get("source_id") for c in chunks}
         self.assertEqual(len(ids), 2)
         for c in chunks:

@@ -489,29 +489,6 @@ def _glue_inline_headings_to_next(paragraphs: list[str]) -> list[str]:
     return result
 
 
-def _detect_inline_headings(text: str) -> set[int]:
-    """回傳 text 中所有 inline heading 的起始 char offset。
-
-    判定條件：以 \\n\\n 隔開、短、無句尾標點、後續有段落內容。
-    """
-    paragraphs = re.split(r"\n{2,}", text)
-    offsets: set[int] = set()
-    cursor = 0
-    for i, para in enumerate(paragraphs):
-        # 找出該段落實際在 text 中的位置（跳過 leading whitespace）
-        idx = text.find(para, cursor)
-        if idx < 0:
-            cursor += len(para)
-            continue
-        if _looks_like_inline_heading(para) and i + 1 < len(paragraphs):
-            # 確認後續還有段落內容
-            nxt = paragraphs[i + 1].strip()
-            if nxt:
-                offsets.add(idx)
-        cursor = idx + len(para)
-    return offsets
-
-
 # ── 大小正規化 ────────────────────────────────────────────────
 
 def _normalize_chunk_sizes(

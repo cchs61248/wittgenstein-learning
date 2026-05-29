@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .upload_store import UPLOAD_DIR, delete_upload, iter_upload_metas
+from .upload_store import UPLOAD_DIR, delete_upload, iter_upload_metas  # noqa: F401  # UPLOAD_DIR re-exported as test monkeypatch target
 
 
 def _parse_uploaded_at(raw: str | None) -> datetime | None:

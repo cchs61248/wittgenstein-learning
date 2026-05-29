@@ -18,19 +18,31 @@
 
 | 來源 | 入口 | 支援格式 / 限制 |
 |------|------|-----------------|
-| 檔案上傳 | `POST /upload` | `.txt .md .pdf .docx .pptx .html .htm`；單檔 10 MB |
+| 檔案上傳 | `POST /upload` | `.txt .md .pdf .docx .pptx .html .htm .epub`；單檔 10 MB（可由 `UPLOAD_MAX_FILE_MB` 調整） |
 | URL 擷取 | `POST /upload/url` | 公開網頁（readability-lxml + 全頁清洗 fallback + strict_main 主文截斷）、YouTube 字幕；單次最多 500,000 字 |
 | YouTube ASR | `POST /upload/youtube/asr/stream` | YouTube 影片無字幕時的 fallback：`yt-dlp` 下載音訊 + `faster-whisper`（small/cpu/int8）轉寫，串流回報進度 |
 | 純文字 | 前端直接帶入 `start_session.sources` | 不經過上傳 API，貼上即用 |
 
-多來源 session：可同時上傳多份檔案 + URL + 文字，ContentSplitter 跨來源語義聚合，同主題 chunks 收進同一 stage。
+**EPUB 多章節**：上傳 .epub 時後端用 `split_epub_by_toc` 按 TOC 切成 N 個章節獨立 file_id（檔名 `001_章節標題.txt`），前端清單一次塞 N 行可逐章 ✕ 移除。
 
-### 教材生成背景化（2026-05-25）
+**多來源 session**：可同時上傳多份檔案 + URL + 文字，前端會強制使用者選「是否同一教材」radio（1 source 自動視為同一）；切分流程統一走 `per_source_split`（逐檔切 + 程式合併），由前端選項決定是否跑 ContentOutline。
 
-- **Region checkpoint 斷點續跑**：V2 pipeline 每完成一個 macro region 寫入 `curriculum_checkpoints`；API / worker 重啟後 skip 已完成 regions，不從頭生成
-- **Arq + Redis 背景 worker**：`CURRICULUM_USE_ARQ=1` 時，uvicorn 只 prepare + enqueue；獨立 worker 跑 pipeline，重啟 API 不中斷長教材生成
-- **LLM result cache**：`LLM_CACHE_ENABLED=1` 時 curriculum agents 共用 SQLite cache，相同 prompt 不重複呼叫 LLM（reroll / verifier retry 受益）
+### 教材切分（2026-05-27 統一架構）
+
+- **唯一路徑**：所有 session 走 V2 小檔逐檔切（`single_split` 或 `per_source_split`），V1 / V2 大檔 / Reducer / Plan B 全部刪除
+- **`same_material` 控制 ContentOutline**：前端「同一教材」radio → 跳過 Outline；「不同教材」→ 整批跑一次 Outline 餵給逐檔 Splitter
+- **EPUB 上傳即切章**：`POST /upload` 收 `.epub` 時呼叫 `split_epub_by_toc` 回 N 個 file_id；前端展開為 N 個 source items
+- **閾值 env 化**：`STAGE_TITLE_MERGE_THRESHOLD`（預設 0.85）控制標題去重合併粒度
+- **Canonicalize 可選**：`CONCEPT_CANONICALIZE=1` 啟用統一關鍵詞命名（預設 off）
+- **Resume**：DB `sessions.same_material` 欄位記錄選擇，重啟後恢復一致流程
+- **Checkpoint 斷點續跑**：`curriculum_checkpoints` 記錄已完成切分區段，worker 重啟不從頭生成
+- **Arq + Redis 背景 worker**：`CURRICULUM_USE_ARQ=1` 時 uvicorn 只 prepare + enqueue
+- **LLM result cache**：`LLM_CACHE_ENABLED=1` 時 curriculum agents 共用 SQLite cache
 - **Docker Compose**：`docker compose up -d` 一鍵啟動 Redis（`:6380`）+ curriculum-worker
+
+> 設計文件：`docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md`
+> 切分流程白話版：[CURRICULUM_SPLIT_FLOWS.md](./CURRICULUM_SPLIT_FLOWS.md)
+> 手動 e2e 清單：[MANUAL_E2E_CHECKLIST.md](./MANUAL_E2E_CHECKLIST.md)
 
 ### 學習迴圈（Phase 1–4 完整實作）
 
@@ -103,14 +115,16 @@ copy .env.example .env
 
 ### Curriculum 背景 worker（Arq 模式，可選）
 
-長教材（50+ chunks）建議啟用 Arq，讓生成與 API 解耦：
+長教材建議啟用 Arq，讓生成與 API 解耦：
 
 **1. `.env` 設定**
 ```env
-CURRICULUM_PIPELINE_V2=1
 CURRICULUM_USE_ARQ=1
 REDIS_URL=redis://localhost:6380/0
 LLM_CACHE_ENABLED=1
+# 可選微調：
+# STAGE_TITLE_MERGE_THRESHOLD=0.85
+# CONCEPT_CANONICALIZE=0
 ```
 
 **2. Docker 啟動 Redis + worker**（專案根目錄）
@@ -134,7 +148,7 @@ Compose 會把 `./data` 掛載為 `/seed`（唯讀種子 DB）、`wl-worker-data
 
 > **Windows 注意**：Docker worker 將 SQLite copy 至 container volume 執行（避免 bind-mount I/O 問題）。本機 uvicorn 請勿同時跑 in-process curriculum；進度以 worker 內 DB 為準，容器退出時 sync 回 `./data/`。純本機開發也可不用 Docker，直接：
 > ```powershell
-> $env:CURRICULUM_PIPELINE_V2="1"; $env:REDIS_URL="redis://localhost:6380/0"
+> $env:REDIS_URL="redis://localhost:6380/0"
 > ..\.venv\Scripts\python.exe -m arq backend.jobs.arq_settings.WorkerSettings
 > ```
 > （需在 `wittgenstein-learning/` 目錄、與 uvicorn 共用同一 `learning.db`）
@@ -173,12 +187,11 @@ npm run lint
 | `JWT_EXPIRE_DAYS` | JWT 有效期（天） | `7` |
 | `CORS_ORIGINS` | 額外允許的 CORS 來源（逗號分隔；不設則用 Vite dev server 預設） | — |
 | `CORS_ORIGIN_REGEX` | CORS regex 白名單（如 Cloudflare Quick Tunnel） | `https://.*\.trycloudflare\.com` |
-| `CURRICULUM_PIPELINE_V2` | `1` 啟用 V2 macro region + reducer pipeline | `0` |
 | `CURRICULUM_USE_ARQ` | `1` 時 start_session 改 enqueue，由 Arq worker 執行 | `0` |
 | `REDIS_URL` | Arq 佇列 URL；docker compose 用 `redis://localhost:6380/0` | `redis://localhost:6379/0` |
 | `LLM_CACHE_ENABLED` | `1` 啟用 curriculum LLM result cache | `0` |
-| `MACRO_REGION_USE_LLM` | V2 tier-3 LLM region metadata refinement | `0` |
-| `SMALL_FILE_CHUNK_THRESHOLD` | chunks ≤ N 走 small_file 快速路徑 | `50` |
+| `STAGE_TITLE_MERGE_THRESHOLD` | stage 標題去重合併閾值（0~1）；高=保守、低=積極合併 | `0.85` |
+| `CONCEPT_CANONICALIZE` | `1` 時 stage 合併後再跑 ConceptCanonicalize LLM 統一關鍵詞 | `0` |
 | `SQLITE_JOURNAL_MODE` | SQLite journal mode（Docker worker volume 建議 WAL） | `WAL` |
 
 > `PASS_THRESHOLD=0.75` 與 `MAX_STAGE_ATTEMPTS=3` 寫死在 orchestrator 中。Arq 相關：`ARQ_MAX_JOBS`（預設 1）、`ARQ_JOB_TIMEOUT_S`（預設 7200）、`LLM_CACHE_EVICT_DAYS`（預設 90）。完整列表見 [BACKEND_FLOW §10](./BACKEND_FLOW.md#10-設定與環境變數)。

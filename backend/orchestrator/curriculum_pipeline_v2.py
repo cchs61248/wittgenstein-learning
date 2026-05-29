@@ -1,55 +1,46 @@
-"""Curriculum pipeline V2 — macro regions, per-region split, global reduce."""
+"""Curriculum pipeline V2 — small-file unified path (single-split / per-source-split)."""
 from __future__ import annotations
 
-import json
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ..utils.content_hash import compute_content_hash
 
 from ..agents.base_agent import AgentContext
-from ..agents.global_curriculum_reducer import GlobalCurriculumReducerAgent, GlobalCurriculumReducerError
 from ..agents.global_curriculum_verifier import verify_global_coverage
-from ..agents.macro_region_planner import MacroRegionPlannerAgent
-from ..agents.stage_composer import StageComposerAgent
 from ..memory import session_memory
 from ..memory import curriculum_checkpoint as ckpt_mem
 from ..utils.canonicalize_apply import apply_canonical_mappings
-from ..utils.curriculum_reducer import attach_supporting_by_fuzzy_match, outcomes_to_stages
 from ..utils.fuzzy_match import concepts_match
 from ..utils.reducer_constants import MAX_MERGED_OUTCOME_CHUNKS
-from ..utils.region_planning import (
-    LISTICLE_REGION_SPLITTER_FLOOR,
-    enrich_regions_with_outline_topics,
-    is_listicle_source,
-    slice_region_chunks,
-)
+from ..utils.region_planning import is_listicle_source
 from ..utils.small_curriculum import (
     best_chunk_for_case,
     candidates_to_stages_flat,
+    choose_postprocess_mode,
+    enforce_stage_ordering,
+    merge_by_concept_overlap,
+    merge_singleton_chunk_stages,
     dedupe_key_concept_aliases,
     ensure_orphan_chunks_attached,
     finalize_curriculum_stages,
     finalize_small_file_stages,
+    fold_interior_orphan_chunks,
     filter_false_verifier_misses,
     filter_missing_named_cases,
     is_compact_curriculum,
-    is_small_file,
     merge_duplicate_topic_stages,
     normalize_case_name,
     normalize_stages_pre_verify,
     pending_enum_label_misses,
     prune_phantom_key_concepts,
     source_count as count_sources,
-    use_per_source_split_path,
-    use_single_split_path,
     prune_toc_listicle_chunks,
     split_oversized_stages,
     split_kc_heavy_stages,
     trim_stage_key_concepts,
     filter_epub_nav_junk_chunks,
-    zero_region_overlaps,
 )
 from ..utils.stage_budget import compute_dynamic_max_stages
 from ..utils.curriculum_llm_meter import CurriculumLlmMeter, assess_curriculum_cost
@@ -60,6 +51,28 @@ if TYPE_CHECKING:
 _log = logging.getLogger("wl.orchestrator.v2")
 
 _KM_SUMMARY_MAX_LEN = 180
+
+
+def _canonicalize_enabled() -> bool:
+    raw = os.getenv("CONCEPT_CANONICALIZE", "0").strip().lower()
+    return raw in ("1", "true", "yes")
+
+
+def _verifier_reroll_min_misses() -> int:
+    """P2a: minimum missing-options count that triggers a Splitter reroll.
+
+    Default 2 — verifier reporting just 1 miss is usually a minor naming
+    drift; the downstream follow-up + orphan attach can recover it without
+    paying for another Splitter+Verifier round trip.
+    """
+    raw = os.getenv("SPLITTER_VERIFIER_MIN_MISSES", "2").strip()
+    try:
+        v = int(raw)
+        if v >= 1:
+            return v
+    except ValueError:
+        pass
+    return 2
 
 
 def _build_knowledge_map_summary(summary_parts: list[str], stage_count: int) -> str:
@@ -82,7 +95,7 @@ def _build_knowledge_map_summary(summary_parts: list[str], stage_count: int) -> 
     return head
 
 
-def _dedupe_candidates(candidates: list[dict], threshold: float = 0.85) -> list[dict]:
+def _dedupe_within(candidates: list[dict], threshold: float = 0.85) -> list[dict]:
     """合併 kc 相似 candidate；合併後 chunk 數超過 cap 則拒絕合併、保留獨立 candidate。
 
     chunk cap 來自 sess_live_049d39ce stage 2 案例：region_001/002/005 splitter 各出
@@ -121,6 +134,30 @@ def _dedupe_candidates(candidates: list[dict], threshold: float = 0.85) -> list[
         if not placed:
             merged.append(dict(c))
     return merged
+
+
+def _dedupe_candidates(
+    candidates: list[dict],
+    threshold: float = 0.85,
+    same_material: bool = False,
+) -> list[dict]:
+    """kc 相似 candidate 去重入口。
+
+    same_material=True（同教材多章）時按 source_id 分組、組內各自去重、不跨組 union，
+    避免貫穿主題的 candidate 跨章合併打亂 reading order（Phase 2.5，sess_85qxyltir
+    「星期三郵局」橫跨兩章被誤併的 root case）。
+    same_material=False（cross_material / 預設）維持原跨 source 去重行為。
+    """
+    if not same_material:
+        return _dedupe_within(candidates, threshold)
+    # dict 保留各組首現順序，避免擾動下游（enforce_stage_ordering 之後仍會依 chunk 重排）
+    groups: dict = {}
+    for c in candidates:
+        groups.setdefault(c.get("source_id"), []).append(c)
+    result: list[dict] = []
+    for group in groups.values():
+        result.extend(_dedupe_within(group, threshold))
+    return result
 
 
 def _build_follow_up_stages(
@@ -220,43 +257,6 @@ def _build_follow_up_stages(
     return new_stages
 
 
-def _build_plan_b_stages(
-    all_candidates: list[dict],
-    source_chunks: list[dict],
-    sources_manifest: list[dict],
-    chunks_lookup: dict[str, str],
-) -> tuple[list[dict], dict]:
-    """Plan B: one region candidate → one stage; skip reducer LLM merge."""
-    primary_source = sources_manifest[0]["source_id"] if sources_manifest else "src_0"
-    primary_candidates = [c for c in all_candidates if c.get("source_id") == primary_source]
-    if not primary_candidates:
-        primary_candidates = list(all_candidates)
-        if primary_candidates:
-            primary_source = str(primary_candidates[0].get("source_id") or "src_0")
-    other_chunks = [
-        c for c in source_chunks
-        if c.get("source_id") != primary_source
-    ]
-    stages = outcomes_to_stages([
-        {
-            "outcome_id": f"lo_{i + 1:03d}",
-            "title": c.get("title", ""),
-            "teaching_goal": c.get("teaching_goal", ""),
-            "key_concepts": c.get("key_concepts") or [],
-            "primary_evidence": {
-                "source_id": primary_source,
-                "chunk_ids": c.get("source_chunk_ids") or [],
-            },
-            "supporting_evidence": [],
-            "merge_decision": "split",
-            "merge_confidence": 1.0,
-        }
-        for i, c in enumerate(primary_candidates)
-    ], chunks_lookup=chunks_lookup)
-    stages = attach_supporting_by_fuzzy_match(stages, other_chunks)
-    return stages, {"plan_b_active": True, "primary_source_id": primary_source}
-
-
 def _splitter_stages_to_candidates(stages: list[dict], region: dict) -> list[dict]:
     """Convert splitter stages → reducer candidates，過濾掉 region 邊界外的 chunk_id。
 
@@ -290,22 +290,6 @@ def _splitter_stages_to_candidates(stages: list[dict], region: dict) -> list[dic
     return out
 
 
-def _region_splitter_max_stages(
-    region: dict,
-    per_region_max: int,
-    *,
-    listicle: bool,
-) -> int:
-    """Cap splitter max_stages for one macro region (listicle books need more headroom)."""
-    expected = int(region.get("expected_stage_count") or 5)
-    headroom = 4 if listicle else 2
-    cap = expected + headroom
-    if listicle:
-        topic_count = len(region.get("must_cover_topics") or [])
-        cap = max(cap, min(topic_count + 2, per_region_max))
-    return min(per_region_max, cap)
-
-
 async def _run_single_split(
     *,
     orch: "LearningOrchestrator",
@@ -317,6 +301,7 @@ async def _run_single_split(
     required_outline: dict | None,
     emit,
     meter: CurriculumLlmMeter | None = None,
+    source_hint: dict | None = None,
 ) -> tuple[list[dict], str]:
     """small_file path：一次 splitter call 處理整檔（bypass MacroRegion + per-region loop）。
 
@@ -334,6 +319,8 @@ async def _run_single_split(
     }
     if required_outline:
         splitter_ctx_payload["required_outline"] = required_outline
+    if source_hint:
+        splitter_ctx_payload["source_hint"] = source_hint
     ctx = AgentContext(
         session_id=session_id, user_id=user_id, task_payload=splitter_ctx_payload,
     )
@@ -380,6 +367,15 @@ async def _run_single_split(
                 "v2 small_file verifier failed  session=%s  missing=%s",
                 session_id, filtered,
             )
+        # P2a: cutoff — if only 1 missing item, accept and let downstream
+        # follow-up / orphan attach handle it. Avoids burning a reroll for
+        # marginal misses (and reroll has its own ~30% failure rate).
+        if filtered and len(filtered) <= _verifier_reroll_min_misses() - 1:
+            _log.info(
+                "v2 small_file verifier soft-pass  session=%s  misses=%d (<%d)",
+                session_id, len(filtered), _verifier_reroll_min_misses(),
+            )
+            filtered = []
             repair_struct = vresult.get("repair_plan_struct") or {}
             if not repair_struct.get("required_stage_titles") and required_outline:
                 repair_struct = {
@@ -474,6 +470,16 @@ async def _run_per_source_split(
         ]
         if not subset:
             continue
+        # P1b: derive source_hint for this batch so Splitter knows which chapter
+        # / file this is — naming stays consistent across per-source splits.
+        first = subset[0]
+        source_hint = {
+            "source_label": first.get("source_label") or src.get("source_label"),
+            "epub_filename": first.get("epub_filename"),
+            "chapter_index": first.get("chapter_index"),
+            "chapter_title": first.get("chapter_title"),
+        }
+        source_hint = {k: v for k, v in source_hint.items() if v is not None}
         candidates, summary = await _run_single_split(
             orch=orch,
             session_id=session_id,
@@ -484,6 +490,7 @@ async def _run_per_source_split(
             required_outline=required_outline,
             emit=emit,
             meter=meter,
+            source_hint=source_hint or None,
         )
         all_candidates.extend(candidates)
         if summary:
@@ -551,6 +558,8 @@ async def run_start_session_v2(
     model_name: str | None,
     emit,
     source_file_ids: list[str] | None = None,
+    same_material: bool = True,
+    order_decision: dict | None = None,
 ) -> None:
     source_chunks = filter_epub_nav_junk_chunks(source_chunks)
     content_hash = compute_content_hash(source_chunks)
@@ -571,6 +580,7 @@ async def run_start_session_v2(
         "question_mode": question_mode,
         "provider_name": provider_name,
         "model_name": model_name,
+        "same_material": same_material,
     }
     if checkpoint:
         pipeline_meta = {**checkpoint.get("pipeline_meta", {}), **pipeline_meta}
@@ -601,18 +611,24 @@ async def run_start_session_v2(
 
     await emit({"type": "session_generating", "payload": {"session_id": session_id}})
 
-    # early detect: small_file 跳過 ContentOutline（C）+ MacroRegionPlanner（A）
-    single_split = use_single_split_path(source_chunks)
-    per_source_split = use_per_source_split_path(source_chunks)
-    small_file = single_split or per_source_split
+    # D1: pipeline is unified to small-file paths; route by source count alone.
+    # single_split + per_source_split partition all valid inputs — no large-file branch.
+    n_sources = count_sources(source_chunks)
+    single_split = (n_sources <= 1)
+    per_source_split = (n_sources > 1)
 
     required_outline: dict | None = None
     if resuming and checkpoint and checkpoint.get("required_outline") is not None:
         required_outline = checkpoint["required_outline"]
-    force_outline = os.getenv("SMALL_FILE_FORCE_OUTLINE", "0").strip().lower() in (
-        "1", "true", "yes",
-    )
-    if required_outline is None and source_chunks and (not small_file or force_outline):
+    # P0a: ContentOutline trigger
+    # - same_material=False → 不同教材一定跑 Outline 取全局骨架
+    # - same_material=True → 一律不跑 Outline（含 ≥3 章）。
+    #   Phase 3：原本 n_sources>=3 也跑 Outline，但全局 named_cases 是跨章主題桶，
+    #   被各 per-source splitter 共用 → 同主題的不同章 chunk 併進同一 stage
+    #   （live sess_f9qt8rac9：7.1=第6+8章）。章節順序已由 SourceOrderResolver
+    #   處理，outline 對同教材的唯一價值已被取代，故對齊「保章節邊界」原則不跑。
+    run_outline = not same_material
+    if required_outline is None and source_chunks and run_outline:
         outline_ctx = AgentContext(
             session_id=session_id,
             user_id=user_id,
@@ -636,8 +652,6 @@ async def run_start_session_v2(
         except Exception as e:
             _log.warning("v2 content_outline failed  session=%s  err=%s", session_id, e)
 
-    # small_file 已在前面 early-detect — 不重複偵測
-    n_sources = count_sources(source_chunks)
     max_stages = compute_dynamic_max_stages(
         source_chunks, source_count=n_sources, required_outline=required_outline,
     )
@@ -648,15 +662,11 @@ async def run_start_session_v2(
     summary_parts: list[str] = (
         list(checkpoint.get("summary_parts") or []) if resuming and checkpoint else []
     )
-    completed_region_ids: set[str] = (
-        set(checkpoint.get("completed_region_ids") or []) if resuming and checkpoint else set()
-    )
     saved_path = (checkpoint or {}).get("pipeline_meta", {}).get("pipeline_path")
 
     if single_split:
         if resuming and saved_path == "single_split" and all_candidates:
             _log.info("v2 checkpoint skip single_split  session=%s", session_id)
-            regions = []
         else:
             _log.info(
                 "v2 small_file path (single-split)  session=%s  chunks=%d",
@@ -689,11 +699,9 @@ async def run_start_session_v2(
                 completed_region_ids=["__single_split__"],
                 meter=meter,
             )
-            regions = []
     elif per_source_split:
         if resuming and saved_path == "per_source_split" and all_candidates:
             _log.info("v2 checkpoint skip per_source_split  session=%s", session_id)
-            regions = []
         else:
             _log.info(
                 "v2 small_file path (per-source-split)  session=%s  chunks=%d  sources=%d",
@@ -723,176 +731,11 @@ async def run_start_session_v2(
                 completed_region_ids=["__per_source_split__"],
                 meter=meter,
             )
-            regions = []
-    else:
-        if resuming and checkpoint and checkpoint.get("regions"):
-            regions = checkpoint["regions"]
-            _log.info(
-                "v2 checkpoint skip MacroRegionPlanner  session=%s  regions=%d",
-                session_id, len(regions),
-            )
-        else:
-            regions_result = await MacroRegionPlannerAgent(
-                orch.splitter.llm, orch.splitter.token_counter
-            ).run(
-                AgentContext(
-                    session_id=session_id,
-                    user_id=user_id,
-                    task_payload={"source_chunks": source_chunks},
-                )
-            )
-            meter.record("MacroRegionPlannerAgent")
-            regions = regions_result.get("regions") or []
-            regions = enrich_regions_with_outline_topics(
-                regions, required_outline, source_chunks,
-            )
-            await _save_checkpoint(
-                session_id, content_hash,
-                pipeline_meta={**pipeline_meta, "pipeline_path": "region_loop"},
-                required_outline=required_outline,
-                regions=regions,
-                meter=meter,
-            )
-        await emit({
-            "type": "region_done",
-            "payload": {"session_id": session_id, "region_count": len(regions)},
-        })
+    # D1: single_split + per_source_split partition all valid inputs.
+    # The previous large-file else-branch (MacroRegionPlanner + per-region loop
+    # + GlobalCurriculumReducer + Plan B) has been removed.
 
-    per_region_max = max(3, max_stages // max(len(regions), 1)) if regions else max_stages
-    listicle = is_listicle_source(source_chunks)
-    if listicle and regions:
-        per_region_max = max(per_region_max, LISTICLE_REGION_SPLITTER_FLOOR)
-
-    for ri, region in enumerate(regions):
-        rid = region.get("region_id") or f"region_{ri:03d}"
-        if rid in completed_region_ids:
-            continue
-        region_chunks = slice_region_chunks(source_chunks, region, regions, ri)
-        if not region_chunks:
-            continue
-        splitter_ctx_payload: dict = {
-            "source_chunks": region_chunks,
-            "max_stages": _region_splitter_max_stages(
-                region, per_region_max, listicle=listicle,
-            ),
-            "target_depth": target_depth,
-            "region_id": rid,
-        }
-        if required_outline:
-            splitter_ctx_payload["required_outline"] = required_outline
-        if region.get("must_cover_topics"):
-            splitter_ctx_payload["must_cover_topics"] = region["must_cover_topics"]
-        ctx = AgentContext(
-            session_id=session_id,
-            user_id=user_id,
-            task_payload=splitter_ctx_payload,
-        )
-        try:
-            split_result = await orch.splitter.run(ctx)
-            meter.record("ContentSplitterAgent")
-        except Exception as e:
-            _log.warning("v2 region split failed  region=%s  err=%s", region.get("region_id"), e)
-            continue
-        region_stages = split_result.get("stages") or []
-        summary_parts.append(split_result.get("summary") or "")
-        verify_ctx = AgentContext(
-            session_id=session_id,
-            user_id=user_id,
-            task_payload={
-                "source_chunks": region_chunks,
-                "stages": region_stages,
-                "region_id": rid,
-            },
-        )
-        vresult: dict | None = None
-        try:
-            vresult = await orch.splitter_verifier.run(verify_ctx)
-            meter.record("SplitterVerifierAgent")
-        except Exception as e:
-            _log.warning("v2 region verifier error  region=%s  err=%s", region.get("region_id"), e)
-
-        # P1 (a)：V2 per-region splitter_verifier fail 時 reroll 1 次
-        # （V1 path 有 2 次 reroll；V2 短期至少給 1 次以救 named case 漏切）
-        if vresult and not vresult.get("aligned"):
-            filtered_missing = filter_false_verifier_misses(
-                vresult.get("missing_options") or [],
-                region_stages,
-                region_chunks,
-            )
-            if not filtered_missing:
-                _log.info(
-                    "v2 region verifier false positive filtered  region=%s",
-                    region.get("region_id"),
-                )
-                vresult = {**vresult, "aligned": True, "missing_options": []}
-            else:
-                vresult = {**vresult, "missing_options": filtered_missing}
-        if vresult and not vresult.get("aligned"):
-            _log.warning(
-                "v2 region verifier failed  region=%s  missing=%s",
-                region.get("region_id"), vresult.get("missing_options"),
-            )
-            repair_struct = vresult.get("repair_plan_struct") or {}
-            if not repair_struct.get("required_stage_titles") and required_outline:
-                repair_struct = {
-                    **repair_struct,
-                    "required_stage_titles": (
-                        required_outline.get("required_stage_titles") or []
-                    ),
-                }
-            reroll_payload = {
-                **splitter_ctx_payload,
-                "previous_attempt_missed": vresult.get("missing_options") or [],
-                "issue_chunk_ids": vresult.get("issue_chunk_ids") or [],
-                "verifier_reason": vresult.get("reason", ""),
-                "repair_plan_struct": repair_struct,
-            }
-            reroll_ctx = AgentContext(
-                session_id=session_id, user_id=user_id, task_payload=reroll_payload,
-            )
-            try:
-                reroll_result = await orch.splitter.run(reroll_ctx)
-                meter.record("ContentSplitterAgent")
-                rerolled_stages = reroll_result.get("stages") or []
-                if rerolled_stages:
-                    region_stages = rerolled_stages
-                    _log.info(
-                        "v2 region reroll done  region=%s  stages=%d",
-                        region.get("region_id"), len(region_stages),
-                    )
-            except Exception as e:
-                _log.warning(
-                    "v2 region reroll failed (keeping initial stages)  region=%s  err=%s",
-                    region.get("region_id"), e,
-                )
-
-        all_candidates.extend(_splitter_stages_to_candidates(region_stages, region))
-        completed_region_ids.add(rid)
-        await _save_checkpoint(
-            session_id, content_hash,
-            pipeline_meta={**pipeline_meta, "pipeline_path": "region_loop"},
-            required_outline=required_outline,
-            regions=regions,
-            completed_region_ids=list(completed_region_ids),
-            all_candidates=all_candidates,
-            summary_parts=summary_parts,
-            meter=meter,
-            last_region_id=rid,
-        )
-        _log.info(
-            "v2 checkpoint saved  session=%s  region=%s  done=%d/%d",
-            session_id, rid, len(completed_region_ids), len(regions),
-        )
-        await emit({
-            "type": "region_done",
-            "payload": {
-                "session_id": session_id,
-                "region_id": region.get("region_id"),
-                "stage_count": len(region_stages),
-            },
-        })
-
-    all_candidates = _dedupe_candidates(all_candidates)
+    all_candidates = _dedupe_candidates(all_candidates, same_material=same_material)
 
     chunks_lookup = {
         c["chunk_id"]: c.get("text", "")
@@ -900,107 +743,100 @@ async def run_start_session_v2(
         if isinstance(c, dict) and c.get("chunk_id")
     }
 
-    use_plan_b = os.getenv("CURRICULUM_V2_PLAN_B") == "1"
-    plan_b_active = False
     quality_warnings: dict | None = None
     stages: list[dict]
     reduce_metrics: dict = {
         "candidate_count": len(all_candidates),
-        "outcome_count": 0,
+        "outcome_count": len(all_candidates),
         "unsure_pair_count": 0,
         "llm_outcome_count": 0,
     }
 
-    if small_file:
-        stages = candidates_to_stages_flat(all_candidates, chunks_lookup)
-        quality_warnings = {"small_file_path": True, "reducer_skipped": True}
-        if per_source_split:
-            quality_warnings["multi_source_split"] = True
-            quality_warnings["source_count"] = n_sources
-        reduce_metrics["outcome_count"] = len(all_candidates)
-    elif use_plan_b:
-        stages, plan_b_qw = _build_plan_b_stages(
-            all_candidates, source_chunks, sources_manifest, chunks_lookup,
-        )
-        quality_warnings = plan_b_qw
-        reduce_metrics["outcome_count"] = len(all_candidates)
-        plan_b_active = True
-    else:
-        reducer = GlobalCurriculumReducerAgent(orch.splitter.llm, orch.splitter.token_counter)
-        reducer_ctx = AgentContext(
-            session_id=session_id,
-            user_id=user_id,
-            task_payload={"candidate_stages": all_candidates, "use_llm": True},
-        )
-        try:
-            reduce_result = await reducer.run(reducer_ctx)
-            meter.record("GlobalCurriculumReducerAgent")
-            outcomes = reduce_result.get("outcomes") or []
-            reduce_metrics["outcome_count"] = len(outcomes)
-            reduce_metrics["unsure_pair_count"] = reduce_result.get("unsure_pair_count") or 0
-            reduce_metrics["llm_outcome_count"] = reduce_result.get("llm_outcome_count") or 0
-        except GlobalCurriculumReducerError:
-            raise
-        except Exception as e:
-            _log.warning("v2 reducer failed  session=%s  err=%s", session_id, e)
-            outcomes = []
-        fail_mode = os.getenv("REDUCER_FAIL_MODE", "hard").strip().lower()
-        if not outcomes:
-            if fail_mode == "soft":
-                stages = outcomes_to_stages([
-                    {
-                        "outcome_id": f"lo_{i+1:03d}",
-                        "title": c.get("title", ""),
-                        "teaching_goal": c.get("teaching_goal", ""),
-                        "key_concepts": c.get("key_concepts") or [],
-                        "primary_evidence": {
-                            "source_id": c.get("source_id", ""),
-                            "chunk_ids": c.get("source_chunk_ids") or [],
-                        },
-                        "supporting_evidence": [],
-                        "merge_decision": "split",
-                        "merge_confidence": 1.0,
-                    }
-                    for i, c in enumerate(all_candidates)
-                ], chunks_lookup=chunks_lookup)
-                quality_warnings = {"reducer_fallback_flat": True}
-            else:
-                await session_memory.abandon_generating_stub(session_id)
-                raise RuntimeError("GlobalCurriculumReducer 未產出任何 unified outcomes")
-        else:
-            composer = StageComposerAgent()
-            stages = composer.compose(outcomes, chunks_lookup=chunks_lookup)
+    # D1: small-file unified path — flatten candidates directly, no reducer.
+    stages = candidates_to_stages_flat(all_candidates, chunks_lookup)
+    quality_warnings = {"small_file_path": True, "reducer_skipped": True}
+    if per_source_split:
+        quality_warnings["multi_source_split"] = True
+        quality_warnings["source_count"] = n_sources
 
-        from ..utils.curriculum_health import assess_reducer_health, should_auto_plan_b
-
-        pre_health = assess_reducer_health(
-            session_id=session_id,
-            candidate_count=reduce_metrics["candidate_count"],
-            outcome_count=reduce_metrics["outcome_count"],
-            stage_count=len(stages),
-            unsure_pair_count=reduce_metrics["unsure_pair_count"],
-            llm_outcome_count=reduce_metrics["llm_outcome_count"],
-            quality_warnings=quality_warnings,
-            plan_b_active=False,
-        )
-        if should_auto_plan_b() and pre_health.get("plan_b_recommended"):
-            _log.info(
-                "v2 auto Plan B fallback  session=%s  signals=%s",
-                session_id, pre_health.get("signals"),
-            )
-            stages, plan_b_qw = _build_plan_b_stages(
-                all_candidates, source_chunks, sources_manifest, chunks_lookup,
-            )
-            quality_warnings = {
-                **(quality_warnings or {}),
-                **plan_b_qw,
-                "plan_b_auto_fallback": True,
-                "plan_b_fallback_signals": pre_health.get("signals") or [],
-            }
-            reduce_metrics["outcome_count"] = len(all_candidates)
-            plan_b_active = True
+    # Phase 1: mode-aware postprocessing. single source / same_material=True
+    # preserve splitter boundaries — only cross-material (multi source +
+    # same_material=False) runs the stage-merge passes + LLM consolidator.
+    # Deterministic ordering still runs in every mode (it reorders, never merges).
+    postprocess_mode = choose_postprocess_mode(n_sources, same_material)
+    quality_warnings["postprocess_mode"] = postprocess_mode
+    if order_decision is not None:
+        quality_warnings["source_order"] = order_decision
+    # Phase 3：透明化「同教材多章刻意不跑 Outline」的保守決策（見 P0a 註解）。
+    if same_material and n_sources >= 3:
+        quality_warnings["outline_skipped_same_material"] = {
+            "reason": "same_material_multi_chapter",
+            "n_sources": n_sources,
+            "note": "chapter order handled by SourceOrderResolver",
+        }
+    allow_merge = postprocess_mode == "cross_material_merge_and_coordinate"
 
     stages = normalize_stages_pre_verify(stages, source_chunks)
+
+    # P0b-1: cross-source merge by key_concepts jaccard (default ≥ 0.6).
+    # Catches per-source splitter naming drift across chapters where titles
+    # diverge but concepts overlap heavily. Cross-material only.
+    if allow_merge:
+        stages_before_jaccard = len(stages)
+        stages = merge_by_concept_overlap(stages)
+        if len(stages) < stages_before_jaccard:
+            merged_count = stages_before_jaccard - len(stages)
+            quality_warnings["concept_overlap_merged"] = merged_count
+            _log.info(
+                "v2 jaccard merge  session=%s  before=%d  after=%d  merged=%d",
+                session_id, stages_before_jaccard, len(stages), merged_count,
+            )
+
+    # P3b: deterministic ordering pre-consolidator. Ensures even when
+    # consolidator is skipped (chunks < 30 or non-cross mode) reading order
+    # is enforced. Runs in every mode — it reorders, never merges.
+    stages = enforce_stage_ordering(stages)
+    # P4c: middle singleton stages folded into previous neighbour. Runs in every
+    # mode — this is thin-stage cleanup (a 1-chunk stage is too thin for a
+    # teaching round), not a semantic merge, so it does not erase splitter intent.
+    stages = merge_singleton_chunk_stages(stages)
+
+    # P0b-2: LLM Stage Consolidator for long materials (≥ 30 chunks).
+    # Per-source splitter has no global view; this pass does cross-chapter
+    # rename + reorder + semantic merge that jaccard can't reach. Cross-material
+    # only — same-material coordination is deferred to Phase 3's coordinator.
+    if allow_merge and len(source_chunks) >= 30 and len(stages) >= 2:
+        try:
+            consolidator_ctx = AgentContext(
+                session_id=session_id, user_id=user_id,
+                task_payload={
+                    "stages": stages,
+                    "required_outline": required_outline,
+                    "sources_manifest": sources_manifest,
+                },
+            )
+            cons_result = await orch.stage_consolidator.run(consolidator_ctx)
+            meter.record("StageConsolidatorAgent")
+            if not cons_result.get("fallback") and not cons_result.get("skipped"):
+                stages_before_cons = len(stages)
+                stages = cons_result["stages"]
+                # P3b: re-enforce ordering after LLM (rule F not always honoured)
+                stages = enforce_stage_ordering(stages)
+                # P4c: collapse middle 1-chunk stages produced by consolidator
+                stages = merge_singleton_chunk_stages(stages)
+                quality_warnings["stage_consolidator_ran"] = True
+                _log.info(
+                    "v2 stage consolidator  session=%s  before=%d  after=%d",
+                    session_id, stages_before_cons, len(stages),
+                )
+            elif cons_result.get("fallback"):
+                quality_warnings["stage_consolidator_fallback"] = cons_result.get("reason") or "unknown"
+        except Exception as e:
+            _log.warning(
+                "v2 stage consolidator failed  session=%s  err=%s",
+                session_id, e,
+            )
+            quality_warnings["stage_consolidator_error"] = str(e)
 
     from ..utils.curriculum_health import assess_reducer_health
 
@@ -1012,7 +848,7 @@ async def run_start_session_v2(
         unsure_pair_count=reduce_metrics["unsure_pair_count"],
         llm_outcome_count=reduce_metrics["llm_outcome_count"],
         quality_warnings=quality_warnings,
-        plan_b_active=plan_b_active,
+        plan_b_active=False,
     )
     if health["signals"]:
         quality_warnings = {
@@ -1044,6 +880,22 @@ async def run_start_session_v2(
             quality_warnings = {**(quality_warnings or {}), **qw}
         else:
             _log.warning("v2 global verifier failed  session=%s  %s", session_id, gverify)
+
+        # Phase 1 refinement: fold interior orphans (chunks sitting inside the
+        # reading span) into the neighbouring stage first, so only genuinely
+        # trailing orphans reach the generic summary path below.
+        folded = fold_interior_orphan_chunks(stages, source_chunks)
+        if folded is not stages:
+            stages = folded
+            gverify = verify_global_coverage(stages, source_chunks, required_outline)
+            quality_warnings = {
+                **(quality_warnings or {}),
+                "interior_orphans_folded": True,
+            }
+            _log.info(
+                "v2 interior orphan fold  session=%s  aligned_after=%s",
+                session_id, gverify.get("aligned"),
+            )
 
         # P1 (b)：補建 follow-up stages 救 missing named case + orphan chunk
         truly_missing = filter_missing_named_cases(
@@ -1094,16 +946,27 @@ async def run_start_session_v2(
         stages = normalize_stages_pre_verify(stages, source_chunks)
         orphan_check = verify_global_coverage(stages, source_chunks, required_outline)
         if orphan_check.get("orphan_chunk_ids"):
+            orphans_before = len(orphan_check.get("orphan_chunk_ids") or [])
             stages = ensure_orphan_chunks_attached(stages, source_chunks)
             stages = split_oversized_stages(stages, source_chunks)
             stages = split_kc_heavy_stages(stages, source_chunks)
             stages = dedupe_key_concept_aliases(stages)
             stages = prune_phantom_key_concepts(stages, source_chunks)
             stages = trim_stage_key_concepts(stages)
+            # P2b: re-verify after attach to surface any chunks that escaped recovery
+            final_check = verify_global_coverage(stages, source_chunks, required_outline)
+            orphans_after = len(final_check.get("orphan_chunk_ids") or [])
             _log.info(
-                "v2 full path orphan attach  session=%s  orphans=%d",
-                session_id, len(orphan_check.get("orphan_chunk_ids") or []),
+                "v2 full path orphan attach  session=%s  before=%d  after=%d",
+                session_id, orphans_before, orphans_after,
             )
+            if orphans_after > 0:
+                _log.warning(
+                    "v2 orphan attach incomplete  session=%s  remaining=%d  ids=%s",
+                    session_id, orphans_after,
+                    (final_check.get("orphan_chunk_ids") or [])[:10],
+                )
+                quality_warnings["orphan_attach_incomplete"] = orphans_after
 
     if is_listicle_source(source_chunks):
         stages = prune_toc_listicle_chunks(stages, source_chunks)
@@ -1117,7 +980,7 @@ async def run_start_session_v2(
     stages = finalize_curriculum_stages(stages, source_chunks)
 
     new_concepts = sorted({c for s in stages for c in s.get("key_concepts", [])})
-    if content_hash and new_concepts:
+    if _canonicalize_enabled() and content_hash and new_concepts:
         try:
             from ..memory import longterm_memory
             historical_pool = await longterm_memory.get_concept_canonical_pool(

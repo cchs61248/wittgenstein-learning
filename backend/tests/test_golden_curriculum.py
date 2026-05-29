@@ -1,6 +1,5 @@
 """Golden curriculum sources + prompt archetype regression."""
 import unittest
-from pathlib import Path
 
 from backend.tools.golden_curriculum_sources import GOLDEN_SOURCES, available_sources
 

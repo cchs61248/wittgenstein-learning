@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     current_stage_id INTEGER DEFAULT 0,
     status TEXT DEFAULT 'active',
     raw_content_summary TEXT,
+    same_material INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -1,72 +1,97 @@
-# Redis + curriculum Arq worker（本機 uvicorn 用 REDIS_URL=redis://localhost:6380/0）
-
+# 完整 Docker 部署：API（uvicorn）+ Curriculum Worker（Arq）+ Redis
 #
-
-# Worker 直接 bind-mount ./data/learning.db（需 CURRICULUM_USE_ARQ=1，uvicorn 不 in-process 寫 DB）
-
+# 結構：
+#   - api / curriculum-worker 共用 learning_db named volume（ext4，避開 Windows bind mount 翻譯層）
+#   - SQLite 開 WAL（named volume 上安全），多 process 並發寫不會 corrupted
+#   - 共用 Dockerfile.worker
+#   - 前端可繼續本機 npm run dev（打 localhost:8000 → docker api）
 #
-
+# 用法：
 #   docker compose up -d --build
-
+#   docker compose logs -f api
 #   docker compose logs -f curriculum-worker
-
 #
+# 從舊版（bind mount ./data）遷移：見 README「Docker 遷移」段或前一輪對話。
 
 services:
 
   redis:
-
     image: redis:7-alpine
-
     container_name: wl-redis
-
+    # Redis 也可以順便設時區（選填）
+    environment:
+      - TZ=Asia/Taipei
     ports:
-
       - "6380:6379"
-
     restart: unless-stopped
 
-
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: wl-api
+    depends_on:
+      - redis
+    env_file:
+      - backend/.env
+    environment:
+      # 1. 設定時區為台北
+      TZ: Asia/Taipei
+      # 容器內 Redis 用 docker network；不可用 host 的 localhost:6380
+      REDIS_URL: redis://redis:6379/0
+      # 容器內呼叫 host 服務（本機 Monica 代理等）走 host.docker.internal
+      MONICA_BASE_URL: http://host.docker.internal:8001/v1
+      DB_PATH: ../data/learning.db
+      # named volume = ext4，WAL 安全且效能較好
+      SQLITE_JOURNAL_MODE: WAL
+      CURRICULUM_USE_ARQ: "1"
+      LLM_CACHE_ENABLED: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    working_dir: /app/backend
+    # 覆寫 Dockerfile.worker 的 ENTRYPOINT（那個會跑 arq）
+    entrypoint: []
+    command: ["uvicorn", "run:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      # 共用 DB volume（與 curriculum-worker 同名才共享）
+      - learning_db:/app/data
+      # 程式碼 bind mount → uvicorn --reload 看得到 backend/ 變動
+      - ./backend:/app/backend
+      # HF 模型 cache（in-process 模式或備援會用到）
+      - hf_cache:/root/.cache/huggingface
+    restart: unless-stopped
 
   curriculum-worker:
-
     build:
-
       context: .
-
       dockerfile: Dockerfile.worker
-
     container_name: wl-curriculum-worker
-
     depends_on:
-
       - redis
-
+    env_file:
+      - backend/.env
     environment:
-
-      CURRICULUM_PIPELINE_V2: "1"
-
-      CURRICULUM_USE_ARQ: "1"
-
-      LLM_CACHE_ENABLED: "1"
+      # 2. 設定時區為台北
+      TZ: Asia/Taipei
 
       REDIS_URL: redis://redis:6379/0
-
-      DB_PATH: ../data/learning.db
-
       MONICA_BASE_URL: http://host.docker.internal:8001/v1
-
-      SQLITE_JOURNAL_MODE: DELETE
-
+      DB_PATH: ../data/learning.db
+      SQLITE_JOURNAL_MODE: WAL
+      CURRICULUM_USE_ARQ: "1"
+      LLM_CACHE_ENABLED: "1"
     extra_hosts:
-
       - "host.docker.internal:host-gateway"
-
     volumes:
-
-      - ./data:/app/data
-
+      - learning_db:/app/data
       - ./backend:/app/backend
-
+      - hf_cache:/root/.cache/huggingface
+    # BGE-large 模型載入後常駐約 1.5GB；建議給 worker 至少 2GB
+    # mem_limit: 3g
     restart: unless-stopped
 
+volumes:
+  learning_db:
+  hf_cache:

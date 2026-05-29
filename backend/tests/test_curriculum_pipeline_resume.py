@@ -1,4 +1,8 @@
-"""Resume test: checkpoint skips completed regions (mocked LLM)."""
+"""Resume test: checkpoint skips already-completed small-file split (mocked LLM).
+
+D1: pipeline is unified to small-file paths; resume behavior is now centered on
+`single_split` / `per_source_split` checkpoints rather than `region_loop`.
+"""
 import os
 import tempfile
 import unittest
@@ -24,23 +28,6 @@ def _chunks(n: int = 30) -> list[dict]:
             "section_title": f"第 {i // 10 + 1} 章",
         }
         for i in range(n)
-    ]
-
-
-def _regions() -> list[dict]:
-    return [
-        {
-            "region_id": "region_000",
-            "chunk_ids": [f"chunk_{i:04d}" for i in range(10)],
-        },
-        {
-            "region_id": "region_001",
-            "chunk_ids": [f"chunk_{i:04d}" for i in range(10, 20)],
-        },
-        {
-            "region_id": "region_002",
-            "chunk_ids": [f"chunk_{i:04d}" for i in range(20, 30)],
-        },
     ]
 
 
@@ -106,7 +93,9 @@ class TestCurriculumPipelineResume(unittest.IsolatedAsyncioTestCase):
         if os.path.exists(self._db_path):
             os.unlink(self._db_path)
 
-    async def test_resume_skips_completed_regions(self):
+    async def test_resume_skips_completed_single_split(self):
+        """If a prior single_split run completed (all_candidates persisted),
+        resuming must NOT call splitter again."""
         chunks = _chunks()
         content_hash = compute_content_hash(chunks)
         session_id = "sess_resume"
@@ -122,45 +111,27 @@ class TestCurriculumPipelineResume(unittest.IsolatedAsyncioTestCase):
                 "question_mode": "short_answer",
                 "provider_name": "claude",
                 "model_name": "m",
-                "pipeline_path": "region_loop",
+                "pipeline_path": "single_split",
             },
             required_outline={"required_stage_titles": ["導論"], "named_cases": []},
-            regions=_regions(),
-            completed_region_ids=["region_000", "region_001"],
-            all_candidates=[{"title": "prior", "key_concepts": ["alpha"], "source_chunk_ids": ["c0"]}],
-            summary_parts=["part0", "part1"],
+            completed_region_ids=["__single_split__"],
+            all_candidates=[{
+                "title": "prior",
+                "key_concepts": ["alpha"],
+                "source_chunk_ids": ["chunk_0000"],
+                "source_id": "src_a",
+            }],
+            summary_parts=["part0"],
         )
 
         orch = _mk_orch()
-        reducer_mock = MagicMock()
-        reducer_mock.run = AsyncMock(return_value={
-            "outcomes": [{
-                "outcome_id": "lo_001",
-                "title": "Stage 1",
-                "teaching_goal": "理解 alpha",
-                "key_concepts": ["alpha"],
-                "primary_evidence": {"source_id": "src_a", "chunk_ids": ["chunk_0000"]},
-                "supporting_evidence": [],
-                "merge_decision": "merged",
-                "merge_confidence": 0.9,
-            }],
-        })
 
         async def _emit(_msg):
             pass
 
-        env_patch = {
-            "CURRICULUM_PIPELINE_V2": "1",
-            "CURRICULUM_V2_PLAN_B": "0",
-            "REDUCER_FAIL_MODE": "hard",
-            "SPLITTER_FAIL_MODE": "hard",
-            "SMALL_FILE_CHUNK_THRESHOLD": "0",
-        }
+        env_patch = {"SPLITTER_FAIL_MODE": "hard"}
 
         with patch(
-            "backend.orchestrator.curriculum_pipeline_v2.GlobalCurriculumReducerAgent",
-            return_value=reducer_mock,
-        ), patch(
             "backend.orchestrator.curriculum_pipeline_v2.session_memory.create_pending_session",
             new=AsyncMock(),
         ), patch(
@@ -179,5 +150,7 @@ class TestCurriculumPipelineResume(unittest.IsolatedAsyncioTestCase):
                 emit=_emit,
             )
 
-        self.assertEqual(orch._splitter_call_count["n"], 1)
+        # Splitter should NOT be called because checkpoint says single_split is done
+        self.assertEqual(orch._splitter_call_count["n"], 0)
+        # Checkpoint cleaned up after successful pending creation
         self.assertIsNone(await ckpt.load_checkpoint(session_id))

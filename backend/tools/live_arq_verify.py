@@ -205,7 +205,6 @@ async def main() -> None:
     except DbContentionError as e:
         raise SystemExit(str(e)) from e
 
-    os.environ.setdefault("CURRICULUM_PIPELINE_V2", "1")
     info = _prepare_session()
     print("Prepared session:", json.dumps(info, ensure_ascii=False), flush=True)
     try:

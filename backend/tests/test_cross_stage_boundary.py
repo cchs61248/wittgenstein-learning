@@ -22,18 +22,19 @@ from unittest.mock import MagicMock
 class TestTeacherPromptHasCrossStageRule(unittest.TestCase):
     def test_teacher_system_prompt_has_cross_stage_boundary_rule(self):
         prompt = SYSTEM_PROMPTS["teacher"]
-        self.assertIn("跨章節 chunk 邊界", prompt)
+        # 重構後措辭：【跨章節邊界】段
+        self.assertIn("跨章節邊界", prompt)
         self.assertIn("next_stage_concepts", prompt)
-        # 範例必須說明「禁止完整展開」
-        self.assertIn("禁止完整展開", prompt)
+        # 規則語意：next_stage 只能一句帶過、不可完整展開
+        self.assertIn("不可完整展開", prompt)
 
 
 class TestDriftVerifierPromptHasExemption(unittest.TestCase):
     def test_drift_verifier_prompt_has_next_stage_concepts_exemption(self):
         prompt = SYSTEM_PROMPTS["drift_verifier"]
         self.assertIn("next_stage_concepts", prompt)
-        # 必須明確說「不計入」教學必要元素
-        self.assertIn("不計入", prompt)
+        # 重構後措辭：next_stage 對應內容「可豁免完整展開」
+        self.assertIn("豁免完整展開", prompt)
 
 
 class TestContextBuilderInjectsNextStageConcepts(unittest.IsolatedAsyncioTestCase):

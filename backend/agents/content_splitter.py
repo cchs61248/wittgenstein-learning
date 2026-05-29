@@ -193,51 +193,6 @@ class ContentSplitterAgent(BaseAgent):
             result = self._merge_thin_stages_body(stages)
         return self._renumber_stages(result)
 
-    def _stage_merge_key(self, stage: dict) -> str:
-        return " ".join(str(stage.get("title", "")).lower().split())
-
-    def _merge_stage_into(self, target: dict, incoming: dict) -> None:
-        existing_ids = set(target.get("source_chunk_ids") or [])
-        new_ids = [
-            cid for cid in (incoming.get("source_chunk_ids") or [])
-            if cid not in existing_ids
-        ]
-        target["source_chunk_ids"] = list(target.get("source_chunk_ids") or []) + new_ids
-
-        existing_chunk_ids = {
-            sc.get("chunk_id") for sc in (target.get("source_chunks") or [])
-        }
-        target["source_chunks"] = list(target.get("source_chunks") or []) + [
-            sc for sc in (incoming.get("source_chunks") or [])
-            if sc.get("chunk_id") not in existing_chunk_ids
-        ]
-        target["key_concepts"] = list(dict.fromkeys(
-            list(target.get("key_concepts") or []) +
-            list(incoming.get("key_concepts") or [])
-        ))
-        target["prerequisites"] = list(dict.fromkeys(
-            list(target.get("prerequisites") or []) +
-            list(incoming.get("prerequisites") or [])
-        ))
-        target["estimated_questions"] = max(
-            int(target.get("estimated_questions", 2) or 2),
-            int(incoming.get("estimated_questions", 2) or 2),
-        )
-
-    def _merge_duplicate_topic_stages(self, stages: list[dict]) -> list[dict]:
-        """合併同標題重複 stage；保留不同具名案例的單 chunk stage。"""
-        result: list[dict] = []
-        by_key: dict[str, dict] = {}
-        for stage in stages:
-            key = self._stage_merge_key(stage)
-            if key and key in by_key:
-                self._merge_stage_into(by_key[key], stage)
-                continue
-            result.append(stage)
-            if key:
-                by_key[key] = stage
-        return self._renumber_stages(result)
-
     def _merge_thin_stages_body(self, stages: list[dict]) -> list[dict]:
         result: list[dict] = []
         i = 0
@@ -339,6 +294,7 @@ class ContentSplitterAgent(BaseAgent):
             required_outline: dict | None = payload.get("required_outline")
             repair_plan_struct: dict | None = payload.get("repair_plan_struct")
             must_cover_topics: list[str] = payload.get("must_cover_topics") or []
+            source_hint: dict | None = payload.get("source_hint")
 
             db_chunks: dict[str, dict] = {c["chunk_id"]: c for c in source_chunks}
 
@@ -352,6 +308,26 @@ class ContentSplitterAgent(BaseAgent):
                     "\n\n【教材骨架 required_outline】本輪切分必須遵守："
                     f"\n{json.dumps(required_outline, ensure_ascii=False)}"
                 )
+
+            # P1b: per-source split hints — tell splitter which chapter / source this batch is.
+            # Helps name stages consistently (e.g. "第3章-借錢方法（一）：信用貸款")
+            # and avoids inventing per-source prefixes that clash across chapters.
+            source_hint_section = ""
+            if source_hint:
+                hint_lines = ["\n\n【本批 chunks 來源（per-source split 提示）】"]
+                if source_hint.get("source_label"):
+                    hint_lines.append(f"\n  來源標籤：{source_hint['source_label']}")
+                if source_hint.get("epub_filename"):
+                    hint_lines.append(f"\n  EPUB 母檔：{source_hint['epub_filename']}")
+                if source_hint.get("chapter_index") is not None:
+                    hint_lines.append(f"\n  章節序：第 {source_hint['chapter_index']} 章")
+                if source_hint.get("chapter_title"):
+                    hint_lines.append(f"\n  章節標題：{source_hint['chapter_title']}")
+                hint_lines.append(
+                    "\n  → 本輪 stages 的 title 命名應呼應本章主題；若全書多章共用同一系列前綴，"
+                    "請保持一致（規則 14b）。stages 數量應反映本章內容份量（≤ 該批 chunks 上限）。"
+                )
+                source_hint_section = "".join(hint_lines)
 
             must_cover_section = ""
             if must_cover_topics:
@@ -388,6 +364,7 @@ class ContentSplitterAgent(BaseAgent):
                 f"以下是教材的分段內容，請根據語義關係組合成學習階段：\n\n"
                 f"{chunks_text}"
                 f"{outline_section}"
+                f"{source_hint_section}"
                 f"{must_cover_section}"
                 f"{retry_hint_section}"
             )

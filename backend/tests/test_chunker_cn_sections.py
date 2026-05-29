@@ -5,7 +5,6 @@ from pathlib import Path
 from backend.utils.chunker import (
     _cn_boundary_starts,
     _cn_section_line_starts,
-    _extract_section_title,
     _has_cn_sections,
     build_source_chunks,
 )

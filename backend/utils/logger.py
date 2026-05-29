@@ -1,9 +1,7 @@
 import logging
 import time
-import uuid
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any
 
 _LOGS_DIR = Path(__file__).parent.parent / "logs"
 SEP = "=" * 72
@@ -46,10 +44,14 @@ def setup_logging() -> None:
         root.addHandler(_console_handler())
 
     for name, fname in (
-        ("wl.llm",          "llm.log"),
-        ("wl.agents",       "agents.log"),
-        ("wl.orchestrator", "orchestrator.log"),
-        ("wl.ws",           "ws.log"),
+        ("wl.llm",                    "llm.log"),
+        ("wl.agents",                 "agents.log"),
+        ("wl.orchestrator",           "orchestrator.log"),
+        ("wl.orchestrator.v2",        "orchestrator.log"),
+        ("wl.orchestrator.v2.health", "orchestrator.log"),
+        ("wl.ws",                     "ws.log"),
+        ("wl.ingest",                 "ingest.log"),
+        ("wl.jobs.curriculum",        "curriculum.log"),
     ):
         log = logging.getLogger(name)
         if not log.handlers:
@@ -63,10 +65,6 @@ def llm_logger() -> logging.Logger:
     return logging.getLogger("wl.llm")
 
 
-def agents_logger() -> logging.Logger:
-    return logging.getLogger("wl.agents")
-
-
 def orchestrator_logger() -> logging.Logger:
     return logging.getLogger("wl.orchestrator")
 
@@ -75,10 +73,18 @@ def ws_logger() -> logging.Logger:
     return logging.getLogger("wl.ws")
 
 
+def ingest_logger() -> logging.Logger:
+    return logging.getLogger("wl.ingest")
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
-def new_call_id() -> str:
-    return uuid.uuid4().hex[:8]
+def text_preview(text: str, *, max_chars: int = 120) -> str:
+    """單行摘要，供 ingest / upload log 使用。"""
+    one_line = " ".join(text.split())
+    if len(one_line) <= max_chars:
+        return one_line
+    return one_line[: max_chars - 1] + "…"
 
 
 def fmt_elapsed(t0: float) -> str:

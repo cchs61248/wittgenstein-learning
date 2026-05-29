@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import time
 import uuid
 from typing import Callable, Awaitable
@@ -15,6 +14,7 @@ from ..agents.progress_manager import ProgressManagerAgent, correct_mc_score
 from ..agents.drift_verifier import DriftVerifierAgent
 from ..agents.splitter_verifier import SplitterVerifierAgent
 from ..agents.concept_canonicalize import ConceptCanonicalizeAgent
+from ..agents.stage_consolidator import StageConsolidatorAgent
 from ..memory.working_memory import get_working_memory, TurnContext
 from ..memory import session_memory, longterm_memory
 from ..db.inflight_lock import has_session_inflight
@@ -29,20 +29,12 @@ from .debounced_writer import DebouncedExplanationWriter
 from .stage_boundary import compute_stage_boundary_lists
 from .qg_payload import build_qg_task_payload
 from ..utils.teaching_intent import normalize_teaching_intent
-from ..utils.stage_budget import compute_dynamic_max_stages
 from ..utils.canonicalize_apply import apply_canonical_mappings
 from ..utils.content_hash import compute_content_hash
 
 WSEmitter = Callable[[dict], Awaitable[None]]
 
 _log = logging.getLogger("wl.orchestrator")
-
-MAX_SPLITTER_VERIFY_RETRIES = 2
-
-
-class SplitterVerificationRejected(Exception):
-    """SplitterVerifier 在重試用盡後仍不通過，拒絕進入 pending_confirmation。"""
-
 
 # Backward-compatible alias for tests and external imports.
 _apply_canonical_mappings = apply_canonical_mappings
@@ -137,6 +129,7 @@ class LearningOrchestrator:
         self.content_outliner = ContentOutlineAgent(llm, tc)
         self.splitter_verifier = SplitterVerifierAgent(llm, tc)
         self.canonicalizer = ConceptCanonicalizeAgent(llm, tc)
+        self.stage_consolidator = StageConsolidatorAgent(llm, tc)
         self.teacher = TeacherAgent(llm, tc)
         self.questioner = QuestionGeneratorAgent(llm, tc)
         self.evaluator = EvaluatorAgent(llm, tc)
@@ -536,28 +529,18 @@ class LearningOrchestrator:
         model_name: str | None,
         emit: WSEmitter,
         source_file_ids: list[str] | None = None,
+        same_material: bool = True,
+        order_decision: dict | None = None,
     ) -> None:
-        if os.getenv("CURRICULUM_PIPELINE_V2") == "1":
-            from ..llm.caching_provider import maybe_wrap_curriculum_llm
-            from .curriculum_pipeline_v2 import run_start_session_v2
-            llm = getattr(self, "llm", None)
-            if llm is not None:
-                self.llm = maybe_wrap_curriculum_llm(
-                    llm, content_hash=compute_content_hash(source_chunks),
-                )
-            return await run_start_session_v2(
-                self,
-                session_id=session_id,
-                user_id=user_id,
-                source_chunks=source_chunks,
-                target_depth=target_depth,
-                question_mode=question_mode,
-                provider_name=provider_name,
-                model_name=model_name,
-                emit=emit,
-                source_file_ids=source_file_ids,
+        from ..llm.caching_provider import maybe_wrap_curriculum_llm
+        from .curriculum_pipeline_v2 import run_start_session_v2
+        llm = getattr(self, "llm", None)
+        if llm is not None:
+            self.llm = maybe_wrap_curriculum_llm(
+                llm, content_hash=compute_content_hash(source_chunks),
             )
-        return await self._start_session_v1(
+        return await run_start_session_v2(
+            self,
             session_id=session_id,
             user_id=user_id,
             source_chunks=source_chunks,
@@ -567,292 +550,9 @@ class LearningOrchestrator:
             model_name=model_name,
             emit=emit,
             source_file_ids=source_file_ids,
+            same_material=same_material,
+            order_decision=order_decision,
         )
-
-    async def _start_session_v1(
-        self,
-        session_id: str,
-        user_id: str,
-        source_chunks: list[dict],
-        target_depth: str,
-        question_mode: str,
-        provider_name: str | None,
-        model_name: str | None,
-        emit: WSEmitter,
-        source_file_ids: list[str] | None = None,
-    ) -> None:
-        content_hash = compute_content_hash(source_chunks)
-
-        _log.info(
-            "start_session  session=%s  user=%s  chunks=%d  depth=%s  mode=%s",
-            session_id, user_id, len(source_chunks), target_depth, question_mode,
-        )
-
-        # ── 1. ContentSplitter 執行前，先建立 generating stub + 存入 source_chunks
-        #       讓書櫃在 LLM 呼叫期間持久顯示「生成中」，頁面重整也不消失
-        await session_memory.create_generating_stub(
-            session_id, user_id, content_hash, source_file_ids=source_file_ids or []
-        )
-        await session_memory.insert_source_chunks(session_id, source_chunks)
-        if source_file_ids:
-            await session_memory.purge_source_uploads(session_id, source_file_ids)
-        await emit({"type": "session_generating", "payload": {"session_id": session_id}})
-
-        # ── 2.0 ContentOutline（方案 C：先抽教材骨架，引導 splitter）
-        required_outline: dict | None = None
-        if source_chunks:
-            outline_ctx = AgentContext(
-                session_id=session_id,
-                user_id=user_id,
-                task_payload={"source_chunks": source_chunks},
-            )
-            try:
-                required_outline = await self.content_outliner.run(outline_ctx)
-                _log.info(
-                    "start_session outline done  session=%s  cases=%d  titles=%d",
-                    session_id,
-                    len(required_outline.get("named_cases") or []),
-                    len(required_outline.get("required_stage_titles") or []),
-                )
-            except Exception as e:
-                _log.warning(
-                    "content_outline failed (proceeding without outline)  session=%s  err=%s",
-                    session_id, e,
-                )
-
-        # ── 2. ContentSplitter（LLM 呼叫，可能耗時 10–60s）
-        source_count = len({c.get("source_index", 0) for c in source_chunks}) or 1
-        max_stages = compute_dynamic_max_stages(
-            source_chunks,
-            source_count=source_count,
-            required_outline=required_outline,
-        )
-        splitter_ctx_payload: dict = {
-            "source_chunks": source_chunks,
-            "max_stages": max_stages,
-            "target_depth": target_depth,
-        }
-        if required_outline:
-            splitter_ctx_payload["required_outline"] = required_outline
-
-        ctx = AgentContext(
-            session_id=session_id,
-            user_id=user_id,
-            task_payload=dict(splitter_ctx_payload),
-        )
-        try:
-            split_result = await self.splitter.run(ctx)
-        except Exception:
-            await session_memory.abandon_generating_stub(session_id)
-            raise
-
-        stages: list[dict] = split_result["stages"]
-        summary: str = split_result.get("summary", "")
-        _log.info(
-            "start_session split done  session=%s  stages=%d",
-            session_id, len(stages),
-        )
-
-        # ── 2.4 SplitterVerifier（方案 C：outline 引導 + repair_plan reroll + 失敗拒絕）
-        splitter_attempts = 0  # 已跑的 splitter 次數（first run 算 1）
-        verifier_passed = not source_chunks
-        last_vresult: dict | None = None
-        quality_warnings: dict | None = None
-        if source_chunks:
-            while True:
-                verify_ctx = AgentContext(
-                    session_id=session_id, user_id=user_id,
-                    task_payload={"source_chunks": source_chunks, "stages": stages},
-                )
-                try:
-                    vresult = await self.splitter_verifier.run(verify_ctx)
-                except Exception as e:
-                    _log.error(
-                        "splitter_verifier failed (fail-closed, treating as not aligned)  "
-                        "session=%s  err=%s",
-                        session_id, e,
-                    )
-                    vresult = {
-                        "aligned": False,
-                        "missing_options": [],
-                        "issue_chunk_ids": [],
-                        "reason": f"verifier_exception: {e}",
-                        "repair_plan_struct": {},
-                    }
-
-                last_vresult = vresult
-                if vresult["aligned"]:
-                    verifier_passed = True
-                    _log.info(
-                        "splitter_verifier OK  session=%s  splitter_runs=%d",
-                        session_id, splitter_attempts + 1,
-                    )
-                    break
-
-                if splitter_attempts >= MAX_SPLITTER_VERIFY_RETRIES:
-                    _log.warning(
-                        "splitter_verifier still failed after %d retries  session=%s  "
-                        "missing=%s  reason=%s",
-                        MAX_SPLITTER_VERIFY_RETRIES, session_id,
-                        vresult["missing_options"], vresult["reason"],
-                    )
-                    break
-
-                splitter_attempts += 1
-                _log.info(
-                    "splitter_verifier failed, rerolling splitter  session=%s  "
-                    "retry=%d  missing=%s",
-                    session_id, splitter_attempts, vresult["missing_options"],
-                )
-                repair_struct = vresult.get("repair_plan_struct") or {}
-                if not repair_struct.get("required_stage_titles") and required_outline:
-                    repair_struct = {
-                        **repair_struct,
-                        "required_stage_titles": (
-                            required_outline.get("required_stage_titles") or []
-                        ),
-                    }
-                reroll_ctx = AgentContext(
-                    session_id=session_id, user_id=user_id,
-                    task_payload={
-                        **splitter_ctx_payload,
-                        "previous_attempt_missed": vresult["missing_options"],
-                        "issue_chunk_ids": vresult["issue_chunk_ids"],
-                        "verifier_reason": vresult.get("reason", ""),
-                        "repair_plan_struct": repair_struct,
-                    },
-                )
-                try:
-                    reroll_result = await self.splitter.run(reroll_ctx)
-                    stages = reroll_result["stages"]
-                    summary = reroll_result.get("summary", summary)
-                except Exception as e:
-                    _log.warning(
-                        "splitter reroll failed (fail-safe, keeping previous stages)  "
-                        "session=%s  err=%s",
-                        session_id, e,
-                    )
-                    break
-
-            if not verifier_passed:
-                missing = (last_vresult or {}).get("missing_options") or []
-                reason = (last_vresult or {}).get("reason") or ""
-                fail_mode = os.getenv("SPLITTER_FAIL_MODE", "hard").strip().lower()
-                if fail_mode == "soft":
-                    quality_warnings = {
-                        "splitter_verifier_failed": True,
-                        "missing_options": missing,
-                        "reason": reason,
-                        "splitter_runs": splitter_attempts + 1,
-                    }
-                    _log.warning(
-                        "splitter_verifier soft-fallback  session=%s  missing=%s  reason=%s",
-                        session_id, missing, reason,
-                    )
-                else:
-                    await session_memory.abandon_generating_stub(session_id)
-                    _log.error(
-                        "splitter_verifier rejected  session=%s  splitter_runs=%d  "
-                        "missing=%s  reason=%s",
-                        session_id, splitter_attempts + 1, missing, reason,
-                    )
-                    detail = reason or "、".join(missing) or "切分結果未通過品質檢查"
-                    raise SplitterVerificationRejected(
-                        f"教材切分未通過品質檢查（已自動修復 {MAX_SPLITTER_VERIFY_RETRIES} 次仍失敗），"
-                        f"請稍後重試。詳情：{detail}"
-                    )
-
-        # ── 2.5 ConceptCanonicalize（splitter 後立即跑、寫回 stages）
-        source_signature = content_hash
-        new_concepts = sorted({
-            c for s in stages for c in s.get("key_concepts", [])
-        })
-        if source_signature and new_concepts:
-            try:
-                historical_pool = await longterm_memory.get_concept_canonical_pool(
-                    user_id=user_id,
-                    source_signature=source_signature,
-                    limit=80,
-                )
-                canon_ctx = AgentContext(
-                    session_id=session_id,
-                    user_id=user_id,
-                    task_payload={
-                        "new_concepts": new_concepts,
-                        "historical_pool": historical_pool,
-                    },
-                )
-                canon_result = await self.canonicalizer.run(canon_ctx)
-                stages = _apply_canonical_mappings(stages, canon_result["mappings"])
-                stats = {"mapped": 0, "new": 0, "unsure": 0}
-                for m in canon_result["mappings"]:
-                    stats[m["decision"]] = stats.get(m["decision"], 0) + 1
-                unsure_names = [
-                    m["new_name"] for m in canon_result["mappings"]
-                    if m.get("decision") == "unsure"
-                ]
-                _log.info(
-                    "canonicalize done  session=%s  sig=%s  mapped=%d  new=%d  unsure=%d%s",
-                    session_id, source_signature[:12] if source_signature else "?",
-                    stats["mapped"], stats["new"], stats["unsure"],
-                    f"  unsure_sample={unsure_names[:5]}" if unsure_names else "",
-                )
-            except Exception as e:
-                _log.warning(
-                    "canonicalize failed (fail-safe, using splitter stages)  "
-                    "session=%s  err=%s",
-                    session_id, e,
-                )
-
-        # 品質檢查（記錄 issues，不中斷流程）
-        quality_issues = self._check_stage_quality(stages, source_chunks)
-        if quality_issues:
-            _log.warning(
-                "start_session stage quality issues  session=%s  issues=%s",
-                session_id, quality_issues,
-            )
-
-        nodes = [
-            {"node_id": s["node_id"], "stage_id": s["stage_id"], "title": s["title"]}
-            for s in stages
-        ]
-
-        self._pending_stages = stages
-        self._pending_start_args = {
-            "session_id": session_id,
-            "user_id": user_id,
-            "content_hash": content_hash,
-            "summary": summary,
-            "question_mode": question_mode,
-        }
-
-        # ── 3. ContentSplitter 完成，UPSERT 為 pending_confirmation
-        #       source_chunks 已在步驟 1 存入，不需重複
-        await session_memory.create_pending_session(
-            session_id=session_id,
-            user_id=user_id,
-            content_hash=content_hash,
-            summary=summary,
-            stages=stages,
-            nodes=nodes,
-            provider_name=provider_name,
-            model_name=model_name,
-            question_mode=question_mode,
-            source_file_ids=source_file_ids or [],
-            quality_warnings=quality_warnings,
-        )
-
-        km_payload: dict = {
-            "nodes": nodes,
-            "summary": summary,
-        }
-        if quality_warnings:
-            km_payload["quality_warnings"] = quality_warnings
-
-        await emit({
-            "type": "knowledge_map",
-            "payload": km_payload,
-        })
 
     # ── 使用者確認知識地圖後開始教學 ────────────────────────
 
