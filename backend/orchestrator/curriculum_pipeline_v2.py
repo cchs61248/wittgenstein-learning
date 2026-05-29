@@ -19,6 +19,7 @@ from ..utils.small_curriculum import (
     best_chunk_for_case,
     candidates_to_stages_flat,
     choose_postprocess_mode,
+    cleanup_orphan_enumerator_titles,
     enforce_stage_ordering,
     merge_by_concept_overlap,
     merge_singleton_chunk_stages,
@@ -1017,6 +1018,29 @@ async def run_start_session_v2(
             stages = split_oversized_stages(stages, source_chunks)
             stages = split_kc_heavy_stages(stages, source_chunks)
             stages = trim_stage_key_concepts(stages)
+
+    # Issue B: title-only orphan-enumerator cleanup. Runs at the single finalize
+    # convergence point (after both compact and non-compact branches + listicle
+    # pruning) so every same_material path — including the compact small-file path
+    # that bypasses _apply_deterministic_cleanup — receives it. same_material only:
+    # cross_material gets global naming coordination elsewhere (Phase 4/5).
+    if same_material:
+        stages, title_cleanup_warnings = cleanup_orphan_enumerator_titles(stages)
+        if title_cleanup_warnings:
+            quality_warnings = {
+                **(quality_warnings or {}),
+                "title_cleanup_removed_orphan_enumerators": len(title_cleanup_warnings),
+            }
+            _log.info(
+                "v2 title cleanup removed orphan enumerators  session=%s  count=%d",
+                session_id, len(title_cleanup_warnings),
+            )
+            for w in title_cleanup_warnings:
+                _log.debug(
+                    "v2 title cleanup detail  session=%s  stage=%s  old=%r  new=%r  pattern=%s",
+                    session_id, w.get("stage_id"), w.get("old_title"),
+                    w.get("new_title"), w.get("pattern"),
+                )
 
     stages = finalize_curriculum_stages(stages, source_chunks)
 

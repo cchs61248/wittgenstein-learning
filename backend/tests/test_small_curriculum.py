@@ -29,6 +29,7 @@ from backend.utils.small_curriculum import (
     KC_HEAVY_SPLIT_CHUNK_THRESHOLD,
     ORPHAN_STAGE_MAX_CHUNKS,
     STAGE_MAX_KEY_CONCEPTS,
+    cleanup_orphan_enumerator_titles,
 )
 
 
@@ -977,6 +978,139 @@ class TestPostProcessDedupe(unittest.TestCase):
                 "chunk_0006", stage_chunks,
                 "chunk_0006 已被 follow_up_case 用，不該再進 follow_up_orphan",
             )
+
+
+class TestOrphanEnumeratorTitleCleanup(unittest.TestCase):
+    """Issue B：same_material 路徑孤兒序號 title 的確定性清理（title-only）。"""
+
+    def _titles(self, stages):
+        return [s["title"] for s in stages]
+
+    def test_t1_mode_two_without_sibling_cleaned(self):
+        stages = [
+            {"stage_id": 1, "title": "資產配置：三桶金策略",
+             "key_concepts": ["三桶金"], "source_chunk_ids": ["chunk_0001"]},
+            {"stage_id": 2, "title": "模式二：法律保障的受託責任夥伴",
+             "key_concepts": ["受託責任"], "source_chunk_ids": ["chunk_0002"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(cleaned[1]["title"], "法律保障的受託責任夥伴")
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["stage_id"], 2)
+        self.assertEqual(warnings[0]["pattern"], "mode_cn_number")
+        # title-only：結構不動
+        self.assertEqual(cleaned[1]["source_chunk_ids"], ["chunk_0002"])
+        self.assertEqual(cleaned[1]["key_concepts"], ["受託責任"])
+
+    def test_t2_mode_two_with_exact_sibling_preserved(self):
+        stages = [
+            {"stage_id": 1, "title": "模式一：佣金導向的銷售夥伴",
+             "key_concepts": ["佣金導向"], "source_chunk_ids": ["chunk_0001"]},
+            {"stage_id": 2, "title": "模式二：法律保障的受託責任夥伴",
+             "key_concepts": ["受託責任"], "source_chunk_ids": ["chunk_0002"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(self._titles(cleaned), self._titles(stages))
+        self.assertEqual(warnings, [])
+
+    def test_t3_prefix_paren_two_without_sibling_cleaned(self):
+        stages = [
+            {"stage_id": 1, "title": "投資宇宙：開放式架構",
+             "key_concepts": ["開放架構"], "source_chunk_ids": ["chunk_0001"]},
+            {"stage_id": 2, "title": "投資宇宙：（二）獨立顧問選擇",
+             "key_concepts": ["獨立顧問"], "source_chunk_ids": ["chunk_0002"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(cleaned[1]["title"], "投資宇宙：獨立顧問選擇")
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["pattern"], "prefix_paren_cn_number")
+
+    def test_t3b_prefix_paren_empty_rest_keeps_prefix(self):
+        stages = [
+            {"stage_id": 1, "title": "投資宇宙：（二）",
+             "key_concepts": ["x"], "source_chunk_ids": ["chunk_0001"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(cleaned[0]["title"], "投資宇宙")
+        self.assertEqual(len(warnings), 1)
+
+    def test_t4_prefix_paren_with_same_prefix_sibling_preserved(self):
+        stages = [
+            {"stage_id": 1, "title": "投資宇宙：（一）封閉式架構",
+             "key_concepts": ["封閉架構"], "source_chunk_ids": ["chunk_0001"]},
+            {"stage_id": 2, "title": "投資宇宙：（二）開放式架構",
+             "key_concepts": ["開放架構"], "source_chunk_ids": ["chunk_0002"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(self._titles(cleaned), self._titles(stages))
+        self.assertEqual(warnings, [])
+
+    def test_t5_protected_formal_titles_preserved(self):
+        stages = [
+            {"stage_id": 1, "title": "法則28：有時真不是你的錯",
+             "key_concepts": ["x"], "source_chunk_ids": ["chunk_0001"]},
+            {"stage_id": 2, "title": "第二章：投資基本觀念",
+             "key_concepts": ["y"], "source_chunk_ids": ["chunk_0002"]},
+            {"stage_id": 3, "title": "第六堂：利益衝突",
+             "key_concepts": ["z"], "source_chunk_ids": ["chunk_0003"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(self._titles(cleaned), self._titles(stages))
+        self.assertEqual(warnings, [])
+
+    def test_t6_continuation_titles_preserved(self):
+        stages = [
+            {"stage_id": 1, "title": "風險管理（續 2）",
+             "key_concepts": ["x"], "source_chunk_ids": ["chunk_0001"]},
+            {"stage_id": 2, "title": "投資策略（續二）",
+             "key_concepts": ["y"], "source_chunk_ids": ["chunk_0002"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(self._titles(cleaned), self._titles(stages))
+        self.assertEqual(warnings, [])
+
+    def test_t7_cleaned_title_too_short_preserved(self):
+        stages = [
+            {"stage_id": 1, "title": "模式二：風險",
+             "key_concepts": ["x"], "source_chunk_ids": ["chunk_0001"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(cleaned[0]["title"], "模式二：風險")
+        self.assertEqual(warnings, [])
+
+    def test_t8_loose_sibling_variants_preserve_mode_two(self):
+        # A2 鎖：寬鬆 sibling 比對，任一變體存在都不可刪「模式二」
+        variants = [
+            "模式（一）：佣金導向",
+            "模式 一：佣金導向",
+            "模式之一：佣金導向",
+            "第一種模式：佣金導向",
+            "模式１：佣金導向",
+        ]
+        for sibling_title in variants:
+            with self.subTest(sibling=sibling_title):
+                stages = [
+                    {"stage_id": 1, "title": sibling_title,
+                     "key_concepts": ["佣金"], "source_chunk_ids": ["chunk_0001"]},
+                    {"stage_id": 2, "title": "模式二：受託責任夥伴",
+                     "key_concepts": ["受託責任"], "source_chunk_ids": ["chunk_0002"]},
+                ]
+                cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+                self.assertEqual(
+                    cleaned[1]["title"], "模式二：受託責任夥伴",
+                    f"sibling 變體 {sibling_title!r} 存在時不可刪模式二",
+                )
+                self.assertEqual(warnings, [])
+
+    def test_arabic_mode_not_matched_mvp(self):
+        # B1：MVP 不處理阿拉伯數字 模式2（避免半匹配），保留不動
+        stages = [
+            {"stage_id": 1, "title": "模式2：法律保障的受託責任夥伴",
+             "key_concepts": ["受託責任"], "source_chunk_ids": ["chunk_0001"]},
+        ]
+        cleaned, warnings = cleanup_orphan_enumerator_titles(stages)
+        self.assertEqual(cleaned[0]["title"], "模式2：法律保障的受託責任夥伴")
+        self.assertEqual(warnings, [])
 
 
 if __name__ == "__main__":
