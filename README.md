@@ -29,7 +29,7 @@
 
 ### 教材切分（2026-05-27 統一架構；2026-05-29 mode-aware 後處理）
 
-- **唯一路徑**：所有 session 走 V2 小檔逐檔切（`single_split` 或 `per_source_split`），V1 / V2 大檔 / Reducer / Plan B 全部刪除
+- **唯一路徑**：所有 session 走 V2 小檔逐檔切（`single_split` 或 `per_source_split`），V1 / V2 大檔 / Plan B 全部刪除；reducer 改為非主線（unified path `reducer_skipped=True`，`global_curriculum_reducer` / `macro_region_refiner` prompt 仍留存但不呼叫）。SplitterVerifier 非阻塞（soft-pass / false-positive filter / bounded reroll，無 fail-hard）
 - **`same_material` 控制 ContentOutline（Phase 3，2026-05-29 起）**：`same_material=True` → **一律跳過 Outline**（含 ≥3 章 EPUB）；只有 `same_material=False`（不同教材）才整批跑一次 Outline 餵給逐檔 Splitter。原「同教材 ≥3 章也跑 Outline」規則已移除——global outline 的跨章 `named_cases` 會把不同章同主題 chunk 併進同一 stage（章節邊界破壞器），章節排序改由確定性 `SourceOrderResolver` 處理
 - **Mode-aware 後處理**：`choose_postprocess_mode(n_sources, same_material)` 分流；只有 `cross_material_merge_and_coordinate`（多本不同書）才跑 jaccard / LLM consolidator 等合併層，單 source 與同教材只做確定性排序 + 收尾，不合併 stage
 - **EPUB 上傳即切章**：`POST /upload` 收 `.epub` 時呼叫 `split_epub_by_toc` 回 N 個 file_id；前端展開為 N 個 source items
@@ -235,7 +235,7 @@ backend/
 │   └── drift_verifier.py       # Citation accuracy 驗證（逐條 claim 核對，Phase 4）
 ├── orchestrator/
 │   ├── learning_orchestrator.py  # 協調所有元件的主控流程
-│   ├── curriculum_pipeline_v2.py # V2 macro region + reducer pipeline
+│   ├── curriculum_pipeline_v2.py # V2 小檔統一切分 pipeline（single/per-source split；reducer_skipped）
 │   ├── curriculum_resume.py      # resume_generating_session（checkpoint 續跑）
 │   ├── debounced_writer.py       # DebouncedExplanationWriter：時間 + size 雙閘門 throttle 寫 DB
 │   └── context_builder.py        # 學生狀態包組裝
