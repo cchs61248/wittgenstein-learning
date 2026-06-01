@@ -7,16 +7,19 @@ This module is intentionally **pure and deterministic**. It currently contains:
   cycle detection, and unrelated cluster diagnostics.
 - T3: warn-only ordering plan construction with deterministic topological
   recommendations and current-order diagnostics.
+- T4a: pedagogical plan schema parsing, pure stage-move application, and
+  safety verifiers.
 
 Scope guard (see ``docs/phase4_implementation_tickets.md``):
 - No LLM calls, no prompt, no external dependency.
 - No persisted stage reordering, no merge, no chunk reassignment, no DB migration.
 - Never mutates input stages or cards; output is fully deterministic.
 
-T4 (flagged pipeline integration) builds on these utilities.
+T4b/T4c add the LLM planner and feature-flagged pipeline integration.
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -99,6 +102,13 @@ class StageCard:
     difficulty_reason: str
 
 
+def _stage_identity(stage: Mapping[str, Any], index: int) -> str:
+    """Stable identity for a stage: its ``stage_id`` field, else ``stage_<index>``."""
+    raw_stage_id = stage.get("stage_id")
+    stage_id = str(raw_stage_id).strip() if raw_stage_id is not None else f"stage_{index}"
+    return stage_id or f"stage_{index}"
+
+
 def _as_str_tuple(value: Any) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -161,10 +171,7 @@ def build_stage_cards(
         role, role_reason = _classify_role(title, summary, key_concepts)
         difficulty, difficulty_reason = _classify_difficulty(role, title)
 
-        raw_stage_id = stage.get("stage_id")
-        stage_id = str(raw_stage_id).strip() if raw_stage_id is not None else f"stage_{index}"
-        if not stage_id:
-            stage_id = f"stage_{index}"
+        stage_id = _stage_identity(stage, index)
 
         cards.append(
             StageCard(
@@ -458,8 +465,9 @@ def _topo_sort(cards: Sequence[StageCard], graph: PrerequisiteGraph) -> tuple[st
     """Deterministic Kahn topological sort.
 
     Among prerequisite-satisfied candidates, prefer earlier pedagogical role,
-    then lower difficulty, then original stage_index, then stage_id (stable).
-    Edges referencing absent stage ids are ignored.
+    then lower difficulty, then original stage_index. Equal-key ties preserve
+    input order via Python's stable sort. Edges referencing absent stage ids
+    are ignored.
     """
     card_by_id: dict[str, StageCard] = {}
     for c in cards:
@@ -606,4 +614,234 @@ def build_ordering_plan(
         recommended_stage_ids=recommended,
         order_changed=recommended != current,
         diagnostics=tuple(diagnostics),
+    )
+
+
+# ===========================================================================
+# T4a — Pedagogical plan schema, applier, and safety verifiers (pure)
+# ===========================================================================
+# The LLM planner (T4b) proposes a plan of stage *moves*; this layer parses,
+# validates, and applies it programmatically while preserving stage identity,
+# source coverage metadata, and stage content. Anything suspicious falls back
+# to the original order (conservative). No LLM, no prompt, no pipeline wiring.
+
+# Coverage fields that a pure reorder must never change.
+_PLAN_COVERAGE_FIELDS = ("source_ids", "source_stage_ids", "source_chunk_ids")
+# Content fields that a pure reorder must never change.
+_PLAN_CONTENT_FIELDS = ("title", "summary", "key_concepts")
+
+
+@dataclass(frozen=True)
+class PedagogicalPlanMove:
+    stage_id: str
+    after_stage_id: str | None  # None ⇒ move to the beginning
+    reason: str
+
+
+@dataclass(frozen=True)
+class PedagogicalPlan:
+    moves: tuple[PedagogicalPlanMove, ...]
+    rationale: str
+
+
+@dataclass(frozen=True)
+class PedagogicalPlanResult:
+    stages: tuple[Mapping[str, Any], ...]
+    applied: bool
+    fallback_reason: str | None
+    diagnostics: tuple[dict[str, Any], ...]
+
+
+def parse_pedagogical_plan(
+    payload: Any,
+) -> tuple[PedagogicalPlan | None, list[dict[str, Any]]]:
+    """Validate and parse a raw plan payload (e.g. decoded LLM JSON).
+
+    Existence of referenced stages is *not* checked here — that is the
+    applier's job. Returns ``(plan, [])`` on success or ``(None, diagnostics)``.
+    """
+    if not isinstance(payload, Mapping):
+        return None, [{"type": "invalid_plan_payload", "reason": "payload_must_be_mapping"}]
+
+    raw_moves = payload.get("moves")
+    if not isinstance(raw_moves, list):
+        return None, [{"type": "invalid_plan_payload", "reason": "moves_must_be_list"}]
+
+    moves: list[PedagogicalPlanMove] = []
+    for i, raw in enumerate(raw_moves):
+        if not isinstance(raw, Mapping):
+            return None, [{"type": "invalid_plan_move", "move_index": i, "reason": "move_must_be_mapping"}]
+        sid = raw.get("stage_id")
+        if not isinstance(sid, str) or not sid.strip():
+            return None, [{"type": "invalid_plan_move", "move_index": i, "reason": "stage_id_must_be_nonempty_str"}]
+        after = raw.get("after_stage_id")
+        if after is not None:
+            if not isinstance(after, str) or not after.strip():
+                return None, [{"type": "invalid_plan_move", "move_index": i,
+                               "reason": "after_stage_id_must_be_null_or_nonempty_str"}]
+            after = after.strip()
+        reason = raw.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return None, [{"type": "invalid_plan_move", "move_index": i, "reason": "reason_must_be_nonempty_str"}]
+        moves.append(PedagogicalPlanMove(stage_id=sid.strip(), after_stage_id=after, reason=reason.strip()))
+
+    raw_rationale = payload.get("rationale")
+    rationale = str(raw_rationale).strip() if raw_rationale is not None else ""
+    return PedagogicalPlan(moves=tuple(moves), rationale=rationale), []
+
+
+def _explicit_stage_id(stage: Mapping[str, Any]) -> str | None:
+    raw = stage.get("stage_id")
+    if raw is None:
+        return None
+    sid = str(raw).strip()
+    return sid or None
+
+
+def _explicit_id_map(stages: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    out: dict[str, Mapping[str, Any]] = {}
+    for stage in stages:
+        eid = _explicit_stage_id(stage)
+        if eid is not None:
+            out.setdefault(eid, stage)
+    return out
+
+
+def _verify_stage_id_set(
+    before: Sequence[Mapping[str, Any]], after: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Order-independent: the multiset of stage identities must be preserved."""
+    b = sorted(_stage_identity(s, i) for i, s in enumerate(before))
+    a = sorted(_stage_identity(s, i) for i, s in enumerate(after))
+    if b != a:
+        return [{"type": "stage_id_set_changed", "reason": "applied_plan_must_preserve_stage_ids"}]
+    return []
+
+
+def _verify_stage_coverage(
+    before: Sequence[Mapping[str, Any]], after: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    bmap, amap = _explicit_id_map(before), _explicit_id_map(after)
+    diags: list[dict[str, Any]] = []
+    for sid, bstage in bmap.items():
+        astage = amap.get(sid)
+        if astage is None:
+            continue
+        for field in _PLAN_COVERAGE_FIELDS:
+            if _as_str_tuple(bstage.get(field)) != _as_str_tuple(astage.get(field)):
+                diags.append(
+                    {
+                        "type": "stage_coverage_changed",
+                        "stage_id": sid,
+                        "field": field,
+                        "reason": "applied_plan_must_preserve_stage_coverage",
+                    }
+                )
+    return diags
+
+
+def _verify_stage_content(
+    before: Sequence[Mapping[str, Any]], after: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    bmap, amap = _explicit_id_map(before), _explicit_id_map(after)
+    diags: list[dict[str, Any]] = []
+    for sid, bstage in bmap.items():
+        astage = amap.get(sid)
+        if astage is None:
+            continue
+        for field in _PLAN_CONTENT_FIELDS:
+            bv, av = bstage.get(field), astage.get(field)
+            if field == "key_concepts":
+                changed = _as_str_tuple(bv) != _as_str_tuple(av)
+            else:
+                changed = str(bv or "") != str(av or "")
+            if changed:
+                diags.append(
+                    {
+                        "type": "stage_content_changed",
+                        "stage_id": sid,
+                        "field": field,
+                        "reason": "applied_plan_must_preserve_stage_content",
+                    }
+                )
+    return diags
+
+
+def apply_pedagogical_plan(
+    stages: Sequence[Mapping[str, Any]], plan: PedagogicalPlan
+) -> PedagogicalPlanResult:
+    """Apply plan moves to reorder stages, with conservative fallback.
+
+    Each move pulls ``stage_id`` out of the working order and reinserts it
+    immediately after ``after_stage_id`` (or at the front when None). Any
+    invalid move or safety-verifier diagnostic returns the original order.
+    Input stages and plan are never mutated; returned stages are deep copies.
+    """
+    original = [copy.deepcopy(dict(s)) for s in stages]
+    identities = [_stage_identity(s, i) for i, s in enumerate(original)]
+
+    # Preflight: duplicate identities would let a later stage be silently
+    # dropped (collapsed onto the first occurrence). Refuse to apply.
+    counts: dict[str, int] = {}
+    for ident in identities:
+        counts[ident] = counts.get(ident, 0) + 1
+    dupes = sorted(sid for sid, n in counts.items() if n > 1)
+    if dupes:
+        return PedagogicalPlanResult(
+            stages=tuple(original),
+            applied=False,
+            fallback_reason="duplicate_stage_identity",
+            diagnostics=(
+                {
+                    "type": "duplicate_stage_identity",
+                    "stage_ids": dupes,
+                    "reason": "stage_identities_must_be_unique_to_apply_plan",
+                },
+            ),
+        )
+
+    stage_by_id: dict[str, Mapping[str, Any]] = {}
+    for ident, stage in zip(identities, original):
+        stage_by_id.setdefault(ident, stage)
+
+    work = list(identities)
+    moved: set[str] = set()
+    for move in plan.moves:
+        sid, after = move.stage_id, move.after_stage_id
+        diag: dict[str, Any] | None = None
+        if sid not in stage_by_id:
+            diag = {"type": "invalid_plan_move", "stage_id": sid, "reason": "stage_id_not_found"}
+        elif sid in moved:
+            diag = {"type": "invalid_plan_move", "stage_id": sid, "reason": "duplicate_moved_stage_id"}
+        elif after is not None and after == sid:
+            diag = {"type": "invalid_plan_move", "stage_id": sid, "after_stage_id": after,
+                    "reason": "self_move_not_allowed"}
+        elif after is not None and after not in stage_by_id:
+            diag = {"type": "invalid_plan_move", "stage_id": sid, "after_stage_id": after,
+                    "reason": "after_stage_id_not_found"}
+        if diag is not None:
+            return PedagogicalPlanResult(
+                stages=tuple(original), applied=False,
+                fallback_reason="invalid_plan_move", diagnostics=(diag,),
+            )
+        moved.add(sid)
+        work.remove(sid)
+        if after is None:
+            work.insert(0, sid)
+        else:
+            work.insert(work.index(after) + 1, sid)
+
+    reordered = [stage_by_id[ident] for ident in work]
+    vdiags = (
+        _verify_stage_id_set(original, reordered)
+        + _verify_stage_coverage(original, reordered)
+        + _verify_stage_content(original, reordered)
+    )
+    if vdiags:
+        return PedagogicalPlanResult(
+            stages=tuple(original), applied=False,
+            fallback_reason="safety_verifier_failed", diagnostics=tuple(vdiags),
+        )
+    return PedagogicalPlanResult(
+        stages=tuple(reordered), applied=True, fallback_reason=None, diagnostics=(),
     )
