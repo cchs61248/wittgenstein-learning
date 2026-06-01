@@ -100,6 +100,7 @@ def _mk_orch_v2() -> LearningOrchestrator:
     })
     orch.canonicalizer = MagicMock()
     orch.canonicalizer.run = AsyncMock(return_value={"mappings": []})
+    orch.pedagogical_planner = MagicMock()
     orch._pending_stages = None
     orch._pending_start_args = None
     orch._check_stage_quality = MagicMock(return_value=[])
