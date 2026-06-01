@@ -27,11 +27,12 @@
 
 **多來源 session**：可同時上傳多份檔案 + URL + 文字，前端會強制使用者選「是否同一教材」radio（1 source 自動視為同一）；切分流程統一走 `per_source_split`（逐檔切 + 程式合併），由 `same_material` 決定後處理模式（見下）。
 
-### 教材切分（2026-05-27 統一架構；2026-05-29 mode-aware 後處理）
+### 教材切分（2026-05-27 統一架構；2026-05-29 mode-aware 後處理；2026-06-01 Phase 4 跨教材排序）
 
 - **唯一路徑**：所有 session 走 V2 小檔逐檔切（`single_split` 或 `per_source_split`），V1 / V2 大檔 / Plan B 全部刪除；reducer 改為非主線（unified path `reducer_skipped=True`，`global_curriculum_reducer` / `macro_region_refiner` prompt 仍留存但不呼叫）。SplitterVerifier 非阻塞（soft-pass / false-positive filter / bounded reroll，無 fail-hard）
 - **`same_material` 控制 ContentOutline（Phase 3，2026-05-29 起）**：`same_material=True` → **一律跳過 Outline**（含 ≥3 章 EPUB）；只有 `same_material=False`（不同教材）才整批跑一次 Outline 餵給逐檔 Splitter。原「同教材 ≥3 章也跑 Outline」規則已移除——global outline 的跨章 `named_cases` 會把不同章同主題 chunk 併進同一 stage（章節邊界破壞器），章節排序改由確定性 `SourceOrderResolver` 處理
 - **Mode-aware 後處理**：`choose_postprocess_mode(n_sources, same_material)` 分流；只有 `cross_material_merge_and_coordinate`（多本不同書）才跑 jaccard / LLM consolidator 等合併層，單 source 與同教材只做確定性排序 + 收尾，不合併 stage
+- **Phase 4 跨教材教學循序排序（COMPLETE，預設 off）**：多本不同教材排成「概論→基礎→核心→進階→應用→總結」。`PedagogicalPlannerAgent` 只提 move plan、程式驗證覆蓋後套用、失敗安全 fallback。env `CROSS_MATERIAL_PEDAGOGICAL_PLANNER=1` 啟用，且需 `same_material=False` + 過 activation gate（chunks≥30/stages≥6/sources≥3）；flag-off bit-for-bit 等價。接在 `finalize_curriculum_stages` 之後成為最後動順序者。Live 驗收 `sess_r14gdzg7x` PASS（summary 由中段移到最後）。詳見 [CURRICULUM_SPLIT_FLOWS §七-A](./CURRICULUM_SPLIT_FLOWS.md)
 - **EPUB 上傳即切章**：`POST /upload` 收 `.epub` 時呼叫 `split_epub_by_toc` 回 N 個 file_id；前端展開為 N 個 source items
 - **閾值 env 化**：`STAGE_TITLE_MERGE_THRESHOLD`（預設 0.85）控制標題去重合併粒度
 - **Canonicalize 可選**：`CONCEPT_CANONICALIZE=1` 啟用統一關鍵詞命名（預設 off）
@@ -193,6 +194,7 @@ npm run lint
 | `LLM_CACHE_ENABLED` | `1` 啟用 curriculum LLM result cache | `0` |
 | `STAGE_TITLE_MERGE_THRESHOLD` | stage 標題去重合併閾值（0~1）；高=保守、低=積極合併 | `0.85` |
 | `CONCEPT_CANONICALIZE` | `1` 時 stage 合併後再跑 ConceptCanonicalize LLM 統一關鍵詞 | `0` |
+| `CROSS_MATERIAL_PEDAGOGICAL_PLANNER` | `1` 啟用 Phase 4 跨教材教學循序重排（僅 `same_material=False` + 過 gate；off 時 bit-for-bit 等價） | `0` |
 | `SQLITE_JOURNAL_MODE` | SQLite journal mode（Docker worker volume 建議 WAL） | `WAL` |
 
 > `PASS_THRESHOLD=0.75` 與 `MAX_STAGE_ATTEMPTS=3` 寫死在 orchestrator 中。Arq 相關：`ARQ_MAX_JOBS`（預設 1）、`ARQ_JOB_TIMEOUT_S`（預設 7200）、`LLM_CACHE_EVICT_DAYS`（預設 90）。完整列表見 [BACKEND_FLOW §10](./BACKEND_FLOW.md#10-設定與環境變數)。
@@ -232,7 +234,8 @@ backend/
 │   ├── question_generator.py   # 出題（布魯姆 + teaching_intent 對齊 + JSON repair）
 │   ├── evaluator.py            # 評分 + misconception_patterns 結構化診斷（Phase 3）
 │   ├── progress_manager.py     # 決策（純規則，high_severity / repeated_patterns，Phase 4）
-│   └── drift_verifier.py       # Citation accuracy 驗證（逐條 claim 核對，Phase 4）
+│   ├── drift_verifier.py       # Citation accuracy 驗證（逐條 claim 核對，Phase 4）
+│   └── （curriculum-build agents）content_outline / splitter_verifier / stage_consolidator / concept_canonicalize / pedagogical_planner（跨教材教學循序重排）
 ├── orchestrator/
 │   ├── learning_orchestrator.py  # 協調所有元件的主控流程
 │   ├── curriculum_pipeline_v2.py # V2 小檔統一切分 pipeline（single/per-source split；reducer_skipped）
