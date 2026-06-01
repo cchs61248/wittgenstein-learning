@@ -5,13 +5,15 @@ This module is intentionally **pure and deterministic**. It currently contains:
 - T1: StageCard normalization with heuristic role / difficulty classification.
 - T2: prerequisite graph construction with sparse high-confidence edges,
   cycle detection, and unrelated cluster diagnostics.
+- T3: warn-only ordering plan construction with deterministic topological
+  recommendations and current-order diagnostics.
 
 Scope guard (see ``docs/phase4_implementation_tickets.md``):
 - No LLM calls, no prompt, no external dependency.
-- No stage reordering, no merge, no chunk reassignment, no DB migration.
+- No persisted stage reordering, no merge, no chunk reassignment, no DB migration.
 - Never mutates input stages or cards; output is fully deterministic.
 
-T3 (ordering scorer) and T4 (flagged pipeline integration) build on these.
+T4 (flagged pipeline integration) builds on these utilities.
 """
 from __future__ import annotations
 
@@ -407,3 +409,201 @@ def build_prerequisite_graph(
         stage_ids=stage_ids, edges=edges, clusters=clusters, has_cycle=has_cycle
     )
     return graph, diagnostics
+
+
+# ===========================================================================
+# T3 — Ordering scorer (warn-only)
+# ===========================================================================
+# Produces a deterministic recommended stage order + ordering diagnostics.
+# The diagnostics always describe the CURRENT order's problems, never the
+# recommended order. Nothing here reorders persisted stages or mutates input —
+# the recommendation is advisory until T4 (flagged pipeline integration).
+
+# Pedagogical role rank for ordering. reference sits after summary (side
+# material / appendix); unknown sits last so weak metadata never drives order.
+ROLE_ORDER_RANK: dict[str, int] = {
+    "overview": 0,
+    "foundation": 1,
+    "core": 2,
+    "application": 3,
+    "advanced": 4,
+    "summary": 5,
+    "reference": 6,
+    "unknown": 7,
+}
+
+# Roles excluded from "main teaching" reasoning (side material / weak-signal).
+_NON_TEACHING_ROLES = frozenset({"reference", "unknown"})
+# Additionally excludes summary (positional closure): used where a trailing
+# summary should not count as "teaching content that still follows".
+_POSITIONAL_OR_WEAK_ROLES = frozenset({"summary", "reference", "unknown"})
+# Difficulty drop (prev - curr) at/above this between adjacent main teaching
+# stages is flagged as a regression.
+_DIFFICULTY_REGRESSION_DROP = 2
+
+
+@dataclass(frozen=True)
+class OrderingPlan:
+    current_stage_ids: tuple[str, ...]
+    recommended_stage_ids: tuple[str, ...]
+    order_changed: bool
+    diagnostics: tuple[dict[str, Any], ...]
+
+
+def _role_rank(role: str) -> int:
+    return ROLE_ORDER_RANK.get(role, ROLE_ORDER_RANK["unknown"])
+
+
+def _topo_sort(cards: Sequence[StageCard], graph: PrerequisiteGraph) -> tuple[str, ...]:
+    """Deterministic Kahn topological sort.
+
+    Among prerequisite-satisfied candidates, prefer earlier pedagogical role,
+    then lower difficulty, then original stage_index, then stage_id (stable).
+    Edges referencing absent stage ids are ignored.
+    """
+    card_by_id: dict[str, StageCard] = {}
+    for c in cards:
+        card_by_id.setdefault(c.stage_id, c)
+    ids = list(card_by_id)
+
+    adj: dict[str, list[str]] = {sid: [] for sid in ids}
+    indeg: dict[str, int] = {sid: 0 for sid in ids}
+    seen_edges: set[tuple[str, str]] = set()
+    for edge in graph.edges:
+        b, a = edge.before_stage_id, edge.after_stage_id
+        if b in card_by_id and a in card_by_id and b != a and (b, a) not in seen_edges:
+            seen_edges.add((b, a))
+            adj[b].append(a)
+            indeg[a] += 1
+
+    def priority(sid: str) -> tuple[int, int, int]:
+        # Stable sort + ids preserving input order keeps equal-key ties
+        # deterministic without letting stage_id influence pedagogical order.
+        c = card_by_id[sid]
+        return (_role_rank(c.role), c.difficulty, c.stage_index)
+
+    available = [sid for sid in ids if indeg[sid] == 0]
+    result: list[str] = []
+    while available:
+        available.sort(key=priority)
+        sid = available.pop(0)
+        result.append(sid)
+        for nxt in adj[sid]:
+            indeg[nxt] -= 1
+            if indeg[nxt] == 0:
+                available.append(nxt)
+
+    if len(result) != len(ids):  # defensive: residual cycle among present edges
+        return tuple(ids)
+    return tuple(result)
+
+
+def _ordering_diagnostics(
+    cards: Sequence[StageCard], graph: PrerequisiteGraph
+) -> list[dict[str, Any]]:
+    pos = {c.stage_id: i for i, c in enumerate(cards)}
+    diags: list[dict[str, Any]] = []
+
+    if graph.has_cycle:
+        diags.append(
+            {
+                "type": "prerequisite_cycle_blocks_ordering",
+                "reason": "cycle_detected_in_prerequisite_graph",
+            }
+        )
+
+    for edge in graph.edges:
+        b, a = edge.before_stage_id, edge.after_stage_id
+        if b in pos and a in pos and pos[b] > pos[a]:
+            diags.append(
+                {
+                    "type": "prerequisite_order_violation",
+                    "before_stage_id": b,
+                    "after_stage_id": a,
+                    "reason": edge.reason,
+                    "confidence": edge.confidence,
+                }
+            )
+
+    advanced = [(c.stage_id, pos[c.stage_id]) for c in cards if c.role == "advanced"]
+    for c in cards:
+        if c.role == "overview":
+            oi = pos[c.stage_id]
+            for adv_id, ai in advanced:
+                if ai < oi:
+                    diags.append(
+                        {
+                            "type": "overview_after_advanced",
+                            "stage_id": c.stage_id,
+                            "advanced_stage_id": adv_id,
+                            "reason": "overview_should_precede_advanced_content",
+                        }
+                    )
+
+    # A summary is "in the middle" only if real teaching content follows it.
+    # Another summary after it is positional closure, not teaching content.
+    for i, c in enumerate(cards):
+        if c.role == "summary" and any(
+            later.role not in _POSITIONAL_OR_WEAK_ROLES for later in cards[i + 1:]
+        ):
+            diags.append(
+                {
+                    "type": "summary_in_middle",
+                    "stage_id": c.stage_id,
+                    "reason": "summary_should_follow_main_teaching_stages",
+                }
+            )
+
+    for i, c in enumerate(cards):
+        if c.role == "reference" and any(
+            later.role not in _NON_TEACHING_ROLES for later in cards[i + 1:]
+        ):
+            diags.append(
+                {
+                    "type": "reference_as_main_stage",
+                    "stage_id": c.stage_id,
+                    "reason": "reference_should_be_appendix_or_side_material",
+                }
+            )
+
+    main_seq = [c for c in cards if c.role not in _POSITIONAL_OR_WEAK_ROLES]
+    for prev, curr in zip(main_seq, main_seq[1:]):
+        if prev.difficulty - curr.difficulty >= _DIFFICULTY_REGRESSION_DROP:
+            diags.append(
+                {
+                    "type": "difficulty_regression",
+                    "before_stage_id": prev.stage_id,
+                    "after_stage_id": curr.stage_id,
+                    "before_difficulty": prev.difficulty,
+                    "after_difficulty": curr.difficulty,
+                    "reason": "difficulty_should_progress_gradually",
+                }
+            )
+
+    return diags
+
+
+def build_ordering_plan(
+    cards: Sequence[StageCard], graph: PrerequisiteGraph
+) -> OrderingPlan:
+    """Build a deterministic warn-only ordering plan from cards + graph.
+
+    Diagnostics describe the *current* order. The recommendation is advisory:
+    a prerequisite cycle blocks reorder (keeps current order). Nothing is
+    persisted or mutated here — wiring is deferred to T4.
+    """
+    cards = list(cards)
+    current = tuple(c.stage_id for c in cards)
+    diagnostics = _ordering_diagnostics(cards, graph)
+
+    if graph.has_cycle:
+        recommended = current
+    else:
+        recommended = _topo_sort(cards, graph)
+
+    return OrderingPlan(
+        current_stage_ids=current,
+        recommended_stage_ids=recommended,
+        order_changed=recommended != current,
+        diagnostics=tuple(diagnostics),
+    )
