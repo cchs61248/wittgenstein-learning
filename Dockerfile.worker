@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安裝 tzdata（時區支援）以及 Java 11+（opendataloader-pdf 需要）
+# 安裝 tzdata（時區）、Java 11+（opendataloader-pdf 需要）、ffmpeg（yt-dlp 抽取/轉碼音訊需要）
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-21-jre-headless tzdata \
+    && apt-get install -y --no-install-recommends openjdk-21-jre-headless tzdata ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt backend/requirements.txt
