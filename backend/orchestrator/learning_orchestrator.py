@@ -15,6 +15,7 @@ from ..agents.drift_verifier import DriftVerifierAgent
 from ..agents.splitter_verifier import SplitterVerifierAgent
 from ..agents.concept_canonicalize import ConceptCanonicalizeAgent
 from ..agents.stage_consolidator import StageConsolidatorAgent
+from ..agents.pedagogical_planner import PedagogicalPlannerAgent
 from ..memory.working_memory import get_working_memory, TurnContext
 from ..memory import session_memory, longterm_memory
 from ..db.inflight_lock import has_session_inflight
@@ -130,6 +131,7 @@ class LearningOrchestrator:
         self.splitter_verifier = SplitterVerifierAgent(llm, tc)
         self.canonicalizer = ConceptCanonicalizeAgent(llm, tc)
         self.stage_consolidator = StageConsolidatorAgent(llm, tc)
+        self.pedagogical_planner = PedagogicalPlannerAgent(llm, tc)
         self.teacher = TeacherAgent(llm, tc)
         self.questioner = QuestionGeneratorAgent(llm, tc)
         self.evaluator = EvaluatorAgent(llm, tc)

@@ -46,6 +46,13 @@ from ..utils.small_curriculum import (
 )
 from ..utils.stage_budget import compute_dynamic_max_stages
 from ..utils.curriculum_llm_meter import CurriculumLlmMeter, assess_curriculum_cost
+from ..utils.pedagogical_planner import (
+    apply_pedagogical_plan,
+    build_ordering_plan,
+    build_prerequisite_graph,
+    build_stage_cards,
+    _stage_identity,
+)
 
 if TYPE_CHECKING:
     from .learning_orchestrator import LearningOrchestrator
@@ -625,6 +632,156 @@ async def _save_checkpoint(
     )
 
 
+def _is_cross_material_pedagogical_planner_enabled() -> bool:
+    """Phase 4 / T4c feature flag. Default off — any value other than an explicit
+    truthy token leaves the planner disabled (and the pipeline bit-for-bit)."""
+    return str(os.getenv("CROSS_MATERIAL_PEDAGOGICAL_PLANNER", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _pedagogical_planner_gate_reasons(
+    *,
+    same_material: bool,
+    chunk_count: int,
+    stage_count: int,
+    source_count: int,
+    ordering_plan,
+    graph,
+) -> list[str]:
+    """Conservative activation gate. Returns the (possibly empty) list of reasons
+    the LLM planner must NOT be invoked; empty list ⇒ gate passes."""
+    reasons: list[str] = []
+    if same_material:
+        reasons.append("same_material")
+    if chunk_count < 30:
+        reasons.append("insufficient_chunks")
+    if stage_count < 6:
+        reasons.append("insufficient_stages")
+    if source_count < 3:
+        reasons.append("insufficient_sources")
+    if not ordering_plan.order_changed:
+        reasons.append("no_order_change_recommended")
+    if graph.has_cycle:
+        reasons.append("prerequisite_cycle")
+    return reasons
+
+
+async def _maybe_apply_cross_material_pedagogical_planner(
+    *,
+    stages: list[dict],
+    chunks: list[dict],
+    same_material: bool,
+    planner_agent,
+    quality_warnings: dict,
+) -> list[dict]:
+    """T4c seam — the only place Phase 4 touches the live pipeline.
+
+    Flag off → returns ``stages`` unchanged, writes no warning, and calls no
+    Phase 4 utility (bit-for-bit equivalence). Flag on → builds deterministic
+    diagnostics, applies the activation gate, and only calls the LLM planner for
+    large cross-material curricula. Planner / parse / verifier failures fall back
+    to the original stage order. The (possibly reordered) stage list is returned;
+    everything else is recorded warn-only under
+    ``quality_warnings["cross_material_pedagogical_planner"]``.
+    """
+    if not _is_cross_material_pedagogical_planner_enabled():
+        return list(stages)
+
+    try:
+        cards, card_diags = build_stage_cards(stages)
+        graph, graph_diags = build_prerequisite_graph(cards)
+        ordering_plan = build_ordering_plan(cards, graph)
+
+        source_count = count_sources(chunks)
+        gate_reasons = _pedagogical_planner_gate_reasons(
+            same_material=same_material,
+            chunk_count=len(chunks),
+            stage_count=len(stages),
+            source_count=source_count,
+            ordering_plan=ordering_plan,
+            graph=graph,
+        )
+        gate_passed = not gate_reasons
+
+        planner_mode = "diagnostics_only"
+        agent_diags: list[dict] = []
+        applier_diags: list[dict] = []
+        fallback_reason: str | None = None
+        applied_stage_ids: list[str] | None = None
+        result_stages = stages
+
+        if gate_passed:
+            agent_result = await planner_agent.propose_plan(
+                stages=stages, cards=cards, graph=graph, ordering_plan=ordering_plan,
+            )
+            agent_diags = list(agent_result.diagnostics)
+            if agent_result.plan is None:
+                planner_mode = "fallback"
+                fallback_reason = "planner_agent_failed"
+            else:
+                apply_result = apply_pedagogical_plan(stages, agent_result.plan)
+                applier_diags = list(apply_result.diagnostics)
+                if apply_result.applied:
+                    result_stages = list(apply_result.stages)
+                    planner_mode = "applied"
+                    applied_stage_ids = [
+                        _stage_identity(s, i) for i, s in enumerate(result_stages)
+                    ]
+                    _log.info(
+                        "v2 pedagogical planner applied  stages=%d", len(result_stages),
+                    )
+                else:
+                    planner_mode = "fallback"
+                    fallback_reason = apply_result.fallback_reason
+
+        warning: dict = {
+            "type": "cross_material_pedagogical_planner",
+            "planner_mode": planner_mode,
+            "enabled": True,
+            "gate_passed": gate_passed,
+            "gate_reasons": gate_reasons,
+            "source_count": source_count,
+            "stage_count": len(stages),
+            "chunk_count": len(chunks),
+            "current_stage_ids": list(ordering_plan.current_stage_ids),
+            "recommended_stage_ids": list(ordering_plan.recommended_stage_ids),
+            "order_changed": ordering_plan.order_changed,
+            "stage_card_diagnostics": list(card_diags),
+            "graph_diagnostics": list(graph_diags),
+            "ordering_diagnostics": [dict(d) for d in ordering_plan.diagnostics],
+            "agent_diagnostics": agent_diags,
+            "applier_diagnostics": applier_diags,
+        }
+        if fallback_reason is not None:
+            warning["fallback_reason"] = fallback_reason
+        if applied_stage_ids is not None:
+            warning["applied_stage_ids"] = applied_stage_ids
+
+        quality_warnings["cross_material_pedagogical_planner"] = warning
+        return list(result_stages)
+
+    except Exception as exc:  # noqa: BLE001 — planner must never abort the build
+        _log.warning("v2 pedagogical planner error  err=%s", exc)
+        quality_warnings["cross_material_pedagogical_planner"] = {
+            "type": "cross_material_pedagogical_planner",
+            "planner_mode": "error_fallback",
+            "enabled": True,
+            "gate_passed": False,
+            "gate_reasons": ["planner_exception"],
+            "diagnostics": [
+                {
+                    "type": "cross_material_pedagogical_planner_error",
+                    "reason": type(exc).__name__,
+                }
+            ],
+        }
+        return list(stages)
+
+
 async def run_start_session_v2(
     orch: "LearningOrchestrator",
     *,
@@ -1060,6 +1217,18 @@ async def run_start_session_v2(
                     session_id, w.get("stage_id"), w.get("old_title"),
                     w.get("new_title"), w.get("pattern"),
                 )
+
+    # Phase 4 / T4c: cross-material pedagogical reorder behind a default-off
+    # feature flag. Flag off → no-op (bit-for-bit). Runs before finalization so
+    # stage_ids / source metadata are still readable, and finalize keeps owning
+    # the output schema.
+    stages = await _maybe_apply_cross_material_pedagogical_planner(
+        stages=stages,
+        chunks=source_chunks,
+        same_material=same_material,
+        planner_agent=orch.pedagogical_planner,
+        quality_warnings=quality_warnings,
+    )
 
     stages = finalize_curriculum_stages(stages, source_chunks)
 
