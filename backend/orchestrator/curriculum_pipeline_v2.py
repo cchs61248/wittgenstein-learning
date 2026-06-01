@@ -670,13 +670,22 @@ def _pedagogical_planner_gate_reasons(
     return reasons
 
 
+_PEDAGOGICAL_PLANNER_WARNING_SCHEMA_VERSION = 1
+
+
+def _pedagogical_planner_order(stages: list[dict]) -> list[str]:
+    return [_stage_identity(s, i) for i, s in enumerate(stages)]
+
+
 async def _maybe_apply_cross_material_pedagogical_planner(
     *,
+    session_id: str,
     stages: list[dict],
     chunks: list[dict],
     same_material: bool,
     planner_agent,
     quality_warnings: dict,
+    meter: "CurriculumLlmMeter | None" = None,
 ) -> list[dict]:
     """T4c seam — the only place Phase 4 touches the live pipeline.
 
@@ -686,10 +695,22 @@ async def _maybe_apply_cross_material_pedagogical_planner(
     large cross-material curricula. Planner / parse / verifier failures fall back
     to the original stage order. The (possibly reordered) stage list is returned;
     everything else is recorded warn-only under
-    ``quality_warnings["cross_material_pedagogical_planner"]``.
+    ``quality_warnings["cross_material_pedagogical_planner"]`` (schema v1).
+
+    T4d hardens observability only: it adds a versioned warning schema with a
+    run id, explicit agent/apply attempt flags, before/after stage-order
+    snapshots, redacted move summaries, planner meter accounting, and stable log
+    lines. It changes no planner decision, gate criterion, or apply semantics.
     """
     if not _is_cross_material_pedagogical_planner_enabled():
         return list(stages)
+
+    # Computed before any utility call so the exception path can still report
+    # them (no user id; cheap, never raises).
+    run_id = f"phase4_{session_id}_{len(stages)}st_{len(chunks)}ch"
+    stage_order_before = _pedagogical_planner_order(stages)
+    agent_called = False
+    apply_attempted = False
 
     try:
         cards, card_diags = build_stage_cards(stages)
@@ -712,44 +733,60 @@ async def _maybe_apply_cross_material_pedagogical_planner(
         applier_diags: list[dict] = []
         fallback_reason: str | None = None
         applied_stage_ids: list[str] | None = None
+        plan_move_count = 0
+        plan_moves_redacted: list[dict] = []
         result_stages = stages
 
         if gate_passed:
+            agent_called = True
             agent_result = await planner_agent.propose_plan(
                 stages=stages, cards=cards, graph=graph, ordering_plan=ordering_plan,
             )
+            if meter:
+                meter.record("PedagogicalPlannerAgent")
             agent_diags = list(agent_result.diagnostics)
             if agent_result.plan is None:
                 planner_mode = "fallback"
                 fallback_reason = "planner_agent_failed"
             else:
+                plan_move_count = len(agent_result.plan.moves)
+                plan_moves_redacted = [
+                    {"stage_id": m.stage_id, "after_stage_id": m.after_stage_id}
+                    for m in agent_result.plan.moves
+                ]
+                apply_attempted = True
                 apply_result = apply_pedagogical_plan(stages, agent_result.plan)
                 applier_diags = list(apply_result.diagnostics)
                 if apply_result.applied:
                     result_stages = list(apply_result.stages)
                     planner_mode = "applied"
-                    applied_stage_ids = [
-                        _stage_identity(s, i) for i, s in enumerate(result_stages)
-                    ]
-                    _log.info(
-                        "v2 pedagogical planner applied  stages=%d", len(result_stages),
-                    )
+                    applied_stage_ids = _pedagogical_planner_order(result_stages)
                 else:
                     planner_mode = "fallback"
                     fallback_reason = apply_result.fallback_reason
 
+        stage_order_after = _pedagogical_planner_order(result_stages)
+
         warning: dict = {
             "type": "cross_material_pedagogical_planner",
+            "schema_version": _PEDAGOGICAL_PLANNER_WARNING_SCHEMA_VERSION,
+            "run_id": run_id,
             "planner_mode": planner_mode,
             "enabled": True,
             "gate_passed": gate_passed,
             "gate_reasons": gate_reasons,
+            "agent_called": agent_called,
+            "apply_attempted": apply_attempted,
             "source_count": source_count,
             "stage_count": len(stages),
             "chunk_count": len(chunks),
+            "stage_order_before": stage_order_before,
+            "stage_order_after": stage_order_after,
             "current_stage_ids": list(ordering_plan.current_stage_ids),
             "recommended_stage_ids": list(ordering_plan.recommended_stage_ids),
             "order_changed": ordering_plan.order_changed,
+            "plan_move_count": plan_move_count,
+            "plan_moves_redacted": plan_moves_redacted,
             "stage_card_diagnostics": list(card_diags),
             "graph_diagnostics": list(graph_diags),
             "ordering_diagnostics": [dict(d) for d in ordering_plan.diagnostics],
@@ -762,16 +799,45 @@ async def _maybe_apply_cross_material_pedagogical_planner(
             warning["applied_stage_ids"] = applied_stage_ids
 
         quality_warnings["cross_material_pedagogical_planner"] = warning
+
+        if planner_mode == "applied":
+            _log.info(
+                "v2 pedagogical planner applied  session=%s  run_id=%s  moves=%d  stages=%d",
+                session_id, run_id, plan_move_count, len(result_stages),
+            )
+        elif planner_mode == "fallback":
+            _log.warning(
+                "v2 pedagogical planner fallback  session=%s  run_id=%s  reason=%s  "
+                "agent_diags=%d  applier_diags=%d",
+                session_id, run_id, fallback_reason, len(agent_diags), len(applier_diags),
+            )
+        else:  # diagnostics_only
+            _log.info(
+                "v2 pedagogical planner diagnostics_only  session=%s  run_id=%s  "
+                "reasons=%s  stages=%d  chunks=%d  sources=%d",
+                session_id, run_id, gate_reasons, len(stages), len(chunks), source_count,
+            )
         return list(result_stages)
 
     except Exception as exc:  # noqa: BLE001 — planner must never abort the build
-        _log.warning("v2 pedagogical planner error  err=%s", exc)
+        _log.warning(
+            "v2 pedagogical planner error_fallback  session=%s  run_id=%s  err=%s",
+            session_id, run_id, exc,
+        )
         quality_warnings["cross_material_pedagogical_planner"] = {
             "type": "cross_material_pedagogical_planner",
+            "schema_version": _PEDAGOGICAL_PLANNER_WARNING_SCHEMA_VERSION,
+            "run_id": run_id,
             "planner_mode": "error_fallback",
             "enabled": True,
             "gate_passed": False,
             "gate_reasons": ["planner_exception"],
+            "agent_called": agent_called,
+            "apply_attempted": apply_attempted,
+            "stage_count": len(stages),
+            "chunk_count": len(chunks),
+            "stage_order_before": stage_order_before,
+            "stage_order_after": stage_order_before,
             "diagnostics": [
                 {
                     "type": "cross_material_pedagogical_planner_error",
@@ -1223,11 +1289,13 @@ async def run_start_session_v2(
     # stage_ids / source metadata are still readable, and finalize keeps owning
     # the output schema.
     stages = await _maybe_apply_cross_material_pedagogical_planner(
+        session_id=session_id,
         stages=stages,
         chunks=source_chunks,
         same_material=same_material,
         planner_agent=orch.pedagogical_planner,
         quality_warnings=quality_warnings,
+        meter=meter,
     )
 
     stages = finalize_curriculum_stages(stages, source_chunks)

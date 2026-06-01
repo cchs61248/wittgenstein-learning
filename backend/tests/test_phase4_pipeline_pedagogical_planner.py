@@ -87,11 +87,21 @@ class _FakePlanner:
         return self._result
 
 
-def _run(stages, chunks, *, same_material, planner, qw):
+class _FakeMeter:
+    def __init__(self):
+        self.calls = []
+
+    def record(self, name):
+        self.calls.append(name)
+
+
+def _run(stages, chunks, *, same_material, planner, qw,
+         session_id="sess_t4d", meter=None):
     return asyncio.run(
         _maybe_apply_cross_material_pedagogical_planner(
-            stages=stages, chunks=chunks, same_material=same_material,
-            planner_agent=planner, quality_warnings=qw,
+            session_id=session_id, stages=stages, chunks=chunks,
+            same_material=same_material, planner_agent=planner,
+            quality_warnings=qw, meter=meter,
         )
     )
 
@@ -346,6 +356,148 @@ class TestExceptionSafety(unittest.TestCase):
         self.assertEqual(w["planner_mode"], "error_fallback")
         self.assertEqual([s["stage_id"] for s in out],
                          [s["stage_id"] for s in _reorderable_stages()])
+
+
+def _applied_planner(move_stage="s5"):
+    plan = PedagogicalPlan(
+        moves=(PedagogicalPlanMove(stage_id=move_stage, after_stage_id=None,
+                                   reason="lead with overview"),),
+        rationale="overview first",
+    )
+    return _FakePlanner(result=PedagogicalPlannerAgentResult(plan=plan, diagnostics=()))
+
+
+def _run_on(stages, *, same_material=False, planner=None, meter=None,
+            session_id="sess_t4d"):
+    qw = {}
+    planner = planner if planner is not None else _FakePlanner()
+    with mock.patch.dict(os.environ, {_FLAG: "1"}):
+        out = _run(stages, _chunks(), same_material=same_material,
+                   planner=planner, qw=qw, meter=meter, session_id=session_id)
+    return out, qw["cross_material_pedagogical_planner"]
+
+
+class TestObservabilitySchema(unittest.TestCase):
+    def test_warning_has_schema_version_and_run_id(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner())
+        self.assertEqual(w["schema_version"], 1)
+        self.assertTrue(w["run_id"].startswith("phase4_sess_t4d_"))
+
+    def test_run_id_omits_user_id(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner())
+        self.assertIn("6st", w["run_id"])
+        self.assertIn("30ch", w["run_id"])
+
+
+class TestObservabilityAttemptFlags(unittest.TestCase):
+    def test_diagnostics_only_flags_false(self):
+        _, w = _run_on(_reorderable_stages(), same_material=True)
+        self.assertFalse(w["agent_called"])
+        self.assertFalse(w["apply_attempted"])
+
+    def test_applied_flags_true(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner())
+        self.assertTrue(w["agent_called"])
+        self.assertTrue(w["apply_attempted"])
+
+    def test_plan_none_agent_true_apply_false(self):
+        planner = _FakePlanner(result=PedagogicalPlannerAgentResult(
+            plan=None, diagnostics=({"type": "pedagogical_planner_invalid_json"},)))
+        _, w = _run_on(_reorderable_stages(), planner=planner)
+        self.assertTrue(w["agent_called"])
+        self.assertFalse(w["apply_attempted"])
+
+    def test_applier_failure_both_true(self):
+        plan = PedagogicalPlan(
+            moves=(PedagogicalPlanMove(stage_id="does_not_exist",
+                                       after_stage_id=None, reason="r"),),
+            rationale="bad")
+        planner = _FakePlanner(
+            result=PedagogicalPlannerAgentResult(plan=plan, diagnostics=()))
+        _, w = _run_on(_reorderable_stages(), planner=planner)
+        self.assertTrue(w["agent_called"])
+        self.assertTrue(w["apply_attempted"])
+
+
+class TestObservabilityStageOrder(unittest.TestCase):
+    def test_applied_before_after_differ(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner("s5"))
+        self.assertEqual(w["stage_order_before"][0], "s0")
+        self.assertEqual(w["stage_order_after"][0], "s5")
+
+    def test_fallback_after_equals_before(self):
+        planner = _FakePlanner(result=PedagogicalPlannerAgentResult(
+            plan=None, diagnostics=()))
+        _, w = _run_on(_reorderable_stages(), planner=planner)
+        self.assertEqual(w["stage_order_after"], w["stage_order_before"])
+
+    def test_diagnostics_only_after_equals_before(self):
+        _, w = _run_on(_reorderable_stages(), same_material=True)
+        self.assertEqual(w["stage_order_after"], w["stage_order_before"])
+
+
+class TestObservabilityRedactedPlan(unittest.TestCase):
+    def test_applied_plan_move_count_and_redacted(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner("s5"))
+        self.assertEqual(w["plan_move_count"], 1)
+        self.assertEqual(w["plan_moves_redacted"],
+                         [{"stage_id": "s5", "after_stage_id": None}])
+
+    def test_redacted_plan_has_no_reason(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner("s5"))
+        self.assertNotIn("reason", w["plan_moves_redacted"][0])
+
+    def test_no_plan_move_count_zero(self):
+        _, w = _run_on(_reorderable_stages(), same_material=True)
+        self.assertEqual(w["plan_move_count"], 0)
+        self.assertEqual(w["plan_moves_redacted"], [])
+
+
+class TestObservabilityMeter(unittest.TestCase):
+    def test_records_planner_on_success(self):
+        meter = _FakeMeter()
+        _run_on(_reorderable_stages(), planner=_applied_planner(), meter=meter)
+        self.assertEqual(meter.calls, ["PedagogicalPlannerAgent"])
+
+    def test_records_planner_when_plan_none(self):
+        meter = _FakeMeter()
+        planner = _FakePlanner(result=PedagogicalPlannerAgentResult(
+            plan=None, diagnostics=()))
+        _run_on(_reorderable_stages(), planner=planner, meter=meter)
+        self.assertEqual(meter.calls, ["PedagogicalPlannerAgent"])
+
+    def test_does_not_record_when_gate_fails(self):
+        meter = _FakeMeter()
+        _run_on(_reorderable_stages(), same_material=True, meter=meter)
+        self.assertEqual(meter.calls, [])
+
+    def test_does_not_record_when_agent_raises(self):
+        meter = _FakeMeter()
+        planner = _FakePlanner(exc=RuntimeError("boom"))
+        _run_on(_reorderable_stages(), planner=planner, meter=meter)
+        self.assertEqual(meter.calls, [])
+
+    def test_meter_none_is_safe(self):
+        # default meter=None must not raise on the success path
+        _run_on(_reorderable_stages(), planner=_applied_planner(), meter=None)
+
+
+class TestObservabilityErrorFallback(unittest.TestCase):
+    def test_error_fallback_keeps_schema_and_order(self):
+        planner = _FakePlanner(exc=RuntimeError("boom"))
+        _, w = _run_on(_reorderable_stages(), planner=planner)
+        self.assertEqual(w["schema_version"], 1)
+        self.assertTrue(w["run_id"].startswith("phase4_sess_t4d_"))
+        self.assertEqual(w["planner_mode"], "error_fallback")
+        self.assertEqual(w["stage_order_after"], w["stage_order_before"])
+
+    def test_error_fallback_reports_attempt_flags(self):
+        planner = _FakePlanner(exc=RuntimeError("boom"))
+        _, w = _run_on(_reorderable_stages(), planner=planner)
+        # exception is raised inside the agent await → agent_called True,
+        # apply never reached → apply_attempted False
+        self.assertTrue(w["agent_called"])
+        self.assertFalse(w["apply_attempted"])
 
 
 if __name__ == "__main__":
