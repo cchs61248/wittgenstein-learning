@@ -1,0 +1,27 @@
+# GPU 加速 override（選用）。只在「有 NVIDIA GPU + NVIDIA Container Toolkit」的主機使用。
+#
+# 用法：
+#   有 GPU：docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#   無 GPU：照舊 docker compose up -d --build（程式碼會自動以 CPU 執行）
+#
+# 為什麼用 override 而非寫進 base：
+#   base docker-compose.yml 不含 GPU 保留設定，任何機器都能 `up`。
+#   若把 devices: nvidia 寫進 base，無 GPU 主機會因找不到 nvidia driver 而啟動失敗。
+#
+# Windows 前置：Docker Desktop 需走 WSL2 backend，且已安裝 NVIDIA 驅動。
+#   驗證：docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+#
+# YouTube ASR 跑在 api 容器，故 GPU 掛在 api。
+
+services:
+  api:
+    environment:
+      # auto = 偵測到 GPU 就用 cuda，否則 cpu；也可強制 cuda / cpu
+      WHISPER_DEVICE: auto
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

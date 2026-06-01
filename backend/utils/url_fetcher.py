@@ -2,6 +2,7 @@
 URL 內容擷取工具。
 支援：公開網頁（readability-lxml 抽正文）、YouTube 影片（字幕）。
 """
+import os
 import re
 import httpx
 import tempfile
@@ -70,6 +71,29 @@ class YoutubeTranscriptUnavailable(Exception):
 
 
 ProgressCallback = Callable[[Literal["download", "transcribe"], float], None]
+
+
+def _resolve_whisper_device() -> tuple[str, str]:
+    """決定 faster-whisper 的 (device, compute_type)。
+
+    優先序：WHISPER_DEVICE 環境變數（auto|cuda|cpu）> 自動偵測 CUDA > CPU。
+    這讓同一份程式碼/映像在有 GPU 的主機自動走 cuda，
+    在沒有 GPU 的主機自動退回 cpu，無需改 code。
+    compute_type 可用 WHISPER_COMPUTE_TYPE 覆寫（cuda 預設 float16、cpu 預設 int8）。
+    """
+    forced = (os.getenv("WHISPER_DEVICE") or "auto").strip().lower()
+    override_compute = os.getenv("WHISPER_COMPUTE_TYPE")
+
+    def _cuda_available() -> bool:
+        try:
+            import ctranslate2  # faster-whisper 的後端
+            return ctranslate2.get_cuda_device_count() > 0
+        except Exception:
+            return False
+
+    if forced == "cuda" or (forced == "auto" and _cuda_available()):
+        return "cuda", (override_compute or "float16")
+    return "cpu", (override_compute or "int8")
 
 
 def fetch_url_content(
@@ -250,7 +274,15 @@ def _transcribe_youtube_audio(
         if not audio_path.exists():
             raise RuntimeError("音訊下載失敗（找不到轉換後 mp3）")
 
-        model = WhisperModel("small", device="cpu", compute_type="int8")
+        model_name = os.getenv("WHISPER_MODEL", "small")
+        device, compute_type = _resolve_whisper_device()
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        except Exception:
+            # GPU 不可用（缺 CUDA/cuDNN 函式庫、driver 不符或 VRAM 不足）→ 自動退回 CPU。
+            if device == "cpu":
+                raise
+            model = WhisperModel(model_name, device="cpu", compute_type="int8")
         segments, info2 = model.transcribe(
             str(audio_path),
             language=None,
