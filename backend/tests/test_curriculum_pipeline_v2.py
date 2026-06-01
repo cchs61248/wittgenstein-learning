@@ -13,6 +13,12 @@ from backend.orchestrator.curriculum_pipeline_v2 import (
     run_start_session_v2,
 )
 from backend.orchestrator.learning_orchestrator import LearningOrchestrator
+from backend.agents.pedagogical_planner import PedagogicalPlannerAgentResult
+from backend.utils.pedagogical_planner import (
+    PedagogicalPlan,
+    PedagogicalPlanMove,
+    _stage_identity,
+)
 
 
 def _chunks(n: int = 30, source_id: str = "src_a") -> list[dict]:
@@ -581,6 +587,147 @@ class TestOutlineGating(TestCurriculumPipelineV2):
             orch.content_outliner.run.await_count, 1,
             "cross_material 仍應跑 ContentOutline 取全局骨架",
         )
+
+
+# --- T4e: planner-applied order must survive finalization to persistence ---
+
+# reading order (by chunk order_index) is reverse-pedagogical so the deterministic
+# T3 ordering plan recommends a change (order_changed=True ⇒ gate can pass).
+_T4E_SOURCES = {
+    "src_0": [("全書總結與展望", "結語"), ("進階整合應用", "整合應用")],
+    "src_1": [("核心機制：思維鏈 CoT", "CoT機制"), ("核心機制：RAG 檢索", "RAG機制")],
+    "src_2": [("課程總覽與導讀", "課程總覽"), ("基礎概念入門", "基礎概念")],
+}
+
+
+def _t4e_chunks(n_per_source: int = 12) -> list[dict]:
+    chunks: list[dict] = []
+    order = 0
+    for src_idx, src_id in enumerate(["src_0", "src_1", "src_2"]):
+        for i in range(n_per_source):
+            chunks.append({
+                "chunk_id": f"chunk_{src_id}_{i:04d}",
+                "text": f"段落 {i}",
+                "source_id": src_id,
+                "source_index": src_idx,
+                "order_index": order,
+                "source_label": f"書{src_id}",
+                "section_title": "第 1 章",
+            })
+            order += 1
+    return chunks
+
+
+class _RecordingPlanner:
+    """Fake planner agent: records the (finalized) stage order it receives and
+    proposes moving the last stage to the very front — a real, verifiable reorder."""
+
+    def __init__(self):
+        self.input_titles: list[str] | None = None
+        self.calls = 0
+
+    async def propose_plan(self, *, stages, cards, graph, ordering_plan):
+        self.calls += 1
+        self.input_titles = [s.get("title") for s in stages]
+        last_id = _stage_identity(stages[-1], len(stages) - 1)
+        plan = PedagogicalPlan(
+            moves=(PedagogicalPlanMove(stage_id=last_id, after_stage_id=None,
+                                       reason="t4e move last to front"),),
+            rationale="t4e",
+        )
+        return PedagogicalPlannerAgentResult(plan=plan, diagnostics=())
+
+
+def _mk_orch_v2_planner(planner) -> LearningOrchestrator:
+    """Cross-material orch: 3 sources × 2 distinct stages, consolidator skipped,
+    distinct key_concepts (no jaccard merge), ≥2 chunks/stage (no singleton fold)."""
+    orch = _mk_orch_v2()
+    orch.stage_consolidator = MagicMock()
+    orch.stage_consolidator.run = AsyncMock(return_value={"skipped": True})
+    orch.pedagogical_planner = planner
+
+    async def _split(ctx):
+        chunks = ctx.task_payload.get("source_chunks") or []
+        sid = chunks[0]["source_id"] if chunks else "src_0"
+        cids = [c["chunk_id"] for c in chunks]
+        half = max(1, len(cids) // 2)
+        (t1, kc1), (t2, kc2) = _T4E_SOURCES[sid]
+        return {
+            "stages": [
+                {"stage_id": 1, "node_id": "1.1", "title": t1, "teaching_goal": "g",
+                 "key_concepts": [kc1], "source_chunk_ids": cids[:half]},
+                {"stage_id": 2, "node_id": "1.2", "title": t2, "teaching_goal": "g",
+                 "key_concepts": [kc2], "source_chunk_ids": cids[half:]},
+            ],
+            "summary": "s",
+        }
+
+    orch.splitter.run = AsyncMock(side_effect=_split)
+    return orch
+
+
+class TestPlannerAppliedOrderPersisted(TestCurriculumPipelineV2):
+    """T4e: when the planner applies a reorder, the FINAL persisted stage order
+    must equal the applied order — finalize's reading-order sort must not clobber
+    it, and stage_id/node_id must be renumbered to the new order."""
+
+    _FLAG = {"CROSS_MATERIAL_PEDAGOGICAL_PLANNER": "1"}
+
+    async def _run(self, planner, *, same_material=False, env=None):
+        e = dict(self._FLAG)
+        if env:
+            e.update(env)
+        return await self._run_v2(
+            _mk_orch_v2_planner(planner),
+            source_chunks=_t4e_chunks(12),
+            same_material=same_material,
+            env=e,
+        )
+
+    async def test_planner_was_called_gate_passed(self):
+        planner = _RecordingPlanner()
+        captured, _ = await self._run(planner)
+        self.assertEqual(planner.calls, 1, "gate should pass for this fixture")
+        w = (captured["quality_warnings"] or {}).get("cross_material_pedagogical_planner") or {}
+        self.assertEqual(w.get("planner_mode"), "applied")
+
+    async def test_persisted_order_equals_planner_applied_order(self):
+        planner = _RecordingPlanner()
+        captured, _ = await self._run(planner)
+        persisted_titles = [s["title"] for s in captured["stages"]]
+        # planner moved the last finalized stage to the front
+        expected = [planner.input_titles[-1]] + planner.input_titles[:-1]
+        self.assertEqual(persisted_titles, expected)
+
+    async def test_persisted_stage_ids_renumbered_to_new_order(self):
+        planner = _RecordingPlanner()
+        captured, _ = await self._run(planner)
+        stages = captured["stages"]
+        n = len(stages)
+        self.assertEqual([s["stage_id"] for s in stages], list(range(1, n + 1)))
+        # node_id follows finalize's chapter.section convention (_renumber_stages)
+        expected_nodes = [f"{(j // 3) + 1}.{(j % 3) + 1}" for j in range(n)]
+        self.assertEqual([s["node_id"] for s in stages], expected_nodes)
+
+    async def test_warning_marks_renumbered_after_apply(self):
+        planner = _RecordingPlanner()
+        captured, _ = await self._run(planner)
+        w = captured["quality_warnings"]["cross_material_pedagogical_planner"]
+        self.assertTrue(w.get("renumbered_after_apply"))
+
+    async def test_flag_off_keeps_finalize_reading_order(self):
+        planner = _RecordingPlanner()
+        captured, _ = await self._run_v2(
+            _mk_orch_v2_planner(planner),
+            source_chunks=_t4e_chunks(12),
+            same_material=False,
+            env={"CROSS_MATERIAL_PEDAGOGICAL_PLANNER": "0"},
+        )
+        self.assertEqual(planner.calls, 0)
+        self.assertNotIn("cross_material_pedagogical_planner",
+                         captured["quality_warnings"] or {})
+        # reading order: src_0 stages first (lowest order_index)
+        self.assertEqual(captured["stages"][0]["title"], "全書總結與展望")
 
 
 class TestBuildKnowledgeMapSummary(unittest.TestCase):

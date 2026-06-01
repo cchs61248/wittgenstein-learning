@@ -23,6 +23,7 @@ from backend.orchestrator.curriculum_pipeline_v2 import (
     _is_cross_material_pedagogical_planner_enabled,
     _pedagogical_planner_gate_reasons,
     _maybe_apply_cross_material_pedagogical_planner,
+    _renumber_finalized_stages_after_pedagogical_reorder,
 )
 from backend.agents.pedagogical_planner import PedagogicalPlannerAgentResult
 from backend.utils.pedagogical_planner import (
@@ -498,6 +499,21 @@ class TestObservabilityErrorFallback(unittest.TestCase):
         # apply never reached → apply_attempted False
         self.assertTrue(w["agent_called"])
         self.assertFalse(w["apply_attempted"])
+
+
+class TestRenumberAfterReorder(unittest.TestCase):
+    def test_assigns_sequential_stage_id_and_chapter_section_node_id(self):
+        stages = [_stage("z"), _stage("a"), _stage("m"), _stage("q")]
+        out = _renumber_finalized_stages_after_pedagogical_reorder(stages)
+        self.assertEqual([s["stage_id"] for s in out], [1, 2, 3, 4])
+        self.assertEqual([s["node_id"] for s in out], ["1.1", "1.2", "1.3", "2.1"])
+
+    def test_preserves_order_and_does_not_mutate_input(self):
+        stages = [_stage("z", title="Z"), _stage("a", title="A")]
+        before = copy.deepcopy(stages)
+        out = _renumber_finalized_stages_after_pedagogical_reorder(stages)
+        self.assertEqual([s["title"] for s in out], ["Z", "A"])
+        self.assertEqual(stages, before)  # inputs untouched
 
 
 if __name__ == "__main__":
