@@ -1217,20 +1217,48 @@ def _normalize_kc_text(text: str) -> str:
     return unicodedata.normalize("NFKC", text or "")
 
 
+# Longest-first so "的綜合總結" / "的總結" win over the bare "總結" tail.
+_SUMMARY_TITLE_SUFFIXES = ("的綜合總結", "綜合總結", "的總結", "總結", "概述", "導論")
+
+
+def _strip_summary_suffix(text: str) -> str:
+    """Drop a trailing summary/meta suffix so the concept body survives.
+
+    e.g. "提升 LLM 正確率的綜合總結" -> "提升 LLM 正確率".
+    Never strips when the title *is* the suffix (len guard) so "總結" alone
+    falls through to the meta fallback below.
+    """
+    for suf in _SUMMARY_TITLE_SUFFIXES:
+        if text.endswith(suf) and len(text) > len(suf):
+            return text[: -len(suf)].strip()
+    return text
+
+
 def _summary_kc_from_title(title: str) -> str:
-    """Summary stage 無 kc 時，從 title 抽可教學概念，避免一律 meta「章節總結」。"""
+    """Summary stage 無 kc 時，從 title 抽可教學概念，避免一律 meta「章節總結」。
+
+    PR1 Mode 1（root cause fix）：**不再裸切 title[:8]**。舊版對無分隔符的標題做
+    ``title[:8]`` 字元硬切，會把混合 ASCII+CJK 的概念切在詞中間（live:
+    「提升 LLM 正確率的綜合總結」→「提升 LLM 正」）。改為：先剝除 summary 後綴，
+    再以「真正的主題:細節分隔符」取 head（**不含 ASCII '-'，避免拆壞 Auto-CoT /
+    Zero-shot 這類術語**），最後回傳完整片語、絕不產生 malformed 半詞。長度上限是
+    display-only 的考量，不該污染 QG/Evaluator/DB 用的 canonical 概念名。
+    """
     title = (title or "").strip()
     if not title:
         return _SUMMARY_KC_FALLBACK
-    # P4b: ':' / '—' / '-' split first (X:Y → X is main topic, Y is detail);
-    # 與/及/和 are same-level conjunctions, lower priority.
-    for sep in ("：", "—", "-", "與", "及", "和"):
-        if sep in title:
-            head = title.split(sep, 1)[0].strip()
+    cleaned = _strip_summary_suffix(title)
+    # 真正的「主題：細節」/全形破折號 / 同級連接詞分隔符。
+    # 刻意排除 ASCII '-'：它常出現在術語內部（Auto-CoT / GPT-4 / Zero-shot），
+    # 拆它會製造壞概念名。
+    for sep in ("：", "—", "與", "及", "和"):
+        if sep in cleaned:
+            head = cleaned.split(sep, 1)[0].strip()
             if head and head not in _META_ONLY_KC and len(head) >= 2:
-                return head[:8]
-    cleaned = title[:8]
-    if cleaned in _META_ONLY_KC or cleaned.startswith("章節總結"):
+                cleaned = head
+                break
+    cleaned = cleaned.strip()
+    if not cleaned or cleaned in _META_ONLY_KC or cleaned.startswith("章節總結"):
         return _SUMMARY_KC_FALLBACK
     return cleaned
 
@@ -1252,9 +1280,9 @@ def ensure_empty_key_concepts(stages: list[dict]) -> list[dict]:
             s["key_concepts"] = [_summary_kc_from_title(title)]
             s.setdefault("kind", "summary")
         elif title:
-            # P4b: avoid naive title[:8] which mangles "X：Y" into "X：先 4 字"
-            # (e.g. "借錢炒股：致富框架與心態" -> "借錢炒股：致富框"). _summary_kc_from_title
-            # already splits on "：" / "—" / "與" before truncating.
+            # _summary_kc_from_title strips summary suffixes + splits on genuine
+            # "：" / "—" / "與" separators and returns a complete phrase (no bare
+            # title[:8] hard-trim that would mangle mixed ASCII+CJK names).
             s["key_concepts"] = [_summary_kc_from_title(title)]
         else:
             s["key_concepts"] = [_SUMMARY_KC_FALLBACK]

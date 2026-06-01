@@ -30,6 +30,8 @@ from backend.utils.small_curriculum import (
     ORPHAN_STAGE_MAX_CHUNKS,
     STAGE_MAX_KEY_CONCEPTS,
     cleanup_orphan_enumerator_titles,
+    _summary_kc_from_title,
+    _SUMMARY_KC_FALLBACK,
 )
 
 
@@ -844,6 +846,43 @@ class TestEnsureEmptyKeyConcepts(unittest.TestCase):
         }]
         out = ensure_empty_key_concepts(stages)
         self.assertEqual(out[0]["key_concepts"], ["面試實戰"])
+
+
+class TestSummaryKcFromTitleHygiene(unittest.TestCase):
+    """PR1 Mode 1: empty-kc title fallback must not hard-truncate into malformed
+    concept names. Root cause: title[:8] cut '提升 LLM 正確率的綜合總結' into
+    '提升 LLM 正'. Fix strips summary suffixes + splits on genuine separators and
+    never bare-slices to a fixed char count.
+    """
+
+    def test_live_case_mixed_ascii_not_truncated_midword(self):
+        # The exact live regression from sess_07oumwek0 stage 3.
+        self.assertEqual(
+            _summary_kc_from_title("提升 LLM 正確率的綜合總結"),
+            "提升 LLM 正確率",
+        )
+
+    def test_trailing_summary_suffix_stripped(self):
+        self.assertEqual(
+            _summary_kc_from_title("提升 LLM 正確率總結"),
+            "提升 LLM 正確率",
+        )
+
+    def test_separator_split_takes_head(self):
+        self.assertEqual(_summary_kc_from_title("自洽性與思維樹"), "自洽性")
+
+    def test_empty_title_returns_fallback(self):
+        self.assertEqual(_summary_kc_from_title(""), _SUMMARY_KC_FALLBACK)
+
+    def test_meta_only_title_returns_fallback(self):
+        # "章節總結與補充內容" head 是 meta → 不取 head，整串以 章節總結 開頭 → fallback
+        self.assertEqual(_summary_kc_from_title("章節總結與補充內容"), _SUMMARY_KC_FALLBACK)
+
+    def test_short_ascii_hyphenated_terms_not_split(self):
+        # ASCII hyphen inside a term must NOT be treated as a separator.
+        for term in ("RAG原理", "ReAct框架", "PAL框架", "Auto-CoT", "Zero-shot CoT"):
+            with self.subTest(term=term):
+                self.assertEqual(_summary_kc_from_title(term), term)
 
 
 class TestMergeDuplicateStages(unittest.TestCase):

@@ -273,12 +273,16 @@ class TestEnsureEmptyKeyConceptsFallback(unittest.TestCase):
         # _summary_kc_from_title splits on '：' -> '借錢炒股'
         self.assertEqual(kc[0], "借錢炒股")
 
-    def test_plain_title_still_truncates_to_8(self):
-        """Title without splitters still gets first 8 chars."""
+    def test_plain_title_not_hard_truncated(self):
+        """PR1 Mode 1: a separator-less title is kept whole, NOT bare title[:8].
+
+        Hard-truncating to a fixed char count mangled mixed ASCII+CJK concepts
+        (e.g. '提升 LLM 正確率...' -> '提升 LLM 正'), so the fallback now returns
+        the complete phrase.
+        """
         stages = [_stage("簡單標題僅有八字符這麼長", ["chunk_0000"])]
         out = ensure_empty_key_concepts(stages)
-        # _summary_kc_from_title -> title[:8] when no separator
-        self.assertEqual(len(out[0]["key_concepts"][0]), 8)
+        self.assertEqual(out[0]["key_concepts"][0], "簡單標題僅有八字符這麼長")
 
 
 if __name__ == "__main__":
