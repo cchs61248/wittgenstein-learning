@@ -760,10 +760,24 @@ class WorkingMemory:
     ├── `cleanup_orphan_enumerator_titles`（**僅 `same_material=True`**；finalize 匯流點、含 compact path）
     │     title-only 移除無 sibling 的孤兒序號標題（「模式二：X」無「模式一」）；不 relabel、不動 chunk/kc；
     │     寫 `quality_warnings.title_cleanup_removed_orphan_enumerators` + log `v2 title cleanup ... count=N`（count=0 無 log 屬正常）
+    ├── **Phase 4 跨教材教學循序排序（T4c–T4e；env `CROSS_MATERIAL_PEDAGOGICAL_PLANNER`，預設 off）**
+    │     `_maybe_apply_cross_material_pedagogical_planner(...)`，**接在 `finalize_curriculum_stages` 之後**（成為最後一個動 stage 順序者，
+    │       否則 finalize 的 chunk-order sort 會蓋掉重排——T4e 修正 T4c 的 seam 位置）
+    │     flag off → 立即 return（不 build cards/graph、不寫 warning、bit-for-bit 等價）
+    │     flag on：build_stage_cards → build_prerequisite_graph → build_ordering_plan →
+    │       activation gate（`same_material=False` 且 chunks≥30、stages≥6、sources≥3、order_changed、無循環）
+    │       過閘 → `PedagogicalPlannerAgent.propose_plan`（LLM 出 move plan）→ `apply_pedagogical_plan` + 3 verifier
+    │         （coverage / stage-id set / content）→ applied 才 renumber stage_id/node_id（沿用 finalize 慣例）
+    │       未過閘 → diagnostics_only（不重排、不呼叫 LLM）；任一失敗 → fallback/error_fallback 回原序
+    │     寫 `quality_warnings.cross_material_pedagogical_planner`（schema v1：planner_mode / run_id / gate_reasons /
+    │       stage_order_before·after / plan_moves_redacted（**不存 raw LLM 文字**）/ 各層 diagnostics / applied 時 renumbered_after_apply）
+    │     LLM 計費僅 agent 成功回傳才 `meter.record("PedagogicalPlannerAgent")`
     ├── 條件式 `ConceptCanonicalizeAgent`（env `CONCEPT_CANONICALIZE=1` 才跑；**預設 off → 現行主線不跑**）
     ├── `assess_curriculum_cost` → `quality_warnings.curriculum_llm_calls` / `_tier` / `_over_budget`
     └── WS：`reduce_done`（含 small_file 健康狀態）/ `knowledge_map` / `composer_done`
 ```
+
+> **Phase 4 狀態：COMPLETE / observing（2026-06-01）**。T1–T4e 實作 + live happy-path 驗收（`sess_r14gdzg7x`：8 stages/73 chunks，`planner_mode=applied`，persisted 序 = planner applied 序，summary 由中段移到最後）+ T5 invariant pack 全 merged。設計：LLM 只提 plan、程式驗證套用、失敗安全 fallback、預設 off。
 
 > 已刪除（2026-05-27 unify-v2-small-file-pipeline 分支起）：
 > - V1 整套（`_start_session_v1` + 五檔一次切 + V1 ConceptCanonicalize）
@@ -771,7 +785,7 @@ class WorkingMemory:
 > - Plan B / Plan B 自動 fallback
 > - 對應 env：`CURRICULUM_PIPELINE_V2` / `SMALL_FILE_CHUNK_THRESHOLD` / `SMALL_FILE_FORCE_OUTLINE` / `MACRO_REGION_USE_LLM` / `CURRICULUM_V2_PLAN_B` / `CURRICULUM_V2_PLAN_B_AUTO` / `REDUCER_FAIL_MODE`
 >
-> ⚠️ **未刪但非主線（2026-05-30 校正）**：`global_curriculum_reducer` / `macro_region_refiner` 兩個 **prompt 仍在 `prompt_templates.py`**（`SYSTEM_PROMPTS` 現共 13 keys），`utils/curriculum_reducer.py` 與 `reducer_constants` 也還在被 import（僅取 `MAX_MERGED_OUTCOME_CHUNKS` 常數 + health metrics）。但 unified path `reducer_skipped=True`，**主線不跑 reducer planning**。正常驗收看不到 reducer log，屬正常。
+> ⚠️ **未刪但非主線（2026-05-30 校正）**：`global_curriculum_reducer` / `macro_region_refiner` 兩個 **prompt 仍在 `prompt_templates.py`**（`SYSTEM_PROMPTS` 現共 14 keys，含 Phase 4 的 `pedagogical_planner`），`utils/curriculum_reducer.py` 與 `reducer_constants` 也還在被 import（僅取 `MAX_MERGED_OUTCOME_CHUNKS` 常數 + health metrics）。但 unified path `reducer_skipped=True`，**主線不跑 reducer planning**。正常驗收看不到 reducer log，屬正常。
 >
 > 詳見 `docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md` §5
 
@@ -1567,8 +1581,11 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `drift_verifier` | DriftVerifierAgent（含 cited_chunks_lookup 驗證規則） |
 | `scope_judge` | handle_student_question（範疇判斷） |
 | `tutor_reply` | handle_student_question（生成回答） |
+| `pedagogical_planner` | PedagogicalPlannerAgent（Phase 4 跨教材教學循序重排；只輸出 `{moves, rationale}` JSON，靜態 system prompt 不 `.format()`） |
 | `global_curriculum_reducer` | **⚠️ legacy / 非主線**：原 GlobalCurriculumReducerAgent（V2 Step B unsure pairs）。prompt 仍在但 unified path `reducer_skipped=True`，主線不呼叫 |
 | `macro_region_refiner` | **⚠️ legacy / 非主線**：原 MacroRegionPlannerAgent tier-3。prompt 仍在但主線不呼叫（見 §7.2 reducer 非主線註） |
+
+> `SYSTEM_PROMPTS` 現共 **14 keys**（含上列 + content_outline / splitter_verifier / stage_consolidator / concept_canonicalize）。
 
 ---
 
@@ -1596,6 +1613,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `STAGE_CONCEPT_OVERLAP_THRESHOLD` | `0.6` | P0b-1：跨 source stage 用 key_concepts jaccard 合併閾值（0~1） |
 | `SPLITTER_VERIFIER_MIN_MISSES` | `2` | P2a：Splitter verifier 觸發 reroll 的最少 missing 數；missing ≤ 1 直接 soft-pass 省一輪 LLM |
 | `CONCEPT_CANONICALIZE` | `0` | `1` 時 stage 合併後再跑 ConceptCanonicalizeAgent 統一關鍵詞命名（耗一次 LLM） |
+| `CROSS_MATERIAL_PEDAGOGICAL_PLANNER` | `0`（off） | `1/true/yes/on` 啟用 Phase 4 跨教材教學循序重排（見 §7.2 Phase 4 步驟）。off 時 bit-for-bit 等價；on 仍需 `same_material=False` + 過 activation gate（chunks≥30/stages≥6/sources≥3/order_changed/無循環）才呼叫 LLM，否則 diagnostics_only |
 | `CURRICULUM_USE_ARQ` | `0` | `1` 時 start_session 改 enqueue 至 Redis，由 Arq worker 執行 pipeline |
 | `REDIS_URL` | `redis://localhost:6379/0` | Arq 佇列；本機 docker compose 用 `redis://localhost:6380/0` |
 | `ARQ_MAX_JOBS` | `1` | Arq worker 同時執行 job 數 |
@@ -1631,6 +1649,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `small_file_path` | 走小檔路徑（永遠 True） |
 | `reducer_skipped` | reducer 已棄用 |
 | `post_process_added_stages` | `_build_follow_up_stages` 補了 N 個 stage |
+| `cross_material_pedagogical_planner` | Phase 4 planner 結果（schema v1）：`planner_mode`、`run_id`、`gate_reasons`、`stage_order_before/after`、`plan_moves_redacted`、各層 diagnostics；applied 時含 `renumbered_after_apply`。flag off 時不寫 |
 
 `assess_curriculum_cost` 仍輸出 `curriculum_llm_calls` / `curriculum_tier` / `curriculum_llm_over_budget` / `curriculum_llm_budget`（用於 cost 監控）。
 
