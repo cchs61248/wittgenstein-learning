@@ -20,6 +20,7 @@ from ..utils.small_curriculum import (
     candidates_to_stages_flat,
     choose_postprocess_mode,
     cleanup_orphan_enumerator_titles,
+    collect_key_concept_hygiene_warnings,
     enforce_stage_ordering,
     merge_by_concept_overlap,
     merge_singleton_chunk_stages,
@@ -52,6 +53,24 @@ if TYPE_CHECKING:
 _log = logging.getLogger("wl.orchestrator.v2")
 
 _KM_SUMMARY_MAX_LEN = 180
+
+
+def _merge_key_concept_hygiene_warnings(
+    stages: list[dict], quality_warnings: dict | None
+) -> dict | None:
+    """Warn-only glue: audit final stage key_concepts and append findings to
+    quality_warnings["key_concept_hygiene"] (a list). Never mutates stages, never
+    overwrites existing hygiene entries, and leaves quality_warnings untouched
+    (possibly None) when the build is clean.
+    """
+    kc_warnings = collect_key_concept_hygiene_warnings(stages)
+    if not kc_warnings:
+        return quality_warnings
+    existing = list((quality_warnings or {}).get("key_concept_hygiene") or [])
+    return {
+        **(quality_warnings or {}),
+        "key_concept_hygiene": existing + kc_warnings,
+    }
 
 
 def _canonicalize_enabled() -> bool:
@@ -1060,6 +1079,16 @@ async def run_start_session_v2(
             stages = apply_canonical_mappings(stages, canon_result["mappings"])
         except Exception as e:
             _log.warning("v2 canonicalize failed  session=%s  err=%s", session_id, e)
+
+    # PR1b: warn-only audit of the final (post-canonicalize) key_concepts that
+    # will be persisted / used by QG. Never mutates stages; only appends to
+    # quality_warnings["key_concept_hygiene"].
+    quality_warnings = _merge_key_concept_hygiene_warnings(stages, quality_warnings)
+    if quality_warnings and quality_warnings.get("key_concept_hygiene"):
+        _log.info(
+            "v2 key concept hygiene  session=%s  warnings=%d",
+            session_id, len(quality_warnings["key_concept_hygiene"]),
+        )
 
     nodes = [
         {"node_id": s["node_id"], "stage_id": s["stage_id"], "title": s["title"]}

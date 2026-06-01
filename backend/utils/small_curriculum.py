@@ -1263,6 +1263,84 @@ def _summary_kc_from_title(title: str) -> str:
     return cleaned
 
 
+# --- PR1b: build-time key-concept hygiene warnings (warn-only, stage-local) ---
+# Audit-only. These helpers NEVER mutate stages/key_concepts; they only surface
+# suspicious concept names into quality_warnings so QG/DB pollution is observable.
+_META_ONLY_KEY_CONCEPTS = {"章節總結", "綜合總結", "總結", "概述", "導論"}
+
+# Root cause of the live regression was title[:8]; the malformed band brackets it.
+_MALFORMED_KC_MIN_LEN = 6
+_MALFORMED_KC_MAX_LEN = 9
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("一" <= ch <= "鿿" for ch in text)
+
+
+def _contains_ascii_alnum(text: str) -> bool:
+    return any(ch.isascii() and ch.isalnum() for ch in text)
+
+
+def _is_likely_malformed_key_concept(stage_title: str, key_concept: str) -> bool:
+    """High-confidence audit: a kc that looks hard-truncated from its stage title.
+
+    All conditions must hold (warn-only, prefer false-negatives over false alarms):
+      1. _strip_summary_suffix(title) starts with kc (strict prefix)
+      2. stripped title is >= 2 chars longer than kc (not just the dropped suffix)
+      3. 6 <= len(kc) <= 9 (brackets the legacy title[:8] cut)
+      4. kc mixes CJK + ASCII (protects Auto-CoT / Zero-shot CoT / RAG原理)
+    """
+    kc = (key_concept or "").strip()
+    if not kc:
+        return False
+    stripped = _strip_summary_suffix((stage_title or "").strip())
+    if not stripped or not stripped.startswith(kc):
+        return False
+    if len(stripped) - len(kc) < 2:
+        return False
+    if not (_MALFORMED_KC_MIN_LEN <= len(kc) <= _MALFORMED_KC_MAX_LEN):
+        return False
+    return _contains_cjk(kc) and _contains_ascii_alnum(kc)
+
+
+def _is_meta_only_key_concepts(key_concepts) -> bool:
+    kcs = [str(k).strip() for k in (key_concepts or []) if str(k).strip()]
+    if not kcs:
+        return False
+    return all(k in _META_ONLY_KEY_CONCEPTS for k in kcs)
+
+
+def collect_key_concept_hygiene_warnings(stages: list[dict]) -> list[dict]:
+    """Build-time, warn-only audit of final stage key_concepts.
+
+    Returns a list of warning dicts; NEVER mutates stages. Stage-local only —
+    no cross-stage / cross-material ratio logic (that is the separate, future
+    `generic_kc_collapse` domain-umbrella detector).
+    """
+    warnings: list[dict] = []
+    for idx, stage in enumerate(stages or []):
+        title = str(stage.get("title") or "")
+        kcs = [str(k).strip() for k in (stage.get("key_concepts") or []) if str(k).strip()]
+        for kc in kcs:
+            if _is_likely_malformed_key_concept(title, kc):
+                warnings.append({
+                    "type": "malformed_key_concept",
+                    "stage_index": idx,
+                    "stage_title": title,
+                    "key_concept": kc,
+                    "reason": "likely_hard_truncated_title_prefix",
+                })
+        if _is_meta_only_key_concepts(kcs):
+            warnings.append({
+                "type": "meta_only_key_concepts",
+                "stage_index": idx,
+                "stage_title": title,
+                "key_concepts": kcs,
+                "reason": "all_key_concepts_are_meta_labels",
+            })
+    return warnings
+
+
 def ensure_empty_key_concepts(stages: list[dict]) -> list[dict]:
     """When prune drops all kc but stage still has chunks, inject minimal teachable kc."""
     out: list[dict] = []
