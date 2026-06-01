@@ -501,6 +501,98 @@ class TestObservabilityErrorFallback(unittest.TestCase):
         self.assertFalse(w["apply_attempted"])
 
 
+# T5: lock the warning schema shape + no-raw-LLM-persistence contract.
+
+# Exact keys that must NEVER appear anywhere in the persisted warning (raw LLM
+# text / prompt). NOTE: "reason" is deliberately excluded — it is a legitimate
+# key inside ordering_diagnostics / agent_diagnostics (e.g. difficulty_regression
+# reason codes, exception class names) and is NOT raw LLM content. The move
+# rationale "reason" is instead locked out via the exact-key check on
+# plan_moves_redacted entries below.
+_FORBIDDEN_WARNING_KEYS = {
+    "raw_response", "raw_content", "llm_response",
+    "prompt", "messages", "message", "rationale",
+    "stage_text", "chunk_text", "source_text",
+}
+
+_APPLIED_REQUIRED_KEYS = {
+    "type", "schema_version", "run_id", "planner_mode", "enabled",
+    "gate_passed", "gate_reasons", "agent_called", "apply_attempted",
+    "source_count", "stage_count", "chunk_count",
+    "stage_order_before", "stage_order_after",
+    "current_stage_ids", "recommended_stage_ids", "order_changed",
+    "plan_move_count", "plan_moves_redacted",
+    "stage_card_diagnostics", "graph_diagnostics", "ordering_diagnostics",
+    "agent_diagnostics", "applier_diagnostics", "applied_stage_ids",
+}
+
+_ERROR_FALLBACK_REQUIRED_KEYS = {
+    "type", "schema_version", "run_id", "planner_mode", "enabled",
+    "gate_passed", "gate_reasons", "agent_called", "apply_attempted",
+    "stage_count", "chunk_count", "stage_order_before", "stage_order_after",
+    "diagnostics",
+}
+
+
+def _walk_keys(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k
+            yield from _walk_keys(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _walk_keys(item)
+
+
+class TestWarningSchemaContract(unittest.TestCase):
+    def test_applied_warning_contains_schema_v1_required_keys(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner())
+        self.assertTrue(_APPLIED_REQUIRED_KEYS <= set(w.keys()),
+                        f"missing: {_APPLIED_REQUIRED_KEYS - set(w.keys())}")
+        self.assertEqual(w["schema_version"], 1)
+
+    def test_error_fallback_warning_uses_stable_reduced_schema(self):
+        planner = _FakePlanner(exc=RuntimeError("boom"))
+        _, w = _run_on(_reorderable_stages(), planner=planner)
+        self.assertEqual(w["planner_mode"], "error_fallback")
+        self.assertTrue(_ERROR_FALLBACK_REQUIRED_KEYS <= set(w.keys()),
+                        f"missing: {_ERROR_FALLBACK_REQUIRED_KEYS - set(w.keys())}")
+        # reduced: heavy sections that may not have been built are absent
+        for absent in ("source_count", "plan_moves_redacted", "agent_diagnostics",
+                       "applier_diagnostics", "current_stage_ids",
+                       "recommended_stage_ids"):
+            self.assertNotIn(absent, w)
+
+
+class TestNoRawLlmPersistence(unittest.TestCase):
+    def _assert_no_forbidden(self, w):
+        present = _FORBIDDEN_WARNING_KEYS & set(_walk_keys(w))
+        self.assertEqual(present, set(), f"forbidden keys persisted: {present}")
+
+    def test_applied_warning_has_no_raw_llm_keys(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner())
+        self._assert_no_forbidden(w)
+
+    def test_diagnostics_only_warning_has_no_raw_llm_keys(self):
+        _, w = _run_on(_reorderable_stages(), same_material=True)
+        self._assert_no_forbidden(w)
+
+    def test_error_fallback_warning_has_no_raw_llm_keys(self):
+        planner = _FakePlanner(exc=RuntimeError("boom"))
+        _, w = _run_on(_reorderable_stages(), planner=planner)
+        self._assert_no_forbidden(w)
+
+    def test_redacted_moves_have_exactly_two_keys(self):
+        _, w = _run_on(_reorderable_stages(), planner=_applied_planner("s5"))
+        self.assertTrue(w["plan_moves_redacted"])
+        for move in w["plan_moves_redacted"]:
+            self.assertEqual(set(move.keys()), {"stage_id", "after_stage_id"})
+
+    def test_diagnostics_only_has_empty_redacted_moves(self):
+        _, w = _run_on(_reorderable_stages(), same_material=True)
+        self.assertEqual(w["plan_moves_redacted"], [])
+
+
 class TestRenumberAfterReorder(unittest.TestCase):
     def test_assigns_sequential_stage_id_and_chapter_section_node_id(self):
         stages = [_stage("z"), _stage("a"), _stage("m"), _stage("q")]

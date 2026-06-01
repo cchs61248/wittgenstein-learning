@@ -638,6 +638,23 @@ class _RecordingPlanner:
         return PedagogicalPlannerAgentResult(plan=plan, diagnostics=())
 
 
+class _NonePlanner:
+    """Fake planner agent that records the order it received and returns no plan
+    (simulating invalid/truncated LLM output → fallback)."""
+
+    def __init__(self):
+        self.input_titles: list[str] | None = None
+        self.calls = 0
+
+    async def propose_plan(self, *, stages, cards, graph, ordering_plan):
+        self.calls += 1
+        self.input_titles = [s.get("title") for s in stages]
+        return PedagogicalPlannerAgentResult(
+            plan=None,
+            diagnostics=({"type": "pedagogical_planner_invalid_json"},),
+        )
+
+
 def _mk_orch_v2_planner(planner) -> LearningOrchestrator:
     """Cross-material orch: 3 sources × 2 distinct stages, consolidator skipped,
     distinct key_concepts (no jaccard merge), ≥2 chunks/stage (no singleton fold)."""
@@ -728,6 +745,60 @@ class TestPlannerAppliedOrderPersisted(TestCurriculumPipelineV2):
                          captured["quality_warnings"] or {})
         # reading order: src_0 stages first (lowest order_index)
         self.assertEqual(captured["stages"][0]["title"], "全書總結與展望")
+
+    # --- T5 invariants ---
+
+    async def test_same_material_does_not_call_planner_and_keeps_order(self):
+        # gate invariant (pipeline E2E): same_material=True ⇒ agent never called,
+        # diagnostics-only warning, persisted order stays finalize reading order.
+        planner = _RecordingPlanner()
+        captured, _ = await self._run_v2(
+            _mk_orch_v2_planner(planner),
+            source_chunks=_t4e_chunks(12),
+            same_material=True,
+            env=self._FLAG,
+        )
+        self.assertEqual(planner.calls, 0, "agent must not be called for same_material")
+        w = captured["quality_warnings"]["cross_material_pedagogical_planner"]
+        self.assertEqual(w["planner_mode"], "diagnostics_only")
+        self.assertFalse(w["gate_passed"])
+        self.assertIn("same_material", w["gate_reasons"])
+        self.assertFalse(w["agent_called"])
+        self.assertNotIn("renumbered_after_apply", w)
+        # finalize reading order kept (src_0 first by order_index)
+        self.assertEqual(captured["stages"][0]["title"], "全書總結與展望")
+
+    async def test_applied_preserves_full_chunk_coverage(self):
+        # applied invariant: reorder must not drop / duplicate chunks or stages.
+        planner = _RecordingPlanner()
+        captured, _ = await self._run(planner)
+        stages = captured["stages"]
+        w = captured["quality_warnings"]["cross_material_pedagogical_planner"]
+        self.assertEqual(w["planner_mode"], "applied")
+        self.assertTrue(w["renumbered_after_apply"])
+        # stage count unchanged (planner only reorders)
+        self.assertEqual(len(stages), len(planner.input_titles))
+        # full chunk coverage preserved, no duplicates introduced by reorder
+        input_ids = sorted(c["chunk_id"] for c in _t4e_chunks(12))
+        persisted_ids = sorted(
+            cid for s in stages for cid in (s.get("source_chunk_ids") or [])
+        )
+        self.assertEqual(persisted_ids, input_ids)
+        self.assertEqual(len(persisted_ids), len(set(persisted_ids)))
+
+    async def test_fallback_keeps_finalize_order_and_no_renumber_flag(self):
+        # fallback invariant: plan None ⇒ persisted order == finalize order it
+        # received, no renumber flag, accurate mode/reason.
+        planner = _NonePlanner()
+        captured, _ = await self._run(planner)
+        stages = captured["stages"]
+        w = captured["quality_warnings"]["cross_material_pedagogical_planner"]
+        self.assertEqual(planner.calls, 1)
+        self.assertEqual(w["planner_mode"], "fallback")
+        self.assertEqual(w["fallback_reason"], "planner_agent_failed")
+        self.assertNotIn("renumbered_after_apply", w)
+        # order the planner saw (finalize order) is exactly what got persisted
+        self.assertEqual([s["title"] for s in stages], planner.input_titles)
 
 
 class TestBuildKnowledgeMapSummary(unittest.TestCase):
