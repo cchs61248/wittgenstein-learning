@@ -37,6 +37,7 @@ from ..utils.small_curriculum import (
     normalize_stages_pre_verify,
     pending_enum_label_misses,
     prune_phantom_key_concepts,
+    _renumber_stages,
     source_count as count_sources,
     prune_toc_listicle_chunks,
     split_oversized_stages,
@@ -677,6 +678,18 @@ def _pedagogical_planner_order(stages: list[dict]) -> list[str]:
     return [_stage_identity(s, i) for i, s in enumerate(stages)]
 
 
+def _renumber_finalized_stages_after_pedagogical_reorder(
+    stages: list[dict],
+) -> list[dict]:
+    """T4e: after the planner reorders already-finalized stages, reapply the
+    canonical finalize numbering so persisted stage_id / node_id match the new
+    teaching order. Delegates to ``_renumber_stages`` to stay bit-identical to
+    finalize's own convention (stage_id 1..N int, node_id "chapter.section").
+    Copies each stage so the input list's dicts are not mutated.
+    """
+    return _renumber_stages([dict(s) for s in stages])
+
+
 async def _maybe_apply_cross_material_pedagogical_planner(
     *,
     session_id: str,
@@ -1284,10 +1297,14 @@ async def run_start_session_v2(
                     w.get("new_title"), w.get("pattern"),
                 )
 
-    # Phase 4 / T4c: cross-material pedagogical reorder behind a default-off
-    # feature flag. Flag off → no-op (bit-for-bit). Runs before finalization so
-    # stage_ids / source metadata are still readable, and finalize keeps owning
-    # the output schema.
+    stages = finalize_curriculum_stages(stages, source_chunks)
+
+    # Phase 4 / T4c+T4e: cross-material pedagogical reorder behind a default-off
+    # feature flag. Flag off → no-op (bit-for-bit). T4e: runs AFTER finalization
+    # so finalize's reading-order sort (sort_stages_by_chunk_order) cannot clobber
+    # an applied pedagogical order. When a plan is applied, renumber stage_id /
+    # node_id to the new order before persistence; off / diagnostics_only /
+    # fallback / error_fallback leave the finalized order untouched.
     stages = await _maybe_apply_cross_material_pedagogical_planner(
         session_id=session_id,
         stages=stages,
@@ -1297,8 +1314,12 @@ async def run_start_session_v2(
         quality_warnings=quality_warnings,
         meter=meter,
     )
-
-    stages = finalize_curriculum_stages(stages, source_chunks)
+    _planner_warning = (quality_warnings or {}).get(
+        "cross_material_pedagogical_planner"
+    ) or {}
+    if _planner_warning.get("planner_mode") == "applied":
+        stages = _renumber_finalized_stages_after_pedagogical_reorder(stages)
+        _planner_warning["renumbered_after_apply"] = True
 
     new_concepts = sorted({c for s in stages for c in s.get("key_concepts", [])})
     if _canonicalize_enabled() and content_hash and new_concepts:
