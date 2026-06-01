@@ -2,13 +2,23 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安裝 tzdata（時區支援）以及 Java 11+（opendataloader-pdf 需要）
+# 安裝 tzdata（時區）、Java 11+（opendataloader-pdf 需要）、ffmpeg（yt-dlp 抽取/轉碼音訊需要）
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-21-jre-headless tzdata \
+    && apt-get install -y --no-install-recommends openjdk-21-jre-headless tzdata ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
+
+# GPU（選用）：安裝 CUDA 12 runtime 函式庫，供 faster-whisper/ctranslate2 4.x 在有 GPU 時走 cuda。
+# 預設安裝；CPU-only 環境可用 --build-arg WHISPER_CUDA=0 略過，縮小 image 約 2.5GB。
+# 注意：同一份 image 在無 GPU 主機仍可正常以 CPU 執行（url_fetcher 會自動 fallback）。
+ARG WHISPER_CUDA=1
+RUN if [ "$WHISPER_CUDA" = "1" ]; then \
+        pip install --no-cache-dir "nvidia-cublas-cu12" "nvidia-cudnn-cu12>=9,<10"; \
+    fi
+# ctranslate2 不打包 CUDA 庫，需把 pip wheel 的 .so 路徑加進 loader 搜尋路徑。
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
 
 COPY backend/ backend/
 COPY backend/docker/worker-entrypoint.sh /entrypoint.sh
