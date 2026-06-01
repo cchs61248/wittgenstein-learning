@@ -1,6 +1,6 @@
 # 後端流程詳解
 
-> 適用版本：2026-05 feature 分支（最後更新：2026-05-27，**Curriculum Pipeline 統一化**：V1 / V2 大檔 / Plan B / Reducer 全部刪除，唯一路徑是 V2 小檔逐檔切（`single_split` 或 `per_source_split`），由前端「是否同一教材」radio 控制 ContentOutline 是否跑；EPUB 在上傳階段就由 `split_epub_by_toc` 切成多章節獨立 file_id；標題去重閾值改為 env `STAGE_TITLE_MERGE_THRESHOLD`（預設 0.85），ConceptCanonicalize 改為 env `CONCEPT_CANONICALIZE` 開關（預設 off）。設計文件：`docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md`。較早保留的能力：region checkpoint 斷點續跑（Migration 022–023）、Arq + Redis 背景 worker（`CURRICULUM_USE_ARQ=1`）、LLM result cache（Migration 024 / `LLM_CACHE_ENABLED=1`）、`docker-compose.yml`（Redis :6380 + curriculum-worker）、**LLM 流量治理**（`LLM_MAX_CONCURRENT` + Redis ZSET semaphore，見 [§13](#13-llm-流量治理)）。**
+> 適用版本：2026-05 feature 分支（最後更新：2026-05-30，**Curriculum Pipeline 統一化**：V1 / V2 大檔 / Plan B 全部刪除，reducer 改非主線（agent 刪除、`reducer_skipped=True`，2 個 reducer prompt 留存但不呼叫——詳見 §7.2），唯一路徑是 V2 小檔逐檔切（`single_split` 或 `per_source_split`），由前端「是否同一教材」radio 控制 ContentOutline 是否跑；EPUB 在上傳階段就由 `split_epub_by_toc` 切成多章節獨立 file_id；標題去重閾值改為 env `STAGE_TITLE_MERGE_THRESHOLD`（預設 0.85），ConceptCanonicalize 改為 env `CONCEPT_CANONICALIZE` 開關（預設 off）。設計文件：`docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md`。較早保留的能力：region checkpoint 斷點續跑（Migration 022–023）、Arq + Redis 背景 worker（`CURRICULUM_USE_ARQ=1`）、LLM result cache（Migration 024 / `LLM_CACHE_ENABLED=1`）、`docker-compose.yml`（Redis :6380 + curriculum-worker）、**LLM 流量治理**（`LLM_MAX_CONCURRENT` + Redis ZSET semaphore，見 [§13](#13-llm-流量治理)）。**
 
 ---
 
@@ -335,7 +335,7 @@ content_hash              TEXT NOT NULL
 pipeline_version          TEXT DEFAULT 'v2'
 pipeline_meta_json        TEXT             # {user_id, target_depth, question_mode, provider_name, model_name}
 required_outline_json     TEXT
-regions_json              TEXT             # macro region 列表（resume 時跳過 MacroRegionPlanner）
+regions_json              TEXT             # 切分區段列表（unified path 為 single/per-source split 區段；resume 時 skip 已完成區段。MacroRegionPlanner 已刪，欄位沿用）
 completed_region_ids_json TEXT DEFAULT '[]'
 all_candidates_json       TEXT DEFAULT '[]'
 summary_parts_json        TEXT DEFAULT '[]'
@@ -732,7 +732,8 @@ class WorkingMemory:
     │     n_sources <= 1 → `_run_single_split`（整包一次 Splitter+Verifier）
     │     n_sources >  1 → `_run_per_source_split`（每 source 各跑一次，**P1b: 帶 chapter_title hint**）
     │     兩者都把 required_outline 餵給 splitter 當 hint
-    │     verifier 失敗：`SPLITTER_FAIL_MODE=hard` 中止；`soft` 放行 + `quality_warnings`
+    │     SplitterVerifier **非阻塞**：失敗只走確定性 false-positive filter + bounded reroll，
+    │       **不中止 session**（舊 fail-hard `SplitterVerificationRejected` / `MAX_SPLITTER_VERIFY_RETRIES` 已移除）
     │     **P2a**：filtered missing 數 < `SPLITTER_VERIFIER_MIN_MISSES`（預設 2）→ soft-pass 省 reroll
     │
     ├── `candidates_to_stages_flat`（無 LLM reducer）
@@ -752,19 +753,25 @@ class WorkingMemory:
     ├── **P0b-2**: **allow_merge 且** chunks ≥ 30 時跑 `StageConsolidatorAgent`（LLM 全局 rename + reorder + merge；legacy，Phase 4 將改 plan-based）
     │     硬約束：不可新增/移除 chunk_id；驗證失敗 fallback 沿用原 stages，記到 `quality_warnings`
     ├── `verify_global_coverage`（named_cases + orphan chunks + duplicate titles）
-    ├── 若 missing named_cases / orphan chunks → `_build_follow_up_stages` 補節再 merge
+    │     不對齊時 **非阻塞**：`SPLITTER_FAIL_MODE` 只切 warning 通道（soft=寫 quality_warnings；hard 預設=寫 WARNING log），
+    │       接著 `fold_interior_orphan_chunks`（內部孤兒併入相鄰 stage）→ `_build_follow_up_stages` 補 missing named_case / orphan → re-verify
     ├── `finalize_small_file_stages`（compact 路徑）或 `finalize_curriculum_stages`（路徑收尾規則）
     ├── **P2b**：orphan attach 後 re-verify；剩餘 orphan 寫 `quality_warnings.orphan_attach_incomplete`
-    ├── 條件式 `ConceptCanonicalizeAgent`（env `CONCEPT_CANONICALIZE=1` 才跑；預設 off）
+    ├── `cleanup_orphan_enumerator_titles`（**僅 `same_material=True`**；finalize 匯流點、含 compact path）
+    │     title-only 移除無 sibling 的孤兒序號標題（「模式二：X」無「模式一」）；不 relabel、不動 chunk/kc；
+    │     寫 `quality_warnings.title_cleanup_removed_orphan_enumerators` + log `v2 title cleanup ... count=N`（count=0 無 log 屬正常）
+    ├── 條件式 `ConceptCanonicalizeAgent`（env `CONCEPT_CANONICALIZE=1` 才跑；**預設 off → 現行主線不跑**）
     ├── `assess_curriculum_cost` → `quality_warnings.curriculum_llm_calls` / `_tier` / `_over_budget`
     └── WS：`reduce_done`（含 small_file 健康狀態）/ `knowledge_map` / `composer_done`
 ```
 
 > 已刪除（2026-05-27 unify-v2-small-file-pipeline 分支起）：
 > - V1 整套（`_start_session_v1` + 五檔一次切 + V1 ConceptCanonicalize）
-> - V2 大檔流程：`MacroRegionPlannerAgent` / `GlobalCurriculumReducer` / Step A/B/C / `_splitter_stages_to_candidates` / `_dedupe_candidates`
+> - V2 大檔流程：`MacroRegionPlannerAgent` / `GlobalCurriculumReducer` agent / Step A/B/C / `_splitter_stages_to_candidates` / `_dedupe_candidates`
 > - Plan B / Plan B 自動 fallback
 > - 對應 env：`CURRICULUM_PIPELINE_V2` / `SMALL_FILE_CHUNK_THRESHOLD` / `SMALL_FILE_FORCE_OUTLINE` / `MACRO_REGION_USE_LLM` / `CURRICULUM_V2_PLAN_B` / `CURRICULUM_V2_PLAN_B_AUTO` / `REDUCER_FAIL_MODE`
+>
+> ⚠️ **未刪但非主線（2026-05-30 校正）**：`global_curriculum_reducer` / `macro_region_refiner` 兩個 **prompt 仍在 `prompt_templates.py`**（`SYSTEM_PROMPTS` 現共 13 keys），`utils/curriculum_reducer.py` 與 `reducer_constants` 也還在被 import（僅取 `MAX_MERGED_OUTCOME_CHUNKS` 常數 + health metrics）。但 unified path `reducer_skipped=True`，**主線不跑 reducer planning**。正常驗收看不到 reducer log，屬正常。
 >
 > 詳見 `docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md` §5
 
@@ -1560,8 +1567,8 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `drift_verifier` | DriftVerifierAgent（含 cited_chunks_lookup 驗證規則） |
 | `scope_judge` | handle_student_question（範疇判斷） |
 | `tutor_reply` | handle_student_question（生成回答） |
-| `global_curriculum_reducer` | GlobalCurriculumReducerAgent（V2 Step B unsure pairs；含 confidence 校準準則 + 4 few-shot 避免 LLM 過度保守） |
-| `macro_region_refiner` | MacroRegionPlannerAgent tier-3（補 title / expected_stage_count / must_cover_topics，不重切邊界） |
+| `global_curriculum_reducer` | **⚠️ legacy / 非主線**：原 GlobalCurriculumReducerAgent（V2 Step B unsure pairs）。prompt 仍在但 unified path `reducer_skipped=True`，主線不呼叫 |
+| `macro_region_refiner` | **⚠️ legacy / 非主線**：原 MacroRegionPlannerAgent tier-3。prompt 仍在但主線不呼叫（見 §7.2 reducer 非主線註） |
 
 ---
 
@@ -1583,7 +1590,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `JWT_EXPIRE_DAYS` | `7` | JWT 有效期天數 |
 | `CORS_ORIGINS` | （見 config.py） | 允許 CORS 來源；逗號分隔，未設則用 Vite dev server 預設清單 |
 | `CORS_ORIGIN_REGEX` | `https://.*\.trycloudflare\.com` | 動態 Quick Tunnel 子網域用 regex 白名單；設為空字串可關閉 |
-| `SPLITTER_FAIL_MODE` | `hard` | `soft` 時 verifier 失敗仍進 pending，附 `quality_warnings` |
+| `SPLITTER_FAIL_MODE` | `hard` | **已非阻塞**：global verify 不對齊時只切 warning 通道（`soft`=附 `quality_warnings`；`hard`=寫 WARNING log），兩者都繼續 fold + 補節 + 收尾，不中止 session。舊 fail-hard 拒絕已移除 |
 | `RUN_LLM_TESTS` | — | 設 `1` 才執行 `pytest -m llm_live` 真 LLM gate |
 | `STAGE_TITLE_MERGE_THRESHOLD` | `0.85` | stage 標題去重合併閾值（0~1）；高=保守、低=積極合併；越界值 fallback 至預設 |
 | `STAGE_CONCEPT_OVERLAP_THRESHOLD` | `0.6` | P0b-1：跨 source stage 用 key_concepts jaccard 合併閾值（0~1） |
