@@ -1343,6 +1343,82 @@ def detect_generic_kc_collapse(stages: list[dict]) -> dict | None:
     }
 
 
+# --- large_single_source_risk: single-source-no-batching capacity detector ---
+# T-LARGE-SINGLE Phase 1. Warn-only, deterministic, no LLM, no mutation. A single
+# source's entire chunk set is fed into ONE splitter LLM call (curriculum_pipeline_v2
+# `_run_single_split`) with no batching and no upper bound. Phase 0 trace established:
+#   ① splitter output truncation → 0-stage curriculum persists silently (no guard;
+#      assess_reducer_health.zero_stages only fires when candidate_count>0).
+#   ② provider output cap (default 4096) is the PRIMARY wall — input context
+#      (200k–1M) is comfortable; the stage JSON output hits 4096 first.
+# This detector makes the pre-call risk observable. See docs/T-LARGE-SINGLE.md.
+LARGE_SINGLE_SOURCE_CHUNK_THRESHOLD = 50  # = small-file design boundary (warn floor)
+_LARGE_SINGLE_DEFAULT_OUTPUT_CAP = 4096   # provider default max output tokens
+_LARGE_SINGLE_HIGH_CHUNK = 150
+_LARGE_SINGLE_RISK_CHUNK = 100
+
+
+def _estimate_splitter_output_tokens(chunk_count: int, max_stages: int) -> int:
+    """Rough deterministic estimate of splitter JSON output size, for warning
+    calibration ONLY — not a tokenizer, never used for hard blocking. Stage objects
+    carry per-stage scaffolding plus a source_chunk_ids string per chunk."""
+    return 300 + 180 * max(max_stages, 0) + 20 * max(chunk_count, 0)
+
+
+def detect_large_single_source_risk(
+    source_chunks: list[dict],
+    *,
+    max_stages: int,
+    provider_max_output_tokens: int = _LARGE_SINGLE_DEFAULT_OUTPUT_CAP,
+    explicit_token_budget: bool = False,
+    threshold: int = LARGE_SINGLE_SOURCE_CHUNK_THRESHOLD,
+) -> dict | None:
+    """Warn-only T-LARGE-SINGLE Phase 1 detector (pure / read-only / no mutation).
+
+    Fires when a SINGLE source carries >= `threshold` chunks — the case that routes
+    to `_run_single_split` and feeds every chunk into one splitter call with no
+    batching / no upper bound. Returns None for multi-source input (a different,
+    per-source path) or small single sources. Severity is output-aware because
+    Phase 0 ② proved the provider output cap is the primary truncation wall.
+    """
+    if not source_chunks:
+        return None
+    if source_count(source_chunks) != 1:
+        return None
+    chunk_count = len(source_chunks)
+    if chunk_count < threshold:
+        return None
+
+    total_chars = sum(
+        len(c.get("text") or "") for c in source_chunks if isinstance(c, dict)
+    )
+    est_out = _estimate_splitter_output_tokens(chunk_count, max_stages)
+    cap = provider_max_output_tokens or _LARGE_SINGLE_DEFAULT_OUTPUT_CAP
+
+    if est_out >= cap or chunk_count >= _LARGE_SINGLE_HIGH_CHUNK:
+        severity = "high_risk"
+    elif est_out >= 0.8 * cap or chunk_count >= _LARGE_SINGLE_RISK_CHUNK:
+        severity = "risk"
+    else:
+        severity = "observe"
+
+    return {
+        "type": "large_single_source_risk",
+        "source_count": 1,
+        "chunk_count": chunk_count,
+        "total_chars": total_chars,
+        "estimated_input_tokens": total_chars,  # CJK ≈ 1 token/char (rough)
+        "estimated_output_tokens": est_out,
+        "max_stages": max_stages,
+        "provider_max_output_tokens": cap,
+        "explicit_token_budget": explicit_token_budget,
+        "empty_curriculum_fallback_risk": True,
+        "threshold": threshold,
+        "severity": severity,
+        "risk": "single_source_all_chunks_single_splitter_call",
+    }
+
+
 def merge_singleton_chunk_stages(stages: list[dict]) -> list[dict]:
     """P4c: middle stages with exactly 1 chunk are merged into the previous stage.
 
