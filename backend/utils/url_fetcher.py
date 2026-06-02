@@ -12,6 +12,8 @@ from readability import Document
 from bs4 import BeautifulSoup
 from typing import Callable, Literal
 
+from backend.utils.youtube_cookies import ytdlp_cookie_opts
+
 
 _MAX_CHARS = 500_000
 _MIN_READABILITY_TEXT_CHARS = 300
@@ -263,6 +265,7 @@ def _transcribe_youtube_audio(
                     "preferredquality": "192",
                 }
             ],
+            **ytdlp_cookie_opts(tmp_path),
         }
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(original_url, download=True)

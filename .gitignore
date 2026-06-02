@@ -11,6 +11,10 @@ venv/
 backend/.env
 .env
 
+# YouTube cookies（勿提交）
+backend/secrets/youtube_cookies.json
+backend/secrets/youtube_cookies.txt
+
 # 資料庫
 data/
 *.db
