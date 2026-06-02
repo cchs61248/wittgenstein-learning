@@ -24,6 +24,7 @@ from ..utils.small_curriculum import (
     enforce_stage_ordering,
     enforce_followup_adjacency_only,
     detect_medium_cross_material_gap,
+    detect_generic_kc_collapse,
     merge_by_concept_overlap,
     merge_singleton_chunk_stages,
     dedupe_key_concept_aliases,
@@ -1373,6 +1374,23 @@ async def run_start_session_v2(
             "sources=%d  chunks=%d  stages=%d  dup_themes=%d",
             session_id, _mxmat["source_count"], _mxmat["chunk_count"],
             _mxmat["stage_count"], len(_mxmat["duplicate_theme_groups"]),
+        )
+
+    # generic_kc_collapse: warn-only cross-stage detector for umbrella/generic
+    # key_concept degradation (splitter folding specific concepts into broad terms).
+    # Read-only diagnostic; never mutates stages.
+    _gkc = detect_generic_kc_collapse(stages)
+    if _gkc:
+        quality_warnings = {
+            **(quality_warnings or {}),
+            "generic_kc_collapse": _gkc,
+        }
+        _log.info(
+            "v2 quality warning generic_kc_collapse  session=%s  "
+            "generic=%d/%d  ratio=%.2f  collapsed_stages=%d  curriculum_collapse=%s",
+            session_id, _gkc["generic_kc_total"], _gkc["total_kc"],
+            _gkc["generic_ratio"], len(_gkc["collapsed_stages"]),
+            _gkc["curriculum_collapse"],
         )
 
     nodes = [

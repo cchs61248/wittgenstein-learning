@@ -1254,6 +1254,95 @@ def detect_medium_cross_material_gap(
     }
 
 
+# --- generic_kc_collapse: cross-stage umbrella key_concept degradation detector ---
+# Warn-only, deterministic, no LLM, no mutation. Distinct from the stage-local hygiene
+# audits (malformed_key_concept / meta_only_key_concepts): this is a CROSS-STAGE ratio
+# signal — the splitter degrading specific concepts into broad umbrella terms across the
+# curriculum (live root: sess_tkfe20227, kc 退化成傘狀詞). Pure whitelist match keeps it
+# conservative (prefer false-negatives); extend _GENERIC_UMBRELLA_KC when live misses show.
+_GENERIC_UMBRELLA_KC = frozenset({
+    # 概念 / 觀念 umbrella
+    "概念", "基本概念", "核心概念", "重要概念", "主要概念", "相關概念", "重點概念",
+    "觀念", "基本觀念", "核心觀念", "重要觀念",
+    # 內容 umbrella
+    "內容", "主要內容", "核心內容", "重要內容", "相關內容", "補充內容",
+    # 知識 umbrella
+    "知識", "相關知識", "基礎知識", "背景知識", "基本知識",
+    # 原理 / 架構 umbrella
+    "基本原理", "核心原理", "基本架構", "整體架構",
+    # 重點 / 要點 umbrella
+    "重點", "要點", "重點整理", "核心重點",
+    # 介紹 / 概述 umbrella
+    "簡介", "概述", "概論", "介紹", "導論", "總覽",
+    # 方法 / 策略 bare umbrella
+    "基本方法", "核心方法", "基本策略", "核心策略",
+})
+
+_GENERIC_STAGE_MIN_KC = 2        # need >=2 kc to assess a stage for Rule A
+_GENERIC_STAGE_MIN_GENERIC = 2   # Rule A needs at least this many generic kc in the stage
+_GENERIC_STAGE_RATIO = 0.5       # Rule A: generic fraction within a stage
+_GENERIC_CURRICULUM_RATIO = 0.3  # Rule B: generic fraction across the curriculum
+
+
+def _is_generic_umbrella_kc(kc: str) -> bool:
+    return (kc or "").strip() in _GENERIC_UMBRELLA_KC
+
+
+def detect_generic_kc_collapse(stages: list[dict]) -> dict | None:
+    """Warn-only detector for umbrella/generic key_concept collapse (pure / no mutation).
+
+    Scans non-follow-up stages (follow-ups copy their base kc and would double-count).
+    Fires when either:
+      Rule A — a stage's key_concepts are dominated by generic umbrella terms
+               (>=2 generic kc and generic fraction >= 0.5), or
+      Rule B — the curriculum-wide generic fraction >= 0.3.
+    Returns None when neither rule fires (no warning noise). Material-independent:
+    kc collapse is a splitter-quality issue regardless of same_material / chunk count.
+    """
+    total_kc = 0
+    generic_total = 0
+    collapsed_stages: list[dict] = []
+    for s in stages or []:
+        if _extract_followup(s) is not None:
+            continue  # follow-up siblings copy base kc — exclude from scan
+        kcs = [str(k).strip() for k in (s.get("key_concepts") or []) if str(k).strip()]
+        if not kcs:
+            continue
+        generic = [k for k in kcs if _is_generic_umbrella_kc(k)]
+        total_kc += len(kcs)
+        generic_total += len(generic)
+        if (
+            len(kcs) >= _GENERIC_STAGE_MIN_KC
+            and len(generic) >= _GENERIC_STAGE_MIN_GENERIC
+            and len(generic) / len(kcs) >= _GENERIC_STAGE_RATIO
+        ):
+            collapsed_stages.append({
+                "stage_id": s.get("stage_id"),
+                "title": s.get("title"),
+                "generic_key_concepts": generic,
+                "kc_count": len(kcs),
+                "generic_ratio": round(len(generic) / len(kcs), 2),
+            })
+
+    if total_kc == 0:
+        return None
+    generic_ratio = round(generic_total / total_kc, 2)
+    curriculum_collapse = (generic_total / total_kc) >= _GENERIC_CURRICULUM_RATIO
+
+    if not collapsed_stages and not curriculum_collapse:
+        return None
+
+    return {
+        "type": "generic_kc_collapse",
+        "stage_count": len(stages),
+        "total_kc": total_kc,
+        "generic_kc_total": generic_total,
+        "generic_ratio": generic_ratio,
+        "collapsed_stages": collapsed_stages,
+        "curriculum_collapse": curriculum_collapse,
+    }
+
+
 def merge_singleton_chunk_stages(stages: list[dict]) -> list[dict]:
     """P4c: middle stages with exactly 1 chunk are merged into the previous stage.
 
