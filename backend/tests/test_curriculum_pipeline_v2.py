@@ -396,6 +396,40 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         qw = captured["quality_warnings"] or {}
         self.assertNotIn("medium_cross_material_gap", qw)
 
+    async def test_generic_kc_collapse_wired_to_quality_warnings(self):
+        """generic_kc_collapse: detector payload is propagated into quality_warnings."""
+        orch = _mk_orch_v2()
+        fake = {
+            "type": "generic_kc_collapse",
+            "stage_count": 3,
+            "total_kc": 6,
+            "generic_kc_total": 3,
+            "generic_ratio": 0.5,
+            "collapsed_stages": [{"stage_id": 1, "title": "概論",
+                                  "generic_key_concepts": ["基本概念"],
+                                  "kc_count": 2, "generic_ratio": 0.5}],
+            "curriculum_collapse": True,
+        }
+        with patch(
+            "backend.orchestrator.curriculum_pipeline_v2.detect_generic_kc_collapse",
+            return_value=fake,
+        ):
+            captured, _ = await self._run_v2(orch)
+        qw = captured["quality_warnings"] or {}
+        self.assertIn("generic_kc_collapse", qw)
+        self.assertEqual(qw["generic_kc_collapse"], fake)
+
+    async def test_generic_kc_collapse_absent_when_clean(self):
+        """No generic_kc_collapse key when the detector returns None (clean curriculum)."""
+        orch = _mk_orch_v2()
+        with patch(
+            "backend.orchestrator.curriculum_pipeline_v2.detect_generic_kc_collapse",
+            return_value=None,
+        ):
+            captured, _ = await self._run_v2(orch)
+        qw = captured["quality_warnings"] or {}
+        self.assertNotIn("generic_kc_collapse", qw)
+
     async def test_start_session_routes_to_v2(self):
         orch = _mk_orch_v2()
         with patch(
