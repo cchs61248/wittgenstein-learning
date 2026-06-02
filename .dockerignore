@@ -1,0 +1,25 @@
+# 機敏：絕不可烤進 image 層（runtime 由 docker-compose 的 bind mount 提供）
+**/.env
+**/.env.*
+!**/.env.example
+backend/secrets/
+!backend/secrets/*.example
+
+# Python venv / 快取
+backend/.venv/
+**/__pycache__/
+**/*.pyc
+
+# 前端建置產物與依賴（後端 image 不需要）
+frontend/node_modules/
+frontend/dist/
+
+# 本機資料庫 / git / IDE
+data/
+.git/
+.claude/
+*.db
+*.sqlite
+
+# 文件（不影響執行）
+*.md
