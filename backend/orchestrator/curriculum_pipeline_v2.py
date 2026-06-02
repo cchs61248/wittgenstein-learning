@@ -23,6 +23,7 @@ from ..utils.small_curriculum import (
     collect_key_concept_hygiene_warnings,
     enforce_stage_ordering,
     enforce_followup_adjacency_only,
+    detect_medium_cross_material_gap,
     merge_by_concept_overlap,
     merge_singleton_chunk_stages,
     dedupe_key_concept_aliases,
@@ -1351,6 +1352,27 @@ async def run_start_session_v2(
         _log.info(
             "v2 key concept hygiene  session=%s  warnings=%d",
             session_id, len(quality_warnings["key_concept_hygiene"]),
+        )
+
+    # T-MID-XMAT Phase 1: warn-only flag for the medium cross-material gap (several
+    # short sources, <30 chunks → neither consolidator nor Phase 4 reorder runs).
+    # Read-only diagnostic; never mutates stages.
+    _mxmat = detect_medium_cross_material_gap(
+        same_material=same_material,
+        source_count=count_sources(source_chunks),
+        chunk_count=len(source_chunks),
+        stages=stages,
+    )
+    if _mxmat:
+        quality_warnings = {
+            **(quality_warnings or {}),
+            "medium_cross_material_gap": _mxmat,
+        }
+        _log.info(
+            "v2 quality warning medium_cross_material_gap  session=%s  "
+            "sources=%d  chunks=%d  stages=%d  dup_themes=%d",
+            session_id, _mxmat["source_count"], _mxmat["chunk_count"],
+            _mxmat["stage_count"], len(_mxmat["duplicate_theme_groups"]),
         )
 
     nodes = [

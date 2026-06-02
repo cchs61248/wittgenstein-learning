@@ -1176,6 +1176,84 @@ def followup_adjacency_violations(stages: list[dict]) -> list[dict]:
     return violations
 
 
+_MEDIUM_XMAT_MAX_CHUNKS = 30   # consolidator/Phase-4 chunk gate; below this neither runs
+_MEDIUM_XMAT_MIN_SOURCES = 3
+
+
+def _normalize_theme_title(title: str) -> str:
+    """Collapse a stage title to its theme root for duplicate-theme detection.
+
+    Strips '（續 N）' follow-up suffix, ordinal markers '（N）/（一）', and the detail
+    clause after a '：' / ':' separator, so two same-topic stages from different
+    sources (e.g. '出場策略四條鐵律：與人生週期同步調整' vs '出場策略四條鐵律：建立投資憲法')
+    collapse to the same key.
+    """
+    t = (title or "").strip()
+    m = _FOLLOWUP_RE.match(t)
+    if m:
+        t = m.group(1).strip()
+    og = _extract_ordinal_group(t)
+    if og:
+        t = og[0]
+    for sep in ("：", ":"):
+        if sep in t:
+            t = t.split(sep, 1)[0].strip()
+            break
+    return t
+
+
+def detect_medium_cross_material_gap(
+    *,
+    same_material: bool,
+    source_count: int,
+    chunk_count: int,
+    stages: list[dict],
+) -> dict | None:
+    """T-MID-XMAT Phase 1 warn-only detector (pure / deterministic / no LLM / no mutation).
+
+    Returns a diagnostic payload when a cross-material curriculum falls in the "medium"
+    gap: several short sources but < 30 chunks, so neither the global StageConsolidator
+    (needs chunks>=30) nor the Phase 4 planner reorder (gated on chunks>=30) runs and the
+    sources are never cross-organised. Returns None outside the gap.
+
+    Payload carries structural facts plus a deterministic duplicate-theme signal
+    (non-follow-up stages whose normalized theme title collides — likely the same topic
+    from different sources that was never merged).
+    """
+    if same_material:
+        return None
+    if source_count < _MEDIUM_XMAT_MIN_SOURCES:
+        return None
+    if chunk_count >= _MEDIUM_XMAT_MAX_CHUNKS:
+        return None
+
+    theme_to_ids: dict[str, list] = {}
+    for s in stages:
+        if _extract_followup(s) is not None:
+            continue  # follow-up siblings legitimately share their base theme
+        key = _normalize_theme_title(s.get("title") or "")
+        if not key:
+            continue
+        theme_to_ids.setdefault(key, []).append(s.get("stage_id"))
+    duplicate_theme_groups = [
+        {"theme": k, "stage_ids": ids}
+        for k, ids in theme_to_ids.items()
+        if len(ids) >= 2
+    ]
+
+    stage_count = len(stages)
+    return {
+        "type": "medium_cross_material_gap",
+        "source_count": source_count,
+        "chunk_count": chunk_count,
+        "stage_count": stage_count,
+        "stage_per_source": round(stage_count / source_count, 2) if source_count else 0,
+        "consolidator_skipped": True,
+        "planner_reorder_skipped": True,
+        "duplicate_theme_groups": duplicate_theme_groups,
+    }
+
+
 def merge_singleton_chunk_stages(stages: list[dict]) -> list[dict]:
     """P4c: middle stages with exactly 1 chunk are merged into the previous stage.
 

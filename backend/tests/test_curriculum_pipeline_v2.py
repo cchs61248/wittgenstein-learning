@@ -369,6 +369,33 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         qw = captured["quality_warnings"] or {}
         self.assertNotIn("title_cleanup_removed_orphan_enumerators", qw)
 
+    async def test_tmidxmat_warns_on_medium_cross_material(self):
+        """T-MID-XMAT Phase 1: cross-material with >=3 sources and <30 chunks writes
+        the warn-only medium_cross_material_gap diagnostic."""
+        orch = _mk_orch_v2()
+        chunks = _n_source_chunks(4, 6)  # 4 sources, 24 chunks (<30)
+        captured, _ = await self._run_v2(
+            orch, source_chunks=chunks, same_material=False,
+        )
+        qw = captured["quality_warnings"] or {}
+        self.assertIn("medium_cross_material_gap", qw)
+        gap = qw["medium_cross_material_gap"]
+        self.assertEqual(gap["source_count"], 4)
+        self.assertEqual(gap["chunk_count"], 24)
+        self.assertTrue(gap["consolidator_skipped"])
+        # read-only diagnostic: pipeline still reached persist with a stages list
+        self.assertIsInstance(captured["stages"], list)
+
+    async def test_tmidxmat_absent_for_same_material(self):
+        """same_material build must not write the medium_cross_material_gap warning."""
+        orch = _mk_orch_v2()
+        chunks = _n_source_chunks(4, 6)
+        captured, _ = await self._run_v2(
+            orch, source_chunks=chunks, same_material=True,
+        )
+        qw = captured["quality_warnings"] or {}
+        self.assertNotIn("medium_cross_material_gap", qw)
+
     async def test_start_session_routes_to_v2(self):
         orch = _mk_orch_v2()
         with patch(
