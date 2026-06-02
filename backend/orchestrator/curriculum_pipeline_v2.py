@@ -22,6 +22,7 @@ from ..utils.small_curriculum import (
     cleanup_orphan_enumerator_titles,
     collect_key_concept_hygiene_warnings,
     enforce_stage_ordering,
+    enforce_followup_adjacency_only,
     merge_by_concept_overlap,
     merge_singleton_chunk_stages,
     dedupe_key_concept_aliases,
@@ -681,13 +682,17 @@ def _pedagogical_planner_order(stages: list[dict]) -> list[str]:
 def _renumber_finalized_stages_after_pedagogical_reorder(
     stages: list[dict],
 ) -> list[dict]:
-    """T4e: after the planner reorders already-finalized stages, reapply the
-    canonical finalize numbering so persisted stage_id / node_id match the new
-    teaching order. Delegates to ``_renumber_stages`` to stay bit-identical to
-    finalize's own convention (stage_id 1..N int, node_id "chapter.section").
-    Copies each stage so the input list's dicts are not mutated.
+    """T4e + T-FOLLOWUP-ADJACENCY: after the planner reorders already-finalized stages,
+    re-attach '（續 N）' follow-ups to their base (the planner treats follow-ups as
+    independent stages and may move them away from their base), then reapply the
+    canonical finalize numbering so persisted stage_id / node_id match the new teaching
+    order. The follow-up re-attach is follow-up-only, so it never disturbs the planner's
+    base ordering. Delegates to ``_renumber_stages`` to stay bit-identical to finalize's
+    convention (stage_id 1..N int, node_id "chapter.section"). Copies each stage so the
+    input list's dicts are not mutated.
     """
-    return _renumber_stages([dict(s) for s in stages])
+    adjacent = enforce_followup_adjacency_only([dict(s) for s in stages])
+    return _renumber_stages(adjacent)
 
 
 async def _maybe_apply_cross_material_pedagogical_planner(

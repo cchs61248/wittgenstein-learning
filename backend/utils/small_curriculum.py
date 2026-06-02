@@ -1066,6 +1066,116 @@ def enforce_stage_ordering(stages: list[dict]) -> list[dict]:
     return _renumber_stages(flat)
 
 
+def enforce_followup_adjacency_only(stages: list[dict]) -> list[dict]:
+    """T-FOLLOWUP-ADJACENCY: pull each '（續 N）' follow-up to sit immediately after its
+    base stage, WITHOUT re-sorting base/non-follow-up stages.
+
+    Unlike ``enforce_stage_ordering`` (which rebuilds base order by min chunk), this only
+    moves follow-up stages and preserves the received relative order of every
+    non-follow-up stage. That makes it safe to run *after* a pedagogical reorder: the
+    planner decides base order, follow-ups are then re-attached to their base. Calling
+    full ``enforce_stage_ordering`` post-planner would re-sort bases by chunk and clobber
+    the applied teaching order (the T4e failure mode).
+
+    Matching uses ``_extract_followup`` → (base_title, batch). Sibling follow-ups are
+    ordered by batch ascending. Follow-ups whose base title is absent degrade to the tail
+    in their original relative order. Stage content is never mutated; the caller renumbers
+    if this becomes the persisted order. Returns the input list unchanged (same object)
+    when there is nothing to re-attach.
+    """
+    if len(stages) <= 1:
+        return stages
+
+    followups_by_base: dict[str, list[tuple[int, dict]]] = {}
+    base_seq: list[dict] = []
+    for s in stages:
+        fu = _extract_followup(s)
+        if fu is None:
+            base_seq.append(s)
+        else:
+            followups_by_base.setdefault(fu[0], []).append((fu[1], s))
+
+    if not followups_by_base:
+        return stages  # no-op: no follow-ups to re-attach
+
+    out: list[dict] = []
+    matched: set[str] = set()
+    for s in base_seq:
+        out.append(s)
+        title = (s.get("title") or "").strip()
+        fus = followups_by_base.get(title)
+        if fus and title not in matched:
+            out.extend(f for _, f in sorted(fus, key=lambda pair: pair[0]))
+            matched.add(title)
+
+    # Unmatched follow-ups (base title absent): keep original relative order at the tail.
+    if len(out) != len(stages):
+        for s in stages:
+            fu = _extract_followup(s)
+            if fu is not None and fu[0] not in matched:
+                out.append(s)
+    return out
+
+
+def followup_adjacency_violations(stages: list[dict]) -> list[dict]:
+    """Deterministic check for T-FOLLOWUP-ADJACENCY.
+
+    Returns follow-up stages whose base chain is broken (``not_adjacent_to_base``) or
+    whose same-base sibling batch order is not strictly ascending within a contiguous
+    run (``followup_batch_out_of_order``). Earlier-batch siblings of the same base are
+    allowed between a base and a later follow-up. Empty list means the invariant holds.
+    Unmatched follow-ups (base title absent) are treated as degraded, not violations.
+    """
+    base_titles: set[str] = set()
+    for s in stages:
+        if _extract_followup(s) is None:
+            t = (s.get("title") or "").strip()
+            if t:
+                base_titles.add(t)
+
+    violations: list[dict] = []
+    last_batch_by_base: dict[str, int] = {}  # last batch seen in the current contiguous run
+    for i, s in enumerate(stages):
+        fu = _extract_followup(s)
+        if fu is None:
+            # base / non-follow-up: a new base resets its run anchor
+            t = (s.get("title") or "").strip()
+            last_batch_by_base.pop(t, None)
+            continue
+        base_title, batch = fu
+        if base_title not in base_titles:
+            continue  # degraded (no base) — not a violation
+        prev = stages[i - 1] if i > 0 else None
+        prev_ok = False
+        if prev is not None:
+            prev_fu = _extract_followup(prev)
+            if prev_fu is None:
+                prev_ok = (prev.get("title") or "").strip() == base_title
+            else:
+                prev_ok = prev_fu[0] == base_title
+        if not prev_ok:
+            violations.append({
+                "stage_id": s.get("stage_id"),
+                "title": (s.get("title") or "").strip(),
+                "base_title": base_title,
+                "reason": "not_adjacent_to_base",
+            })
+            # chain broken — drop run anchor so siblings after the break aren't
+            # double-flagged for batch order against a stale predecessor.
+            last_batch_by_base.pop(base_title, None)
+            continue
+        last = last_batch_by_base.get(base_title)
+        if last is not None and batch <= last:
+            violations.append({
+                "stage_id": s.get("stage_id"),
+                "title": (s.get("title") or "").strip(),
+                "base_title": base_title,
+                "reason": "followup_batch_out_of_order",
+            })
+        last_batch_by_base[base_title] = batch
+    return violations
+
+
 def merge_singleton_chunk_stages(stages: list[dict]) -> list[dict]:
     """P4c: middle stages with exactly 1 chunk are merged into the previous stage.
 
@@ -1497,6 +1607,14 @@ def finalize_curriculum_stages(
     """Common post-pipeline finalize: chunk-order sort + empty-kc fallback (all paths)."""
     stages = sort_stages_by_chunk_order(stages, source_chunks)
     stages = ensure_empty_key_concepts(stages)
+    # T-FOLLOWUP-ADJACENCY: the chunk-order sort above can scatter '（續 N）' follow-ups
+    # away from their base (a base may aggregate an early chunk while its continuations
+    # are late-only). Re-attach follow-ups to their base without disturbing base reading
+    # order, then renumber so persisted stage_id / node_id match. No-op when there are
+    # no follow-ups (covers same_material / flag-off / compact paths too).
+    adjacent = enforce_followup_adjacency_only(stages)
+    if adjacent is not stages:
+        stages = _renumber_stages(adjacent)
     return stages
 
 
