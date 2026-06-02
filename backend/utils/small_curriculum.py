@@ -1543,7 +1543,15 @@ def _summary_kc_from_title(title: str) -> str:
 # --- PR1b: build-time key-concept hygiene warnings (warn-only, stage-local) ---
 # Audit-only. These helpers NEVER mutate stages/key_concepts; they only surface
 # suspicious concept names into quality_warnings so QG/DB pollution is observable.
-_META_ONLY_KEY_CONCEPTS = {"章節總結", "綜合總結", "總結", "概述", "導論"}
+# Meta/filler labels that are never teachable key_concepts. Summary-class plus
+# chapter-supplement-class (T-META-KC-SUPPLEMENT): "章節補充" slipped this set in
+# sess_k73w3v6ah while "章節總結" was caught in sess_u2ccjo94t — same filler class.
+# Exact-match only (see _is_meta_only_key_concepts): real concepts that merely
+# contain 補充 (e.g. 補充保費, 營養補充品) are NOT flagged.
+_META_ONLY_KEY_CONCEPTS = {
+    "章節總結", "綜合總結", "總結", "概述", "導論",
+    "章節補充", "補充說明", "補充內容",
+}
 
 # Root cause of the live regression was title[:8]; the malformed band brackets it.
 _MALFORMED_KC_MIN_LEN = 6
