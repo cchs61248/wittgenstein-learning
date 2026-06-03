@@ -27,12 +27,13 @@
 
 **多來源 session**：可同時上傳多份檔案 + URL + 文字，前端會強制使用者選「是否同一教材」radio（1 source 自動視為同一）；切分流程統一走 `per_source_split`（逐檔切 + 程式合併），由 `same_material` 決定後處理模式（見下）。
 
-### 教材切分（2026-05-27 統一架構；2026-05-29 mode-aware 後處理；2026-06-01 Phase 4 跨教材排序）
+### 教材切分（2026-05-27 統一架構；2026-05-29 mode-aware 後處理；2026-06-01 Phase 4 跨教材排序；2026-06-02 warn-only 品質偵測器）
 
 - **唯一路徑**：所有 session 走 V2 小檔逐檔切（`single_split` 或 `per_source_split`），V1 / V2 大檔 / Plan B 全部刪除；reducer 改為非主線（unified path `reducer_skipped=True`，`global_curriculum_reducer` / `macro_region_refiner` prompt 仍留存但不呼叫）。SplitterVerifier 非阻塞（soft-pass / false-positive filter / bounded reroll，無 fail-hard）
 - **`same_material` 控制 ContentOutline（Phase 3，2026-05-29 起）**：`same_material=True` → **一律跳過 Outline**（含 ≥3 章 EPUB）；只有 `same_material=False`（不同教材）才整批跑一次 Outline 餵給逐檔 Splitter。原「同教材 ≥3 章也跑 Outline」規則已移除——global outline 的跨章 `named_cases` 會把不同章同主題 chunk 併進同一 stage（章節邊界破壞器），章節排序改由確定性 `SourceOrderResolver` 處理
 - **Mode-aware 後處理**：`choose_postprocess_mode(n_sources, same_material)` 分流；只有 `cross_material_merge_and_coordinate`（多本不同書）才跑 jaccard / LLM consolidator 等合併層，單 source 與同教材只做確定性排序 + 收尾，不合併 stage
 - **Phase 4 跨教材教學循序排序（COMPLETE，預設 off）**：多本不同教材排成「概論→基礎→核心→進階→應用→總結」。`PedagogicalPlannerAgent` 只提 move plan、程式驗證覆蓋後套用、失敗安全 fallback。env `CROSS_MATERIAL_PEDAGOGICAL_PLANNER=1` 啟用，且需 `same_material=False` + 過 activation gate（chunks≥30/stages≥6/sources≥3）；flag-off bit-for-bit 等價。接在 `finalize_curriculum_stages` 之後成為最後動順序者。Live 驗收 `sess_r14gdzg7x` PASS（summary 由中段移到最後）。詳見 [CURRICULUM_SPLIT_FLOWS §七-A](./CURRICULUM_SPLIT_FLOWS.md)
+- **Warn-only 品質偵測器家族（2026-06-02）**：切分收尾掛一族純程式、確定性、無 LLM、**不改 stage / 不改路由**的偵測器，命中只寫 `quality_warnings` + log，永不阻斷或變更切分結果——`empty_curriculum`（切出空課綱，補 `zero_stages` 抓不到的盲區）、`large_single_source_risk`（單檔 ≥50 chunks 走無分批 single_split，output-aware severity）、`generic_kc_collapse`（跨 stage 關鍵詞退化成傘狀空詞）、`medium_cross_material_gap`（跨教材但 chunks<30，consolidator/Phase4 都沒跑）。同批並把「單 stage chunk 上限（14）」改為兩條後處理路徑皆**無條件強制**（T-STAGE-CAP）。詳見 [CURRICULUM_SPLIT_FLOWS §九-A](./CURRICULUM_SPLIT_FLOWS.md) / [BACKEND_FLOW §7.2.1](./BACKEND_FLOW.md)
 - **EPUB 上傳即切章**：`POST /upload` 收 `.epub` 時呼叫 `split_epub_by_toc` 回 N 個 file_id；前端展開為 N 個 source items
 - **閾值 env 化**：`STAGE_TITLE_MERGE_THRESHOLD`（預設 0.85）控制標題去重合併粒度
 - **Canonicalize 可選**：`CONCEPT_CANONICALIZE=1` 啟用統一關鍵詞命名（預設 off）

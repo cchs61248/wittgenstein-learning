@@ -773,6 +773,10 @@ class WorkingMemory:
     │       stage_order_before·after / plan_moves_redacted（**不存 raw LLM 文字**）/ 各層 diagnostics / applied 時 renumbered_after_apply）
     │     LLM 計費僅 agent 成功回傳才 `meter.record("PedagogicalPlannerAgent")`
     ├── 條件式 `ConceptCanonicalizeAgent`（env `CONCEPT_CANONICALIZE=1` 才跑；**預設 off → 現行主線不跑**）
+    ├── **Warn-only 品質偵測器家族（2026-06-02；純程式 / 無 LLM / 不改 stages / 不改路由）**
+    │     一律跑、只寫 `quality_warnings` + INFO log，永不阻斷或變更切分結果（細節見 §7.2.1）：
+    │       `empty_curriculum`（persist 前 stages 為空）、`large_single_source_risk`（單 source ≥50 chunks 走 `_run_single_split` 無分批）、
+    │       `generic_kc_collapse`（跨 stage 傘狀詞 kc 退化）、`medium_cross_material_gap`（跨教材但 chunks<30，consolidator/Phase4 都沒跑）
     ├── `assess_curriculum_cost` → `quality_warnings.curriculum_llm_calls` / `_tier` / `_over_budget`
     └── WS：`reduce_done`（含 small_file 健康狀態）/ `knowledge_map` / `composer_done`
 ```
@@ -788,6 +792,19 @@ class WorkingMemory:
 > ⚠️ **未刪但非主線（2026-05-30 校正）**：`global_curriculum_reducer` / `macro_region_refiner` 兩個 **prompt 仍在 `prompt_templates.py`**（`SYSTEM_PROMPTS` 現共 14 keys，含 Phase 4 的 `pedagogical_planner`），`utils/curriculum_reducer.py` 與 `reducer_constants` 也還在被 import（僅取 `MAX_MERGED_OUTCOME_CHUNKS` 常數 + health metrics）。但 unified path `reducer_skipped=True`，**主線不跑 reducer planning**。正常驗收看不到 reducer log，屬正常。
 >
 > 詳見 `docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md` §5
+
+### 7.2.1 Warn-only 品質偵測器家族（2026-06-02）
+
+一族**純程式、確定性、無 LLM、不 mutate stages、不改路由**的偵測器，附掛在 pipeline 收尾段。共同合約：**只觀測、只記錄**——命中時寫 `quality_warnings.<key>` 結構化 payload + 一行 `v2 quality warning <key> ...` INFO log，**絕不阻斷 build、絕不改變切分結果**。設計取向為保守（寧可漏報不要誤報），閾值/白名單待 live evidence 再擴充。
+
+| key | 來源 commit | 觸發條件 | payload 重點 | 為何 warn-only |
+|-----|------------|---------|------------|---------------|
+| `empty_curriculum` | 2638ac2 | persist（`create_pending_session`）前 `stages` 為空 | `candidate_count` / `stage_count=0` / `chunk_count` / `source_count` / `same_material` / `large_single` / `reason` | 補 `assess_reducer_health.zero_stages` 的盲區：splitter 回 0 候選時 candidate 與 stage 一起塌成 0，zero_stages（gated on `candidate_count>0`）結構上抓不到（Case B），會靜默 persist 空課綱 |
+| `large_single_source_risk` | 22a7f6a | **單** source 且 chunk_count ≥ `LARGE_SINGLE_SOURCE_CHUNK_THRESHOLD`（50）；走 `_run_single_split` 把全 chunk 一次餵 splitter、**無分批 / 無上限** | `chunk_count` / `estimated_output_tokens` / `provider_max_output_tokens` / `severity ∈ {observe, risk, high_risk}` / `empty_curriculum_fallback_risk` | severity 為 output-aware：`est_out ≥ cap` 或 chunk ≥150 → high_risk；`≥0.8·cap` 或 ≥100 → risk。Phase 0 已證 provider output cap 是主要截斷牆；分批切分為後續 ticket，現只先標風險 |
+| `generic_kc_collapse` | e613464 | 跨 stage 傘狀詞 kc 退化。Rule A：單 stage kc≥2 且 generic≥2 且 generic 比例≥0.5；Rule B：全課綱 generic 比例≥0.3。白名單 `_GENERIC_UMBRELLA_KC`（純 exact-match），排除 follow-up stage | `generic_kc_total` / `total_kc` / 命中 stage 清單 / 命中規則 | 與 stage-local 的 `malformed_key_concept` / `meta_only_key_concepts` 不同，這是**跨 stage 比例信號**（splitter 把具體概念退化成傘狀詞，live root `sess_tkfe20227`）。白名單未含「章節補充/章節總結」（near-miss 詞彙缺口，待 live 再補） |
+| `medium_cross_material_gap` | 3c12d3d | `same_material=False` 且 source_count ≥3 且 chunk_count <30 | `source_count` / `chunk_count` / `stage_count` / `stage_per_source` / `consolidator_skipped` / `planner_reorder_skipped` / `duplicate_theme_groups` | 中型跨教材落在「夾縫」：chunks<30 使 StageConsolidator（需 ≥30）與 Phase 4 planner（gated ≥30）都不跑，多本來源從未被跨教材整理。payload 帶確定性重複主題信號（非 follow-up stage 標題正規化後碰撞）。此即 T-MID-XMAT live 根源類型 |
+
+> **與 hygiene 稽核的關係**：上述屬 pipeline-level 偵測器；另有 stage-local 的 `collect_key_concept_hygiene_warnings`（`meta_only_key_concepts` / `malformed_key_concept`）。c6ebb17（T-META-KC-SUPPLEMENT）把 `章節補充 / 補充說明 / 補充內容` 加入 `_META_ONLY_KEY_CONCEPTS`（exact-match；真概念如「補充保費」「營養補充品」不誤判），與既有的 `章節總結` 同屬 filler class。
 
 ### 7.3 確認知識地圖（confirm_map）
 
@@ -1637,6 +1654,7 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 |-----|------|---------|---------|---------|
 | `STAGE_MAX_KEY_CONCEPTS` | 8 | `small_curriculum.py` | orphan attach 寫入 stage 時的 kc 上限 | 超過時新建 `kind=follow_up_orphan` overflow stage |
 | `ORPHAN_STAGE_MAX_CHUNKS` | 14 | `small_curriculum.py` | orphan attach 寫入 stage 時的 chunk 上限 | 超過時拆「補充段落（N）」overflow stage |
+| 單 stage chunk cap（無條件強制） | 14 | `split_oversized_stages` | **deterministic cleanup 與 compact finalize 兩條路徑皆無條件跑**（T-STAGE-CAP-POSTPROCESS-PATHS Option A，c2846ac） | 超量 stage 拆成 `kind=follow_up_orphan`「（續 N）」。舊版把 `split_oversized` 綁在 `if orphans_before` 內，consolidator merge / interior fold 產生的**不留 orphan** 超量 stage 會繞過 cap（live `exmiz273r` stage9=24、`hi7ob3ydm` stage4=18）；現改 chunk-only、無條件、不依賴 kc 數 |
 | `MAX_MERGED_OUTCOME_CHUNKS` | 20 | `reducer_constants.py`（殘留 const） | `stage_composer.outcomes_to_stages` 仍引用 | 合併後 chunk 數超過 → 保留 split |
 
 ### 監控信號（`backend/utils/curriculum_health.py`）
@@ -1650,6 +1668,10 @@ llm = create_provider("claude" | "openai" | "gemini" | "monica" | "deepseek", mo
 | `reducer_skipped` | reducer 已棄用 |
 | `post_process_added_stages` | `_build_follow_up_stages` 補了 N 個 stage |
 | `cross_material_pedagogical_planner` | Phase 4 planner 結果（schema v1）：`planner_mode`、`run_id`、`gate_reasons`、`stage_order_before/after`、`plan_moves_redacted`、各層 diagnostics；applied 時含 `renumbered_after_apply`。flag off 時不寫 |
+| `empty_curriculum` | persist 前 stages 為空（warn-only，見 §7.2.1）；補 `zero_stages` 抓不到的 Case B |
+| `large_single_source_risk` | 單 source ≥50 chunks 走無分批 single_split（warn-only，output-aware severity，見 §7.2.1） |
+| `generic_kc_collapse` | 跨 stage 傘狀詞 kc 退化（warn-only，Rule A/B 比例信號，見 §7.2.1） |
+| `medium_cross_material_gap` | 跨教材但 chunks<30，consolidator/Phase4 都沒跑（warn-only，見 §7.2.1） |
 
 `assess_curriculum_cost` 仍輸出 `curriculum_llm_calls` / `curriculum_tier` / `curriculum_llm_over_budget` / `curriculum_llm_budget`（用於 cost 監控）。
 
