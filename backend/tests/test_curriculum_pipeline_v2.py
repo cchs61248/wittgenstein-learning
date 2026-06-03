@@ -467,6 +467,49 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         qw = captured["quality_warnings"] or {}
         self.assertNotIn("large_single_source_risk", qw)
 
+    async def test_empty_curriculum_warn_only_marker(self):
+        """P1-1 (Case B): splitter 回空 → stages=[] 時，persist 前必須記 WARNING +
+        quality_warnings['empty_curriculum'] marker（可觀測性補強），且仍照常 persist。
+        行為不變：不 hard fail、不改 status、create_pending_session 仍被呼叫。"""
+        orch = _mk_orch_v2()
+        orch.splitter.run = AsyncMock(return_value={"stages": [], "summary": "空"})
+        with patch(
+            "backend.orchestrator.curriculum_pipeline_v2._log"
+        ) as mock_log:
+            captured, events = await self._run_v2(
+                orch, source_chunks=_chunks(10), same_material=True,
+            )
+        # 仍照常 persist（create_pending_session 被呼叫，stages 為空 list）
+        self.assertEqual(captured["stages"], [])
+        # quality_warnings marker 存在且內容正確
+        qw = captured["quality_warnings"] or {}
+        self.assertIn("empty_curriculum", qw)
+        marker = qw["empty_curriculum"]
+        self.assertEqual(marker["reason"], "no_stages_at_persist")
+        self.assertEqual(marker["stage_count"], 0)
+        self.assertEqual(marker["chunk_count"], 10)
+        self.assertEqual(marker["candidate_count"], 0)
+        self.assertEqual(marker["source_count"], 1)
+        # WARNING 已記（ops 可搜尋 "empty curriculum persisted"）
+        self.assertTrue(
+            any(
+                "empty curriculum persisted" in str(c.args[0])
+                for c in mock_log.warning.call_args_list
+            ),
+            "expected an 'empty curriculum persisted' WARNING to be logged",
+        )
+        # 流程未中斷：composer_done 仍發出
+        self.assertIn("composer_done", events)
+
+    async def test_empty_curriculum_marker_absent_when_stages_present(self):
+        """非空課綱不得寫 empty_curriculum marker（無誤報）。"""
+        orch = _mk_orch_v2()
+        captured, _ = await self._run_v2(
+            orch, source_chunks=_chunks(10), same_material=True,
+        )
+        qw = captured["quality_warnings"] or {}
+        self.assertNotIn("empty_curriculum", qw)
+
     async def test_start_session_routes_to_v2(self):
         orch = _mk_orch_v2()
         with patch(

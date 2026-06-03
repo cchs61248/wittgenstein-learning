@@ -1443,6 +1443,36 @@ async def run_start_session_v2(
     )
     quality_warnings = {**(quality_warnings or {}), **cost_qw}
 
+    # P1-1: warn-only observability for the empty-curriculum silent-persist path
+    # (Phase 0 ①). When the splitter returns zero candidates, candidate_count and
+    # stage_count collapse to 0 together, so assess_reducer_health's zero_stages
+    # signal (gated on candidate_count > 0) structurally cannot fire — the
+    # splitter-empty case persists silently. Surface a WARNING + quality_warnings
+    # marker so ops can detect/alert on an un-teachable session landing in
+    # pending_confirmation. Behavior is unchanged: the session still persists
+    # exactly as before (downstream read paths already guard `if not stages`),
+    # this is observability only — NOT a hard fail / status change.
+    if not stages:
+        _log.warning(
+            "v2 empty curriculum persisted  session=%s  chunk_count=%d  "
+            "source_count=%d  candidate_count=%d  stage_count=0  same_material=%s  "
+            "large_single=%s",
+            session_id, len(source_chunks), n_sources, len(all_candidates),
+            same_material, bool(large_single_risk),
+        )
+        quality_warnings = {
+            **(quality_warnings or {}),
+            "empty_curriculum": {
+                "candidate_count": len(all_candidates),
+                "stage_count": 0,
+                "chunk_count": len(source_chunks),
+                "source_count": n_sources,
+                "same_material": same_material,
+                "large_single": bool(large_single_risk),
+                "reason": "no_stages_at_persist",
+            },
+        }
+
     await ckpt_mem.delete_checkpoint(session_id)
 
     await session_memory.create_pending_session(

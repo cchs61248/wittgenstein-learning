@@ -43,6 +43,29 @@ class TestCurriculumHealth(unittest.TestCase):
         self.assertIn("reducer_outcome_ratio_low", r["signals"])
         self.assertTrue(r["plan_b_recommended"])
 
+    def test_zero_stages_fires_when_candidates_present(self):
+        """P1-1 regression: reducer-health zero_stages 仍在 candidate>0 且 stage=0 觸發。
+        新增的 pipeline-level empty_curriculum guard 不得改動此既有語意（Case A 仍可觀測）。"""
+        r = assess_reducer_health(
+            session_id="s1",
+            candidate_count=5,
+            outcome_count=5,
+            stage_count=0,
+        )
+        self.assertIn("zero_stages", r["signals"])
+        self.assertFalse(r["healthy"])
+
+    def test_zero_stages_absent_when_no_candidates(self):
+        """candidate=0 且 stage=0（splitter 回空子案）reducer-health 結構上不報 zero_stages
+        —— 這正是 pipeline 端 empty_curriculum warn-only guard 要補的盲區（Case B）。"""
+        r = assess_reducer_health(
+            session_id="s1",
+            candidate_count=0,
+            outcome_count=0,
+            stage_count=0,
+        )
+        self.assertNotIn("zero_stages", r["signals"])
+
 class TestCurriculumLlmMeter(unittest.TestCase):
     def _chunks(self, n: int, source_id: str = "s1") -> list[dict]:
         return [{"chunk_id": f"c{i}", "source_id": source_id} for i in range(n)]
