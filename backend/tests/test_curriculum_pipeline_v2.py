@@ -430,6 +430,43 @@ class TestCurriculumPipelineV2(unittest.IsolatedAsyncioTestCase):
         qw = captured["quality_warnings"] or {}
         self.assertNotIn("generic_kc_collapse", qw)
 
+    async def test_large_single_source_risk_emitted(self):
+        """T-LARGE-SINGLE Phase 1: a single source with >=50 chunks writes the
+        warn-only large_single_source_risk diagnostic (pre-splitter, read-only)."""
+        orch = _mk_orch_v2()
+        chunks = _chunks(50)  # single source (src_a), 50 chunks
+        captured, _ = await self._run_v2(
+            orch, source_chunks=chunks, same_material=True,
+        )
+        qw = captured["quality_warnings"] or {}
+        self.assertIn("large_single_source_risk", qw)
+        risk = qw["large_single_source_risk"]
+        self.assertEqual(risk["source_count"], 1)
+        self.assertEqual(risk["chunk_count"], 50)
+        self.assertTrue(risk["empty_curriculum_fallback_risk"])
+        self.assertIn(risk["severity"], {"observe", "risk", "high_risk"})
+        # read-only diagnostic: pipeline still reached persist with a stages list
+        self.assertIsInstance(captured["stages"], list)
+
+    async def test_large_single_source_risk_absent_for_multi_source(self):
+        """Multi-source large input is NOT the single-source failure mode → no warning."""
+        orch = _mk_orch_v2()
+        chunks = _multi_source_chunks(30)  # 2 sources, 60 chunks
+        captured, _ = await self._run_v2(
+            orch, source_chunks=chunks, same_material=False,
+        )
+        qw = captured["quality_warnings"] or {}
+        self.assertNotIn("large_single_source_risk", qw)
+
+    async def test_large_single_source_risk_absent_for_small_single(self):
+        """A small single source (<50 chunks) stays below the warn floor."""
+        orch = _mk_orch_v2()
+        captured, _ = await self._run_v2(
+            orch, source_chunks=_chunks(10), same_material=True,
+        )
+        qw = captured["quality_warnings"] or {}
+        self.assertNotIn("large_single_source_risk", qw)
+
     async def test_start_session_routes_to_v2(self):
         orch = _mk_orch_v2()
         with patch(

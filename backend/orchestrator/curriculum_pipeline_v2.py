@@ -25,6 +25,7 @@ from ..utils.small_curriculum import (
     enforce_followup_adjacency_only,
     detect_medium_cross_material_gap,
     detect_generic_kc_collapse,
+    detect_large_single_source_risk,
     merge_by_concept_overlap,
     merge_singleton_chunk_stages,
     dedupe_key_concept_aliases,
@@ -978,6 +979,20 @@ async def run_start_session_v2(
         source_chunks, source_count=n_sources, required_outline=required_outline,
     )
 
+    # T-LARGE-SINGLE Phase 1: warn-only pre-splitter capacity risk. Computed BEFORE
+    # the splitter call so the diagnostic survives even if the splitter truncates to
+    # an empty curriculum (Phase 0 ① — that path persists silently). Read-only;
+    # merged into quality_warnings below. Never alters routing / stages / behavior.
+    _splitter_out_cap = getattr(getattr(orch.splitter, "llm", None), "max_tokens", 4096)
+    if not isinstance(_splitter_out_cap, int):
+        _splitter_out_cap = 4096
+    large_single_risk = detect_large_single_source_risk(
+        source_chunks,
+        max_stages=max_stages,
+        provider_max_output_tokens=_splitter_out_cap,
+        explicit_token_budget=False,  # Phase 0 ②: chat() has no per-call max_tokens
+    )
+
     all_candidates: list[dict] = (
         list(checkpoint.get("all_candidates") or []) if resuming and checkpoint else []
     )
@@ -1080,6 +1095,17 @@ async def run_start_session_v2(
     if per_source_split:
         quality_warnings["multi_source_split"] = True
         quality_warnings["source_count"] = n_sources
+
+    # T-LARGE-SINGLE Phase 1: surface the pre-splitter capacity risk (computed above).
+    if large_single_risk:
+        quality_warnings["large_single_source_risk"] = large_single_risk
+        _log.info(
+            "v2 quality warning large_single_source_risk  session=%s  chunks=%d  "
+            "max_stages=%d  est_out=%d  provider_max_out=%d  severity=%s",
+            session_id, large_single_risk["chunk_count"],
+            large_single_risk["max_stages"], large_single_risk["estimated_output_tokens"],
+            large_single_risk["provider_max_output_tokens"], large_single_risk["severity"],
+        )
 
     # Phase 1: mode-aware postprocessing. single source / same_material=True
     # preserve splitter boundaries — only cross-material (multi source +
