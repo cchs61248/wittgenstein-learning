@@ -325,7 +325,12 @@ def _apply_deterministic_cleanup(
         if (verify_global_coverage(stages, source_chunks, required_outline)
                 .get("orphan_chunk_ids")):
             stages = ensure_orphan_chunks_attached(stages, source_chunks)
-        stages = split_oversized_stages(stages, source_chunks)
+    # 單 stage chunk 上限一律強制（T-STAGE-CAP-POSTPROCESS-PATHS Option A）：舊版把
+    # split_oversized 綁在 `if orphans_before` 內，consolidator merge / interior fold
+    # 產生的超量 stage **不留 orphan** 會繞過 cap（live exmiz273r stage9=24、
+    # hi7ob3ydm stage4=18）。與 split_kc_heavy 並列無條件跑，對齊 compact 路徑
+    # finalize_small_file_stages 的「cap 一律強制」語意。chunk-only cap，不依賴 kc 數。
+    stages = split_oversized_stages(stages, source_chunks)
     # kc 修剪 / 拆分 / 去重不依賴 orphan，永遠跑（避免 aligned 課綱殘留 kc 過量 stage）
     stages = split_kc_heavy_stages(stages, source_chunks)
     stages = dedupe_key_concept_aliases(stages)

@@ -1007,6 +1007,70 @@ class TestDeterministicCleanup(unittest.TestCase):
         covered = {cid for s in out for cid in (s.get("source_chunk_ids") or [])}
         self.assertIn("chunk_0052", covered)
 
+    # --- T-STAGE-CAP-POSTPROCESS-PATHS Option A: split_oversized must run even
+    #     when orphans_before == 0. Live evidence: consolidator merge / interior
+    #     fold produce an oversized stage AND clear orphans, so the old
+    #     `if orphans_before:` gate skipped the cap (exmiz273r stage9=24,
+    #     hi7ob3ydm stage4=18). ---
+    def test_no_orphan_oversized_stage_still_split(self):
+        """核心 regression：完整覆蓋（orphans_before==0）但單 stage > cap 且 kc<8 →
+        仍須被 split_oversized 切到 ≤ ORPHAN_STAGE_MAX_CHUNKS。"""
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        from backend.utils.small_curriculum import ORPHAN_STAGE_MAX_CHUNKS
+        chunks = _chunks(24)  # chunk_0000..chunk_0023, single source
+        stages = [{
+            "stage_id": 1, "node_id": "1.1", "title": "傾倒場",
+            "key_concepts": ["章節補充"],  # kc<8 → split_kc_heavy 不會接手
+            "source_chunk_ids": [c["chunk_id"] for c in chunks],  # 全覆蓋 → 0 orphan
+        }]
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        for s in out:
+            self.assertLessEqual(
+                len(s.get("source_chunk_ids") or []), ORPHAN_STAGE_MAX_CHUNKS,
+                f"stage {s.get('stage_id')} 超過 chunk cap",
+            )
+
+    def test_no_orphan_oversized_split_preserves_coverage(self):
+        """切分只重分配同一批 chunk：覆蓋率不變、無重複（無 overlap）。"""
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        chunks = _chunks(24)
+        all_ids = [c["chunk_id"] for c in chunks]
+        stages = [{
+            "stage_id": 1, "node_id": "1.1", "title": "傾倒場",
+            "key_concepts": ["章節補充"],
+            "source_chunk_ids": list(all_ids),
+        }]
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        flat = [cid for s in out for cid in (s.get("source_chunk_ids") or [])]
+        self.assertEqual(set(flat), set(all_ids), "覆蓋率改變")
+        self.assertEqual(len(flat), len(all_ids), "切分引入重複 chunk")
+
+    def test_no_orphan_oversized_split_followup_adjacency(self):
+        """切出的「（續 N）」follow-up 應緊接 base、且 stage_id renumber 連續。"""
+        from backend.orchestrator.curriculum_pipeline_v2 import (
+            _apply_deterministic_cleanup,
+        )
+        chunks = _chunks(24)
+        stages = [{
+            "stage_id": 1, "node_id": "1.1", "title": "傾倒場",
+            "key_concepts": ["章節補充"],
+            "source_chunk_ids": [c["chunk_id"] for c in chunks],
+        }]
+        out = _apply_deterministic_cleanup(stages, chunks, None, {}, "sess_t")
+        self.assertGreaterEqual(len(out), 2, "24 chunks 應被切成多個 stage")
+        # 至少一個「（續 N）」follow-up
+        cont = [i for i, s in enumerate(out) if "（續" in (s.get("title") or "")]
+        self.assertTrue(cont, "未產生「（續 N）」follow-up")
+        # base（index 0）與其續節相鄰
+        self.assertIn(1, cont, "（續 N）未緊接 base stage")
+        # renumber 連續
+        ids = [s.get("stage_id") for s in out]
+        self.assertEqual(ids, list(range(1, len(out) + 1)), "stage_id 未連續 renumber")
+
 
 if __name__ == "__main__":
     unittest.main()
