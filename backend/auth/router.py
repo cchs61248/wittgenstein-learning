@@ -66,8 +66,9 @@ async def login(body: UserLogin):
         "login ok  user_id=%s  email=%s  session_version=%d",
         row[0], body.email, session_version,
     )
+    role = await get_role_by_email(body.email)
     token = create_token(row[0], body.email, session_version=session_version)
-    return TokenOut(access_token=token, user_id=row[0], email=body.email)
+    return TokenOut(access_token=token, user_id=row[0], email=body.email, role=role)
 
 
 @router.get("/me", response_model=UserOut)
@@ -86,4 +87,5 @@ async def me(token: str):
         else:
             log.info("auth/me invalid_token  token_len=%d", len(token))
         raise HTTPException(status_code=401, detail="Token 無效")
-    return UserOut(user_id=payload["sub"], email=payload["email"])
+    role = await get_role_by_email(payload["email"])
+    return UserOut(user_id=payload["sub"], email=payload["email"], role=role)
