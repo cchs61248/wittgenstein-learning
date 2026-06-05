@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
@@ -53,7 +54,9 @@ from .ws.generation_handle import (
 async def lifespan(app: FastAPI):
     setup_logging()
     ws_logger().info("Wittgenstein Learning System starting up")
-    await init_db(DATABASE_URL)
+    # 在 runtime 讀 env（而非 import-time 凍結的 config.DATABASE_URL）：
+    # 測試的 testcontainers fixture 在 import 後才設 DATABASE_URL，lifespan 要拿到最新值。
+    await init_db(os.getenv("DATABASE_URL", DATABASE_URL))
     # 清掉前次 worker 強制關閉時殘留的孤兒 inflight locks（Phase 3 Task B2）
     try:
         n_dead = await inflight_cleanup_dead_workers()
