@@ -376,6 +376,41 @@ async def init_db(db_path: str) -> None:
     )
     await _connection.commit()
 
+    # Migration 026：email_whitelist（註冊白名單 + 角色權限）
+    await _connection.execute(
+        """CREATE TABLE IF NOT EXISTS email_whitelist (
+            email      TEXT PRIMARY KEY,
+            role       TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user')),
+            note       TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    await _connection.commit()
+    await _seed_whitelist_from_users(_connection)
+
+
+async def _seed_whitelist_from_users(conn) -> int:
+    """首次建立白名單時，把現有 users 全部補為 admin。
+
+    僅在 email_whitelist 為空時執行（冪等），避免每次啟動覆蓋 admin
+    手動調整的角色，或把已被移出白名單的舊 user 又補回來。
+    回傳新增筆數。
+    """
+    async with conn.execute("SELECT COUNT(*) FROM email_whitelist") as cur:
+        row = await cur.fetchone()
+        count = row[0]
+    if count > 0:
+        return 0
+    await conn.execute(
+        "INSERT OR IGNORE INTO email_whitelist (email, role) "
+        "SELECT email, 'admin' FROM users"
+    )
+    await conn.commit()
+    async with conn.execute("SELECT COUNT(*) FROM email_whitelist") as cur:
+        row = await cur.fetchone()
+        after = row[0]
+    return after
+
 
 async def close_db() -> None:
     global _connection
