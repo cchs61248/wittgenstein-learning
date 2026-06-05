@@ -6,14 +6,10 @@ from dotenv import load_dotenv
 _env_file = Path(__file__).parent / ".env"
 load_dotenv(_env_file)
 
-# DB_PATH 若為相對路徑，以 backend/ 為基準解析（.env 的寫法慣例）
-_raw_db = os.getenv("DB_PATH")
-if _raw_db and not Path(_raw_db).is_absolute():
-    DB_PATH: str = str((Path(__file__).parent / _raw_db).resolve())
-elif _raw_db:
-    DB_PATH = _raw_db
-else:
-    DB_PATH = str(Path(__file__).parent.parent / "data" / "learning.db")
+# PostgreSQL 連線：優先 DATABASE_URL，否則本機預設
+DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://wl:wl@localhost:5432/wl")
+DB_POOL_MIN_SIZE: int = int(os.getenv("DB_POOL_MIN_SIZE", "1"))
+DB_POOL_MAX_SIZE: int = int(os.getenv("DB_POOL_MAX_SIZE", "10"))
 DEFAULT_PROVIDER: str = os.getenv("DEFAULT_PROVIDER", "claude")
 _cors_env = os.getenv("CORS_ORIGINS", "")
 if _cors_env:
