@@ -4,23 +4,16 @@ EPUB 走章節切分路徑：回 {epub_chapters, total_chapters, parent_filename
 每個章節各自落地為一個 file_id，filename 為 NNN_<title>.txt。
 """
 import asyncio
+import os
 import re
-import tempfile
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-# 在 import backend.main / TestClient 前先指好 DB 路徑與 upload 目錄，
-# 避免 lifespan startup 用到專案 data/ 真實 DB。
-_TMP_ROOT = tempfile.mkdtemp(prefix="wl_upload_epub_test_")
-_DB_PATH = str(Path(_TMP_ROOT) / "test.db")
-import os as _os
-_os.environ["DB_PATH"] = _DB_PATH
-
-from backend.auth.utils import create_token  # noqa: E402
-from backend.db.database import get_db  # noqa: E402
-from backend.main import app  # noqa: E402
+from backend.auth.utils import create_token
+from backend.db.database import close_db, get_db, init_db
+from backend.main import app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_toc.epub"
 
@@ -33,22 +26,23 @@ def client_and_token(monkeypatch, tmp_path):
     monkeypatch.setattr("backend.files.upload_store.UPLOAD_DIR", upload_path)
     monkeypatch.setattr("backend.files.upload_gc.UPLOAD_DIR", upload_path)
 
-    with TestClient(app) as client:
-        # 在 lifespan startup 完成 init_db 後插入測試 user
-        async def _seed():
-            db = await get_db()
-            await db.execute(
-                "INSERT OR REPLACE INTO users (user_id, email, password_hash, session_version) "
-                "VALUES (?, ?, ?, ?)",
-                ("u_epub_test", "epub@test", "hash", 1),
-            )
-            await db.execute(
-                "INSERT OR REPLACE INTO email_whitelist (email, role) VALUES (?, ?)",
-                ("epub@test", "admin"),
-            )
-            await db.commit()
+    async def _setup():
+        await init_db(os.environ["DATABASE_URL"], reset=True)
+        db = await get_db()
+        await db.execute(
+            "INSERT INTO users (user_id, email, password_hash, session_version) "
+            "VALUES ($1,$2,$3,$4) ON CONFLICT (user_id) DO NOTHING",
+            "u_epub_test", "epub@test", "hash", 1,
+        )
+        await db.execute(
+            "INSERT INTO email_whitelist (email, role) VALUES ($1,$2) "
+            "ON CONFLICT (email) DO NOTHING",
+            "epub@test", "admin",
+        )
+        await close_db()
 
-        asyncio.get_event_loop().run_until_complete(_seed())
+    asyncio.run(_setup())
+    with TestClient(app) as client:
         token = create_token("u_epub_test", "epub@test", session_version=1)
         yield client, token
 

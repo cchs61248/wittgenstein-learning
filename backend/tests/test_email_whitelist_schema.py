@@ -1,75 +1,41 @@
-import tempfile
-import unittest
-from pathlib import Path
+"""email_whitelist schema 回歸（PostgreSQL）：表存在 + role CHECK 約束。
 
-from backend.db.database import (
-    close_db,
-    get_db,
-    init_db,
-    _seed_whitelist_from_users,
-)
+註：fresh-start 不再自動 seed（舊的 _seed_whitelist_from_users 已移除），
+故僅驗 schema 本身；角色行為由 auth 測試（test_role_lookup / test_register_whitelist）覆蓋。
+"""
+import os
+import unittest
+
+import asyncpg
+
+from backend.db.database import close_db, get_db, init_db
 
 
 class TestEmailWhitelistSchema(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._tmp_dir = tempfile.TemporaryDirectory()
-        db_path = str(Path(self._tmp_dir.name) / "test.db")
-        await init_db(db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
     async def asyncTearDown(self) -> None:
         await close_db()
-        self._tmp_dir.cleanup()
 
-    async def test_table_exists_and_role_check(self):
+    async def test_table_exists_and_insert(self):
         db = await get_db()
         await db.execute(
-            "INSERT INTO email_whitelist (email, role) VALUES (?, ?)",
-            ("a@example.com", "admin"),
+            "INSERT INTO email_whitelist (email, role) VALUES ($1, $2)",
+            "a@example.com", "admin",
         )
-        await db.commit()
-        async with db.execute(
-            "SELECT role FROM email_whitelist WHERE email = ?", ("a@example.com",)
-        ) as cur:
-            row = await cur.fetchone()
-        self.assertEqual(row[0], "admin")
-        with self.assertRaises(Exception):
+        row = await db.fetchrow(
+            "SELECT role FROM email_whitelist WHERE email = $1", "a@example.com"
+        )
+        self.assertEqual(row["role"], "admin")
+
+    async def test_role_check_rejects_invalid(self):
+        db = await get_db()
+        with self.assertRaises(asyncpg.PostgresError):
             await db.execute(
-                "INSERT INTO email_whitelist (email, role) VALUES (?, ?)",
-                ("b@example.com", "superuser"),
+                "INSERT INTO email_whitelist (email, role) VALUES ($1, $2)",
+                "b@example.com", "superuser",
             )
-            await db.commit()
-
-    async def test_seed_only_when_empty(self):
-        db = await get_db()
-        await db.execute(
-            "INSERT INTO users (user_id, email, password_hash, session_version) VALUES (?,?,?,?)",
-            ("u1", "u1@example.com", "h", 1),
-        )
-        await db.execute(
-            "INSERT INTO users (user_id, email, password_hash, session_version) VALUES (?,?,?,?)",
-            ("u2", "u2@example.com", "h", 1),
-        )
-        await db.commit()
-
-        added = await _seed_whitelist_from_users(db)
-        self.assertEqual(added, 2)
-        async with db.execute(
-            "SELECT role FROM email_whitelist WHERE email = ?", ("u1@example.com",)
-        ) as cur:
-            row = await cur.fetchone()
-        self.assertEqual(row[0], "admin")
-
-        await db.execute(
-            "UPDATE email_whitelist SET role='user' WHERE email='u1@example.com'"
-        )
-        await db.commit()
-        added2 = await _seed_whitelist_from_users(db)
-        self.assertEqual(added2, 0)
-        async with db.execute(
-            "SELECT role FROM email_whitelist WHERE email = ?", ("u1@example.com",)
-        ) as cur:
-            row = await cur.fetchone()
-        self.assertEqual(row[0], "user")
 
 
 if __name__ == "__main__":
