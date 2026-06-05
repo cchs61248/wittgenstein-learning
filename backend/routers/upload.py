@@ -10,7 +10,7 @@ from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from ..auth.utils import decode_token_active
+from ..auth.utils import decode_token_active, get_role_by_email
 from ..config import UPLOAD_MAX_CHAR_COUNT, UPLOAD_MAX_FILE_MB
 from ..files.upload_store import (
     is_plain_upload,
@@ -37,6 +37,17 @@ def _sanitize_chapter_filename(name: str, max_len: int = 80) -> str:
     name = re.sub(r'[<>:"/\\|?*]', "_", name)
     name = re.sub(r"\s+", " ", name).strip()
     return (name or "untitled")[:max_len]
+
+
+async def _require_admin_or_403(authorization: Optional[str]) -> None:
+    """驗 token 且角色須為 admin，否則拋對應 HTTPException。"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="未授權")
+    payload = await decode_token_active(authorization.removeprefix("Bearer "))
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token 無效")
+    if await get_role_by_email(payload.get("email", "")) != "admin":
+        raise HTTPException(status_code=403, detail="僅管理員可新增教材")
 
 
 def _save_parsed_upload(
@@ -70,10 +81,7 @@ async def upload_file(
     file: UploadFile = File(...),
     authorization: Optional[str] = Header(None),
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未授權")
-    if not await decode_token_active(authorization.removeprefix("Bearer ")):
-        raise HTTPException(status_code=401, detail="Token 無效")
+    await _require_admin_or_403(authorization)
 
     filename = file.filename or "unknown"
     suffix = Path(filename).suffix.lower()
@@ -196,10 +204,7 @@ async def upload_url(
     body: UrlUploadRequest,
     authorization: Optional[str] = Header(None),
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未授權")
-    if not await decode_token_active(authorization.removeprefix("Bearer ")):
-        raise HTTPException(status_code=401, detail="Token 無效")
+    await _require_admin_or_403(authorization)
 
     url = body.url.strip()
     if not url.startswith(("http://", "https://")):
@@ -255,10 +260,7 @@ async def youtube_asr_stream(
     body: YoutubeAsrRequest,
     authorization: Optional[str] = Header(None),
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未授權")
-    if not await decode_token_active(authorization.removeprefix("Bearer ")):
-        raise HTTPException(status_code=401, detail="Token 無效")
+    await _require_admin_or_403(authorization)
 
     url = body.url.strip()
     if not url.startswith(("http://", "https://")):
