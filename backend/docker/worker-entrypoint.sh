@@ -1,7 +1,8 @@
 #!/bin/sh
 set -e
 
-# 直接 bind-mount 本機 ./data → /app/data（CURRICULUM_USE_ARQ=1：uvicorn 只 enqueue，worker 寫 DB）
-export DB_PATH="${DB_PATH:-../data/learning.db}"
+# PostgreSQL：worker 由 arq_settings.startup 讀 DATABASE_URL（compose 已設定）。
+# 未經 compose 直接跑時給一個預設值。
+export DATABASE_URL="${DATABASE_URL:-postgresql://wl:wl@postgres:5432/wl}"
 
 exec python -m arq backend.jobs.arq_settings.WorkerSettings

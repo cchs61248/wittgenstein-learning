@@ -40,9 +40,13 @@ GOOGLE_API_KEY=...
 MONICA_API_KEY=...             # Monica OpenAI 相容代理（可選）
 MONICA_BASE_URL=...            # Monica API 基底 URL（可選）
 DEFAULT_PROVIDER=claude        # claude | openai | gemini | monica
-DB_PATH=../data/learning.db    # 相對路徑以 backend/ 為基準
+DATABASE_URL=postgresql://wl:wl@localhost:5432/wl   # PostgreSQL 連線（asyncpg）
+DB_POOL_MIN_SIZE=1
+DB_POOL_MAX_SIZE=10
 JWT_SECRET=change-me
 ```
+
+> **資料庫已從 SQLite 遷移到 PostgreSQL（asyncpg）。** 本機開發先 `docker compose up -d postgres`（或自備 PG 並設 `DATABASE_URL`）。schema 收斂於 `backend/db/schema.sql`（單一 baseline，無歷史 migration）。後端測試用 **testcontainers** 自動起拋棄式 postgres，故**跑測試需 Docker daemon**；測試依賴在 `backend/requirements-dev.txt`（`pip install -r requirements-dev.txt`）。
 
 ---
 
@@ -220,7 +224,7 @@ Set-Location "c:\Users\<username>\Documents\aaron\wittgenstein-learning\backend"
 
 **`confusion_patterns` 格式演進**：Phase 3 起寫入結構化 dict（concept / pattern / severity / repair_strategy），`get_misconceptions()` 同時相容舊字串列表。新代碼一律傳 `misconception_pattern=dict`，不傳 `confused_concepts`。
 
-**`DB_PATH` 解析**：`config.py` 用 `Path(__file__).parent` 明確載入 `backend/.env`，相對路徑以 `backend/` 為基準。從不同 CWD 啟動若出現路徑找不到，先確認 `.env` 載入來源。
+**`DATABASE_URL` / 連線池**：`config.py` 載入 `backend/.env` 後讀 `DATABASE_URL`（預設 `postgresql://wl:wl@localhost:5432/wl`）。`db/database.py` 用 **asyncpg pool**（`get_db()` 回傳 pool；單句 autocommit、多句用 `async with conn.transaction()` 且**交易內只能用同一個 `conn`**）。**注意**：`config.DATABASE_URL` 在 import 時凍結；`main.py` lifespan 與 arq worker startup 都改讀 `os.getenv("DATABASE_URL", ...)`（runtime），因為 testcontainers 測試在 import 後才設 env。`init_db(dsn, *, reset=False)`：`reset=True` 僅測試環境（`WL_TEST_ENV=1`）允許，會 drop/recreate public schema。離線 `tools/*` 部分仍標 `TODO(pg)` 未移植（不在 app/worker/測試路徑）。
 
 **ProgressManager `attempts` 來源（高頻 bug 源）**：`attempts` 必須來自 task_payload 的 `current_attempt`（即 `wm.current_attempt`），**不可用 `len(stage_evaluations)`**。`wm.stage_evaluations` 每輪 retry/remediate 後重置為 `[]`，`len` 永遠等於當輪題目數，與嘗試輪次無關。Orchestrator 在 `_make_progress_decision` 的 task_payload 中必須傳 `"current_attempt": wm.current_attempt`。
 

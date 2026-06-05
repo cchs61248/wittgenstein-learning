@@ -1,3 +1,4 @@
 # 測試/開發用依賴（不進 production image）
 -r requirements.txt
 testcontainers[postgresql]>=4.0.0
+pytest-timeout>=2.0.0
