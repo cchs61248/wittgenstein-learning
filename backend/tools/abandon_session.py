@@ -1,3 +1,4 @@
+# TODO(pg): 此離線運維腳本待改 asyncpg
 """Abandon a stuck generating session (marks abandoned, clears source_file_ids_json)."""
 import argparse
 import sqlite3

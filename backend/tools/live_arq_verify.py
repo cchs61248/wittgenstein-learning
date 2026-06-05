@@ -1,3 +1,4 @@
+# TODO(pg): 此離線運維腳本待改 asyncpg
 """Live verification: 155-chunk curriculum via Arq worker.
 
 Usage (from wittgenstein-learning/):

@@ -1,11 +1,10 @@
 """Arq worker entrypoint for curriculum pipeline."""
 from __future__ import annotations
 
-import asyncio
 import logging
-import sqlite3
+import os
 
-from ..config import DB_PATH, DEFAULT_PROVIDER
+from ..config import DATABASE_URL, DEFAULT_PROVIDER
 from ..db.database import close_db, init_db
 from ..db.inflight_lock import release
 from ..llm.provider_factory import create_provider
@@ -18,29 +17,9 @@ from .enqueue import inflight_key
 _log = logging.getLogger("wl.jobs.curriculum")
 
 
-async def _init_db_with_retry(db_path: str, *, attempts: int = 3) -> None:
-    """Retry only transient SQLite storage errors."""
-    last_err: Exception | None = None
-    for i in range(1, attempts + 1):
-        try:
-            await init_db(db_path)
-            return
-        except sqlite3.OperationalError as e:
-            last_err = e
-            msg = str(e).lower()
-            if "disk i/o error" not in msg and "database is locked" not in msg:
-                raise
-            _log.warning("init_db transient error (attempt %d/%d): %s", i, attempts, e)
-            await close_db()
-            if i < attempts:
-                await asyncio.sleep(0.5 * i)
-    assert last_err is not None
-    raise last_err
-
-
 async def run_curriculum_job(ctx, session_id: str) -> dict:
     """Run or resume curriculum pipeline for session_id (Arq worker)."""
-    await _init_db_with_retry(DB_PATH)
+    await init_db(os.getenv("DATABASE_URL", DATABASE_URL))
     key = inflight_key(session_id)
     try:
         row = await session_memory.get_session(session_id)

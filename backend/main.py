@@ -69,8 +69,7 @@ async def lifespan(app: FastAPI):
         ws_logger().warning(f"inflight_locks cleanup_stale failed on startup: {e}")
     # 清理未被 session 引用的 upload 孤兒（含上傳後未開 session、失敗 session 遺留）
     try:
-        gc_result = gc_unreferenced_uploads(
-            DATABASE_URL,
+        gc_result = await gc_unreferenced_uploads(
             max_age_hours=UPLOAD_ORPHAN_MAX_AGE_HOURS,
         )
         if gc_result["deleted_count"]:
