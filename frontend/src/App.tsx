@@ -45,7 +45,8 @@ const initialSessionIdSnapshot: string | null =
   typeof window !== 'undefined' ? localStorage.getItem('wl_session_id') : null;
 
 export default function App() {
-  const { token, email, clearAuth } = useSessionStore();
+  const { token, email, role, clearAuth } = useSessionStore();
+  const isAdmin = role === 'admin';
   const {
     setSession,
     setExplanationComplete,
@@ -288,7 +289,9 @@ export default function App() {
           applyLayoutForSession(generatingEntry.sessionId);
           return;
         }
-        setShowUpload(true);
+        if (useSessionStore.getState().role === 'admin') {
+          setShowUpload(true);
+        }
         return;
       }
 
@@ -1168,6 +1171,7 @@ export default function App() {
                 activeSessionId={storeSessionId}
                 onSwitch={handleSwitchSession}
                 onNewMaterial={() => setShowUpload(true)}
+                canAddMaterial={isAdmin}
                 disableNewMaterial={hasGenerating}
                 onRename={handleRenameBook}
                 onDelete={handleDeleteBook}

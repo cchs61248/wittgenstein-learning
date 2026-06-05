@@ -10,6 +10,7 @@ interface BookshelfPanelProps {
   onSwitch: (entry: BookEntry) => void;
   onNewMaterial: () => void;
   disableNewMaterial?: boolean;
+  canAddMaterial?: boolean;
   onRename: (sessionId: string, title: string) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
 }
@@ -190,6 +191,7 @@ export function BookshelfPanel({
   onSwitch,
   onNewMaterial,
   disableNewMaterial = false,
+  canAddMaterial = true,
   onRename,
   onDelete,
 }: BookshelfPanelProps) {
@@ -315,15 +317,17 @@ export function BookshelfPanel({
     <div className="bookshelf-panel">
       <div className="bookshelf-header">
         <span>書櫃</span>
-        <button
-          className="bookshelf-add-btn"
-          onClick={onNewMaterial}
-          disabled={disableNewMaterial}
-          aria-label="新增學習材料"
-          title={disableNewMaterial ? '目前有教材正在生成，完成後才能新增' : '新增學習材料'}
-        >
-          ＋ 新增材料
-        </button>
+        {canAddMaterial && (
+          <button
+            className="bookshelf-add-btn"
+            onClick={onNewMaterial}
+            disabled={disableNewMaterial}
+            aria-label="新增學習材料"
+            title={disableNewMaterial ? '目前有教材正在生成，完成後才能新增' : '新增學習材料'}
+          >
+            ＋ 新增材料
+          </button>
+        )}
       </div>
 
       <div className="bookshelf-list">
