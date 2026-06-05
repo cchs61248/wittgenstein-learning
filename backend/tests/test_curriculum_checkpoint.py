@@ -1,6 +1,5 @@
 """Curriculum checkpoint CRUD tests."""
 import os
-import tempfile
 import unittest
 
 from backend.db.database import init_db, close_db, get_db
@@ -11,23 +10,19 @@ from backend.memory import session_memory
 async def _ensure_user(user_id: str = "u1") -> None:
     db = await get_db()
     await db.execute(
-        "INSERT OR IGNORE INTO users (user_id, email, password_hash) VALUES (?, ?, ?)",
-        (user_id, f"{user_id}@test.local", "hash"),
+        "INSERT INTO users (user_id, email, password_hash) VALUES ($1, $2, $3)"
+        " ON CONFLICT (user_id) DO NOTHING",
+        user_id, f"{user_id}@test.local", "hash",
     )
-    await db.commit()
 
 
 class TestCurriculumCheckpoint(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         await _ensure_user()
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_upsert_and_load_roundtrip(self):
         await session_memory.create_generating_stub("sess_x", "u1", "abc")

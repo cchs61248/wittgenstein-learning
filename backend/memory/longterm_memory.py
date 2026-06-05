@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+import asyncpg
 from ..db.database import get_db
 
 
@@ -9,10 +10,9 @@ def _utcnow() -> datetime:
 
 async def get_user_profile_summary(user_id: str) -> str:
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM user_learning_profile WHERE user_id = ?", (user_id,)
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT * FROM user_learning_profile WHERE user_id = $1", user_id
+    )
 
     if not row:
         return "尚無學習記錄"
@@ -26,13 +26,12 @@ async def get_user_profile_summary(user_id: str) -> str:
 
 async def get_weak_concepts(user_id: str, limit: int = 5) -> str:
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT concept_name FROM concept_mastery
-           WHERE user_id = ? AND mastery_score < 0.6
-           ORDER BY last_tested DESC LIMIT ?""",
-        (user_id, limit),
-    ) as cur:
-        rows = await cur.fetchall()
+           WHERE user_id = $1 AND mastery_score < 0.6
+           ORDER BY last_tested DESC LIMIT $2""",
+        user_id, limit,
+    )
 
     if not rows:
         return "無"
@@ -53,14 +52,13 @@ async def get_misconceptions(user_id: str, concepts: list[str]) -> list[dict]:
     if not concepts:
         return []
     db = await get_db()
-    placeholders = ",".join("?" for _ in concepts)
-    async with db.execute(
+    placeholders = ",".join(f"${i+2}" for i in range(len(concepts)))
+    rows = await db.fetch(
         f"""SELECT concept_name, confusion_patterns FROM concept_mastery
-            WHERE user_id = ? AND concept_name IN ({placeholders})
+            WHERE user_id = $1 AND concept_name IN ({placeholders})
               AND confusion_patterns IS NOT NULL AND confusion_patterns != '[]'""",
-        [user_id, *concepts],
-    ) as cur:
-        rows = await cur.fetchall()
+        user_id, *concepts,
+    )
 
     result: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -91,18 +89,17 @@ async def get_concept_mastery_map(
     if not concepts:
         return {}
     db = await get_db()
-    placeholders = ",".join("?" for _ in concepts)
+    placeholders = ",".join(f"${i+2}" for i in range(len(concepts)))
     params: list = [user_id, *concepts]
     sig_clause = ""
     if source_signature is not None:
-        sig_clause = " AND COALESCE(source_signature, '') = ?"
+        sig_clause = f" AND COALESCE(source_signature, '') = ${len(params)+1}"
         params.append(source_signature)
-    async with db.execute(
+    rows = await db.fetch(
         f"""SELECT concept_name, mastery_score FROM concept_mastery
-            WHERE user_id = ? AND concept_name IN ({placeholders}){sig_clause}""",
-        params,
-    ) as cur:
-        rows = await cur.fetchall()
+            WHERE user_id = $1 AND concept_name IN ({placeholders}){sig_clause}""",
+        *params,
+    )
     return {row["concept_name"]: float(row["mastery_score"]) for row in rows}
 
 
@@ -121,19 +118,19 @@ async def get_concept_canonical_pool(
     db = await get_db()
     sql = """SELECT concept_name, total_exposures, last_tested
              FROM concept_mastery
-             WHERE user_id = ? AND source_signature = ?
+             WHERE user_id = $1 AND source_signature = $2
              ORDER BY total_exposures DESC, last_tested DESC"""
     params: list = [user_id, source_signature]
     if limit is not None:
-        sql += " LIMIT ?"
+        sql += f" LIMIT ${len(params)+1}"
         params.append(limit)
-    async with db.execute(sql, params) as cur:
-        rows = await cur.fetchall()
+    rows = await db.fetch(sql, *params)
     return [
         {
             "concept_name": row["concept_name"],
             "total_exposures": int(row["total_exposures"] or 0),
-            "last_tested": str(row["last_tested"] or ""),
+            # asyncpg returns datetime for TIMESTAMPTZ; convert for JSON serialization
+            "last_tested": row["last_tested"].isoformat() if row["last_tested"] is not None else "",
         }
         for row in rows
     ]
@@ -158,19 +155,17 @@ async def get_user_mastery_map(
     """
     db = await get_db()
     if source_signature is not None:
-        async with db.execute(
+        rows = await db.fetch(
             """SELECT concept_name, mastery_score FROM concept_mastery
-               WHERE user_id = ? AND mastery_score >= ? AND source_signature = ?""",
-            (user_id, threshold, source_signature),
-        ) as cur:
-            rows = await cur.fetchall()
+               WHERE user_id = $1 AND mastery_score >= $2 AND source_signature = $3""",
+            user_id, threshold, source_signature,
+        )
     else:
-        async with db.execute(
+        rows = await db.fetch(
             """SELECT concept_name, mastery_score FROM concept_mastery
-               WHERE user_id = ? AND mastery_score >= ?""",
-            (user_id, threshold),
-        ) as cur:
-            rows = await cur.fetchall()
+               WHERE user_id = $1 AND mastery_score >= $2""",
+            user_id, threshold,
+        )
     return {row["concept_name"]: float(row["mastery_score"]) for row in rows}
 
 
@@ -187,137 +182,129 @@ async def update_concept_mastery(
 ) -> None:
     db = await get_db()
     sig_key = (source_signature or "").strip()
-    if sig_key:
-        lookup_sql = (
-            """SELECT mastery_score, total_exposures, confusion_patterns, successful_analogies,
-                      source_signature
-               FROM concept_mastery
-               WHERE user_id = ? AND concept_name = ? AND COALESCE(source_signature, '') = ?"""
-        )
-        lookup_params = (user_id, concept_name, sig_key)
-    else:
-        # Legacy caller 未傳 signature：以 (user, concept) 找第一筆，不覆蓋既有出處標記
-        lookup_sql = (
-            """SELECT mastery_score, total_exposures, confusion_patterns, successful_analogies,
-                      source_signature
-               FROM concept_mastery
-               WHERE user_id = ? AND concept_name = ?
-               ORDER BY last_tested DESC LIMIT 1"""
-        )
-        lookup_params = (user_id, concept_name)
-    async with db.execute(lookup_sql, lookup_params) as cur:
-        row = await cur.fetchone()
-    if row and not sig_key:
-        sig_key = (row["source_signature"] or "").strip()
 
-    # ── 組裝 confusion_patterns ──────────────────────────────────
-    existing_confusion: list = json.loads((row["confusion_patterns"] if row else None) or "[]")
-    if misconception_pattern and isinstance(misconception_pattern, dict):
-        # 結構化 misconception（Phase 3+）：去除相同 pattern 的舊記錄後 append
-        existing_confusion = [
-            p for p in existing_confusion
-            if not (isinstance(p, dict) and p.get("pattern") == misconception_pattern.get("pattern"))
-        ]
-        existing_confusion.append(misconception_pattern)
-    elif confused_concepts:
-        # 舊格式字串列表（相容）
-        # dict.fromkeys 要求 hashable，existing_confusion 可能含 Phase 3+ 的 dict，需分開處理
-        existing_dicts = [p for p in existing_confusion if isinstance(p, dict)]
-        existing_strings = [p for p in existing_confusion if isinstance(p, str)]
-        new_strings = [c for c in confused_concepts if isinstance(c, str) and c not in existing_strings]
-        existing_confusion = existing_dicts + existing_strings + new_strings
-    existing_confusion = existing_confusion[-5:]
+    # update_concept_mastery does a lookup + conditional write; wrap atomically
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            if sig_key:
+                lookup_sql = (
+                    """SELECT mastery_score, total_exposures, confusion_patterns, successful_analogies,
+                              source_signature
+                       FROM concept_mastery
+                       WHERE user_id = $1 AND concept_name = $2 AND COALESCE(source_signature, '') = $3"""
+                )
+                row = await conn.fetchrow(lookup_sql, user_id, concept_name, sig_key)
+            else:
+                # Legacy caller 未傳 signature：以 (user, concept) 找第一筆，不覆蓋既有出處標記
+                lookup_sql = (
+                    """SELECT mastery_score, total_exposures, confusion_patterns, successful_analogies,
+                              source_signature
+                       FROM concept_mastery
+                       WHERE user_id = $1 AND concept_name = $2
+                       ORDER BY last_tested DESC LIMIT 1"""
+                )
+                row = await conn.fetchrow(lookup_sql, user_id, concept_name)
+            if row and not sig_key:
+                sig_key = (row["source_signature"] or "").strip()
 
-    # ── 組裝 successful_analogies ────────────────────────────────
-    existing_analogies: list = json.loads((row["successful_analogies"] if row else None) or "[]")
-    if successful_analogies:
-        for a in successful_analogies:
-            if a and a not in existing_analogies:
-                existing_analogies.append(a)
-    if lesson_was_effective and analogy_used and analogy_used not in existing_analogies:
-        existing_analogies.append(analogy_used)
-    existing_analogies = existing_analogies[-5:]
+            # ── 組裝 confusion_patterns ──────────────────────────────────
+            existing_confusion: list = json.loads((row["confusion_patterns"] if row else None) or "[]")
+            if misconception_pattern and isinstance(misconception_pattern, dict):
+                # 結構化 misconception（Phase 3+）：去除相同 pattern 的舊記錄後 append
+                existing_confusion = [
+                    p for p in existing_confusion
+                    if not (isinstance(p, dict) and p.get("pattern") == misconception_pattern.get("pattern"))
+                ]
+                existing_confusion.append(misconception_pattern)
+            elif confused_concepts:
+                # 舊格式字串列表（相容）
+                # dict.fromkeys 要求 hashable，existing_confusion 可能含 Phase 3+ 的 dict，需分開處理
+                existing_dicts = [p for p in existing_confusion if isinstance(p, dict)]
+                existing_strings = [p for p in existing_confusion if isinstance(p, str)]
+                new_strings = [c for c in confused_concepts if isinstance(c, str) and c not in existing_strings]
+                existing_confusion = existing_dicts + existing_strings + new_strings
+            existing_confusion = existing_confusion[-5:]
 
-    if row:
-        ema_score = 0.7 * float(row["mastery_score"]) + 0.3 * new_score
-        exposures = row["total_exposures"] + 1
-        if sig_key:
-            await db.execute(
-                """UPDATE concept_mastery
-                   SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?,
-                       successful_analogies = ?, last_tested = ?
-                   WHERE user_id = ? AND concept_name = ? AND COALESCE(source_signature, '') = ?""",
-                (
-                    ema_score, exposures,
+            # ── 組裝 successful_analogies ────────────────────────────────
+            existing_analogies: list = json.loads((row["successful_analogies"] if row else None) or "[]")
+            if successful_analogies:
+                for a in successful_analogies:
+                    if a and a not in existing_analogies:
+                        existing_analogies.append(a)
+            if lesson_was_effective and analogy_used and analogy_used not in existing_analogies:
+                existing_analogies.append(analogy_used)
+            existing_analogies = existing_analogies[-5:]
+
+            if row:
+                ema_score = 0.7 * float(row["mastery_score"]) + 0.3 * new_score
+                exposures = row["total_exposures"] + 1
+                if sig_key:
+                    await conn.execute(
+                        """UPDATE concept_mastery
+                           SET mastery_score = $1, total_exposures = $2, confusion_patterns = $3,
+                               successful_analogies = $4, last_tested = $5
+                           WHERE user_id = $6 AND concept_name = $7 AND COALESCE(source_signature, '') = $8""",
+                        ema_score, exposures,
+                        json.dumps(existing_confusion, ensure_ascii=False),
+                        json.dumps(existing_analogies, ensure_ascii=False),
+                        _utcnow(), user_id, concept_name, sig_key,
+                    )
+                else:
+                    await conn.execute(
+                        """UPDATE concept_mastery
+                           SET mastery_score = $1, total_exposures = $2, confusion_patterns = $3,
+                               successful_analogies = $4, last_tested = $5
+                           WHERE user_id = $6 AND concept_name = $7""",
+                        ema_score, exposures,
+                        json.dumps(existing_confusion, ensure_ascii=False),
+                        json.dumps(existing_analogies, ensure_ascii=False),
+                        _utcnow(), user_id, concept_name,
+                    )
+            else:
+                insert_sig = sig_key or (source_signature if source_signature else None)
+                await conn.execute(
+                    """INSERT INTO concept_mastery
+                       (user_id, concept_name, mastery_score, total_exposures, confusion_patterns,
+                        successful_analogies, last_tested, source_signature)
+                       VALUES ($1, $2, $3, 1, $4, $5, $6, $7)""",
+                    user_id, concept_name, new_score,
                     json.dumps(existing_confusion, ensure_ascii=False),
                     json.dumps(existing_analogies, ensure_ascii=False),
-                    _utcnow(), user_id, concept_name, sig_key,
-                ),
-            )
-        else:
-            await db.execute(
-                """UPDATE concept_mastery
-                   SET mastery_score = ?, total_exposures = ?, confusion_patterns = ?,
-                       successful_analogies = ?, last_tested = ?
-                   WHERE user_id = ? AND concept_name = ?""",
-                (
-                    ema_score, exposures,
-                    json.dumps(existing_confusion, ensure_ascii=False),
-                    json.dumps(existing_analogies, ensure_ascii=False),
-                    _utcnow(), user_id, concept_name,
-                ),
-            )
-    else:
-        insert_sig = sig_key or (source_signature if source_signature else None)
-        await db.execute(
-            """INSERT INTO concept_mastery
-               (user_id, concept_name, mastery_score, total_exposures, confusion_patterns,
-                successful_analogies, last_tested, source_signature)
-               VALUES (?, ?, ?, 1, ?, ?, ?, ?)""",
-            (
-                user_id, concept_name, new_score,
-                json.dumps(existing_confusion, ensure_ascii=False),
-                json.dumps(existing_analogies, ensure_ascii=False),
-                _utcnow(), insert_sig,
-            ),
-        )
-    await db.commit()
+                    _utcnow(), insert_sig,
+                )
 
 
 async def update_user_profile(user_id: str, attempts_this_session: float) -> None:
     db = await get_db()
-    async with db.execute(
-        "SELECT avg_attempts_per_stage FROM user_learning_profile WHERE user_id = ?",
-        (user_id,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT avg_attempts_per_stage FROM user_learning_profile WHERE user_id = $1",
+        user_id,
+    )
 
     if row:
         new_avg = 0.8 * row[0] + 0.2 * attempts_this_session
         await db.execute(
-            "UPDATE user_learning_profile SET avg_attempts_per_stage = ?, updated_at = ? WHERE user_id = ?",
-            (new_avg, _utcnow(), user_id),
+            "UPDATE user_learning_profile SET avg_attempts_per_stage = $1, updated_at = $2 WHERE user_id = $3",
+            new_avg, _utcnow(), user_id,
         )
     else:
         await db.execute(
-            "INSERT INTO user_learning_profile (user_id, avg_attempts_per_stage) VALUES (?, ?)",
-            (user_id, attempts_this_session),
+            "INSERT INTO user_learning_profile (user_id, avg_attempts_per_stage) VALUES ($1, $2)",
+            user_id, attempts_this_session,
         )
-    await db.commit()
 
 
 async def get_all_concept_mastery(user_id: str) -> list[dict]:
     """回傳該用戶所有概念的掌握度記錄（按掌握度升序）。"""
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT concept_name, mastery_score, total_exposures,
                   confusion_patterns, last_tested
            FROM concept_mastery
-           WHERE user_id = ?
+           WHERE user_id = $1
            ORDER BY mastery_score ASC""",
-        (user_id,),
-    ) as cur:
-        rows = await cur.fetchall()
+        user_id,
+    )
 
     result = []
     for row in rows:
@@ -326,6 +313,7 @@ async def get_all_concept_mastery(user_id: str) -> list[dict]:
             "mastery_score": float(row["mastery_score"]),
             "total_exposures": int(row["total_exposures"]),
             "confusion_patterns": json.loads(row["confusion_patterns"] or "[]"),
-            "last_tested": str(row["last_tested"]) if row["last_tested"] else None,
+            # asyncpg returns datetime for TIMESTAMPTZ; use isoformat for serialization
+            "last_tested": row["last_tested"].isoformat() if row["last_tested"] is not None else None,
         })
     return result

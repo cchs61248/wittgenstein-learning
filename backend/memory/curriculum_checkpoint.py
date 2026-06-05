@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import asyncpg
+
 from ..db.database import get_db
 
 _PIPELINE_VERSION = "v2"
@@ -36,11 +38,10 @@ def _row_to_dict(row) -> dict[str, Any]:
 
 async def load_checkpoint(session_id: str) -> dict[str, Any] | None:
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM curriculum_checkpoints WHERE session_id = ?",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT * FROM curriculum_checkpoints WHERE session_id = $1",
+        session_id,
+    )
     if not row:
         return None
     return _row_to_dict(row)
@@ -102,60 +103,57 @@ async def upsert_checkpoint(
         merged["last_region_id"] = last_region_id
 
     db = await get_db()
+    # upsert_checkpoint is a single INSERT...ON CONFLICT statement → no explicit tx needed
     await db.execute(
         """INSERT INTO curriculum_checkpoints
            (session_id, content_hash, pipeline_version, pipeline_meta_json,
             required_outline_json, regions_json, completed_region_ids_json,
             all_candidates_json, summary_parts_json, meter_json, last_region_id,
             updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-           ON CONFLICT(session_id) DO UPDATE SET
-            content_hash = excluded.content_hash,
-            pipeline_version = excluded.pipeline_version,
-            pipeline_meta_json = excluded.pipeline_meta_json,
-            required_outline_json = excluded.required_outline_json,
-            regions_json = excluded.regions_json,
-            completed_region_ids_json = excluded.completed_region_ids_json,
-            all_candidates_json = excluded.all_candidates_json,
-            summary_parts_json = excluded.summary_parts_json,
-            meter_json = excluded.meter_json,
-            last_region_id = excluded.last_region_id,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+           ON CONFLICT (session_id) DO UPDATE SET
+            content_hash = EXCLUDED.content_hash,
+            pipeline_version = EXCLUDED.pipeline_version,
+            pipeline_meta_json = EXCLUDED.pipeline_meta_json,
+            required_outline_json = EXCLUDED.required_outline_json,
+            regions_json = EXCLUDED.regions_json,
+            completed_region_ids_json = EXCLUDED.completed_region_ids_json,
+            all_candidates_json = EXCLUDED.all_candidates_json,
+            summary_parts_json = EXCLUDED.summary_parts_json,
+            meter_json = EXCLUDED.meter_json,
+            last_region_id = EXCLUDED.last_region_id,
             updated_at = CURRENT_TIMESTAMP""",
-        (
-            session_id,
-            merged["content_hash"],
-            merged.get("pipeline_version", _PIPELINE_VERSION),
-            json.dumps(merged.get("pipeline_meta") or {}, ensure_ascii=False),
-            json.dumps(merged.get("required_outline"), ensure_ascii=False)
-            if merged.get("required_outline") is not None
-            else None,
-            json.dumps(merged.get("regions") or [], ensure_ascii=False),
-            json.dumps(merged.get("completed_region_ids") or [], ensure_ascii=False),
-            json.dumps(merged.get("all_candidates") or [], ensure_ascii=False),
-            json.dumps(merged.get("summary_parts") or [], ensure_ascii=False),
-            json.dumps(
-                {"breakdown": merged.get("meter_breakdown") or {}},
-                ensure_ascii=False,
-            ),
-            merged.get("last_region_id"),
+        session_id,
+        merged["content_hash"],
+        merged.get("pipeline_version", _PIPELINE_VERSION),
+        json.dumps(merged.get("pipeline_meta") or {}, ensure_ascii=False),
+        json.dumps(merged.get("required_outline"), ensure_ascii=False)
+        if merged.get("required_outline") is not None
+        else None,
+        json.dumps(merged.get("regions") or [], ensure_ascii=False),
+        json.dumps(merged.get("completed_region_ids") or [], ensure_ascii=False),
+        json.dumps(merged.get("all_candidates") or [], ensure_ascii=False),
+        json.dumps(merged.get("summary_parts") or [], ensure_ascii=False),
+        json.dumps(
+            {"breakdown": merged.get("meter_breakdown") or {}},
+            ensure_ascii=False,
         ),
+        merged.get("last_region_id"),
     )
-    await db.commit()
 
 
 async def delete_checkpoint(session_id: str) -> None:
     db = await get_db()
     await db.execute(
-        "DELETE FROM curriculum_checkpoints WHERE session_id = ?",
-        (session_id,),
+        "DELETE FROM curriculum_checkpoints WHERE session_id = $1",
+        session_id,
     )
-    await db.commit()
 
 
 async def list_resumable_sessions() -> list[str]:
     """generating sessions with checkpoint + source_chunks."""
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT s.session_id
            FROM sessions s
            INNER JOIN curriculum_checkpoints c ON c.session_id = s.session_id
@@ -164,6 +162,5 @@ async def list_resumable_sessions() -> list[str]:
                SELECT 1 FROM source_chunks sc WHERE sc.session_id = s.session_id
              )
            ORDER BY c.updated_at ASC""",
-    ) as cur:
-        rows = await cur.fetchall()
+    )
     return [row[0] for row in rows]

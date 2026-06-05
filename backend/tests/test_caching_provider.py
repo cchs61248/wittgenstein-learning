@@ -1,6 +1,5 @@
 """CachingLLMProvider behavior tests."""
 import os
-import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -31,8 +30,7 @@ class _InnerProvider:
 
 class TestCachingProvider(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        await init_db(os.path.join(self._tmpdir, "test.db"))
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
     async def asyncTearDown(self):
         await close_db()
