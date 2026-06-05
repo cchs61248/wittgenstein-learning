@@ -79,11 +79,3 @@ async def is_email_whitelisted(email: str) -> bool:
         "SELECT 1 FROM email_whitelist WHERE email = ?", (email,)
     ) as cur:
         return await cur.fetchone() is not None
-
-
-async def require_admin(token: str) -> bool:
-    """token 有效且角色為 admin 才回 True。供 REST/WS 封鎖點共用。"""
-    payload = await decode_token_active(token)
-    if not payload:
-        return False
-    return await get_role_by_email(payload.get("email", "")) == "admin"
