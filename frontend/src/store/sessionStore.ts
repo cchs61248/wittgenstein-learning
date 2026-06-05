@@ -22,7 +22,8 @@ interface SessionState {
   token: string | null;
   userId: string | null;
   email: string | null;
-  setAuth: (token: string, userId: string, email: string) => void;
+  role: string | null;
+  setAuth: (token: string, userId: string, email: string, role: string) => void;
   clearAuth: () => void;
 
   // 會話
@@ -200,16 +201,19 @@ export const useSessionStore = create<SessionState>((set) => ({
   token: localStorage.getItem('wl_token'),
   userId: localStorage.getItem('wl_user_id'),
   email: localStorage.getItem('wl_email'),
-  setAuth: (token, userId, email) => {
+  role: localStorage.getItem('wl_role'),
+  setAuth: (token, userId, email, role) => {
     localStorage.setItem('wl_token', token);
     localStorage.setItem('wl_user_id', userId);
     localStorage.setItem('wl_email', email);
-    set({ token, userId, email });
+    localStorage.setItem('wl_role', role);
+    set({ token, userId, email, role });
   },
   clearAuth: () => {
     localStorage.removeItem('wl_token');
     localStorage.removeItem('wl_user_id');
     localStorage.removeItem('wl_email');
+    localStorage.removeItem('wl_role');
     localStorage.removeItem('wl_session_id');
     localStorage.removeItem('wl_stage_explanations');
     localStorage.removeItem('wl_stage_qa_histories');
@@ -222,6 +226,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       token: null,
       userId: null,
       email: null,
+      role: null,
       sessionId: null,
       stages: [],
       pendingMap: null,

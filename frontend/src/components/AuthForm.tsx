@@ -106,7 +106,7 @@ export function AuthForm() {
     try {
       const fn = mode === 'login' ? login : register;
       const res = await fn(email, password);
-      setAuth(res.access_token, res.user_id, res.email);
+      setAuth(res.access_token, res.user_id, res.email, res.role);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '發生錯誤');
     } finally {
