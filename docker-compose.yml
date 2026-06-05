@@ -25,13 +25,35 @@ services:
       - "6380:6379"
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: wl-postgres
+    environment:
+      POSTGRES_USER: wl
+      POSTGRES_PASSWORD: wl
+      POSTGRES_DB: wl
+      TZ: Asia/Taipei
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wl -d wl"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   api:
     build:
       context: .
       dockerfile: Dockerfile.worker
     container_name: wl-api
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     env_file:
       - backend/.env
     environment:
@@ -41,9 +63,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       # 容器內呼叫 host 服務（本機 Monica 代理等）走 host.docker.internal
       MONICA_BASE_URL: http://host.docker.internal:8001/v1
-      DB_PATH: ../data/learning.db
-      # named volume = ext4，WAL 安全且效能較好
-      SQLITE_JOURNAL_MODE: WAL
+      DATABASE_URL: postgresql://wl:wl@postgres:5432/wl
       CURRICULUM_USE_ARQ: "1"
       LLM_CACHE_ENABLED: "1"
     extra_hosts:
@@ -55,8 +75,6 @@ services:
     entrypoint: []
     command: ["uvicorn", "run:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
-      # 共用 DB volume（與 curriculum-worker 同名才共享）
-      - learning_db:/app/data
       # 程式碼 bind mount → uvicorn --reload 看得到 backend/ 變動
       - ./backend:/app/backend
       # HF 模型 cache（in-process 模式或備援會用到）
@@ -69,7 +87,10 @@ services:
       dockerfile: Dockerfile.worker
     container_name: wl-curriculum-worker
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     env_file:
       - backend/.env
     environment:
@@ -78,14 +99,12 @@ services:
 
       REDIS_URL: redis://redis:6379/0
       MONICA_BASE_URL: http://host.docker.internal:8001/v1
-      DB_PATH: ../data/learning.db
-      SQLITE_JOURNAL_MODE: WAL
+      DATABASE_URL: postgresql://wl:wl@postgres:5432/wl
       CURRICULUM_USE_ARQ: "1"
       LLM_CACHE_ENABLED: "1"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - learning_db:/app/data
       - ./backend:/app/backend
       - hf_cache:/root/.cache/huggingface
     # BGE-large 模型載入後常駐約 1.5GB；建議給 worker 至少 2GB
@@ -93,5 +112,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  learning_db:
+  pg_data:
   hf_cache:
