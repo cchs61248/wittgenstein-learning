@@ -18,6 +18,15 @@ def client():
     with TestClient(app) as c:
         async def _seed():
             db = await get_db()
+            # 防止 full-suite 共用 DB 污染：清掉本測試自己的 email 後再 seed
+            await db.execute(
+                "DELETE FROM users WHERE email IN (?, ?)",
+                ("reg_allowed@example.com", "reg_boss@example.com"),
+            )
+            await db.execute(
+                "DELETE FROM email_whitelist WHERE email IN (?, ?)",
+                ("reg_allowed@example.com", "reg_boss@example.com"),
+            )
             await db.execute(
                 "INSERT OR IGNORE INTO email_whitelist (email, role) VALUES (?, ?)",
                 ("reg_allowed@example.com", "user"),
