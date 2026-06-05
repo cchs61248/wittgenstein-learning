@@ -29,7 +29,7 @@ from .routers.upload import router as upload_router
 from .routers.session import router as session_router
 from .routers.learner import router as learner_router
 from .routers.user_ui import router as user_ui_router
-from .auth.utils import decode_token_active
+from .auth.utils import decode_token_active, get_role_by_email
 from .llm.provider_factory import create_provider
 from .orchestrator.learning_orchestrator import LearningOrchestrator
 from .memory.working_memory import get_working_memory, delete_working_memory
@@ -444,7 +444,6 @@ async def websocket_endpoint(
             )
 
             if msg_type == "start_session":
-                from .auth.utils import get_role_by_email
                 if await get_role_by_email(payload.get("email", "")) != "admin":
                     _ws_log.info(
                         "start_session denied non_admin  session=%s  user=%s",

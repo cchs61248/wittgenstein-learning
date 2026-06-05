@@ -27,6 +27,14 @@ def client():
                 "INSERT OR REPLACE INTO email_whitelist (email, role) VALUES (?,?)",
                 ("user@x", "user"),
             )
+            await db.execute(
+                "INSERT OR REPLACE INTO users (user_id, email, password_hash, session_version) "
+                "VALUES (?,?,?,?)", ("u_admin", "admin@x", "h", 1),
+            )
+            await db.execute(
+                "INSERT OR REPLACE INTO email_whitelist (email, role) VALUES (?,?)",
+                ("admin@x", "admin"),
+            )
             await db.commit()
         asyncio.get_event_loop().run_until_complete(_seed())
         yield c
@@ -40,6 +48,18 @@ def test_user_start_session_gets_forbidden_event(client):
             "payload": {"file_ids": ["nonexistent"]},
         })
         msg = ws.receive_json()
-        assert msg["type"] in ("forbidden", "error")
-        combined = (msg.get("payload", {}).get("message", "") + msg.get("message", ""))
-        assert "管理員" in combined
+        assert msg["type"] == "forbidden", msg
+        assert "管理員" in msg["payload"]["message"]
+
+
+def test_admin_start_session_not_forbidden(client):
+    """admin 送 start_session 不應被 forbidden 擋下；因未提供檔案，會走到一般 error
+    （而非 forbidden），藉此證明閘門只擋非 admin。"""
+    token = create_token("u_admin", "admin@x", session_version=1)
+    with client.websocket_connect(f"/ws/sess_admin1?token={token}") as ws:
+        ws.send_json({
+            "type": "start_session",
+            "payload": {"file_ids": []},
+        })
+        msg = ws.receive_json()
+        assert msg["type"] != "forbidden", msg
