@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, status
 from ..db.database import get_db
 from ..utils.logger import ws_logger
 from .models import UserRegister, UserLogin, TokenOut, UserOut
-from .utils import hash_password, verify_password, create_token, decode_token, decode_token_active
+from .utils import hash_password, verify_password, create_token, decode_token, decode_token_active, get_role_by_email, is_email_whitelisted
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -12,6 +12,10 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def register(body: UserRegister):
     log = ws_logger()
     db = await get_db()
+
+    if not await is_email_whitelisted(body.email):
+        log.info("register denied not_whitelisted  email=%s", body.email)
+        raise HTTPException(status_code=403, detail="此 Email 未經授權，請聯絡管理員")
 
     async with db.execute("SELECT user_id FROM users WHERE email = ?", (body.email,)) as cur:
         if await cur.fetchone():
@@ -27,9 +31,10 @@ async def register(body: UserRegister):
     )
     await db.commit()
 
-    log.info("register ok  user_id=%s  email=%s", user_id, body.email)
+    role = await get_role_by_email(body.email)
+    log.info("register ok  user_id=%s  email=%s  role=%s", user_id, body.email, role)
     token = create_token(user_id, body.email, session_version=session_version)
-    return TokenOut(access_token=token, user_id=user_id, email=body.email)
+    return TokenOut(access_token=token, user_id=user_id, email=body.email, role=role)
 
 
 @router.post("/login", response_model=TokenOut)

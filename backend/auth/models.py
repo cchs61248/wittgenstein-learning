@@ -14,6 +14,7 @@ class UserLogin(BaseModel):
 class UserOut(BaseModel):
     user_id: str
     email: str
+    role: str = "user"
 
 
 class TokenOut(BaseModel):
@@ -21,3 +22,4 @@ class TokenOut(BaseModel):
     token_type: str = "bearer"
     user_id: str
     email: str
+    role: str = "user"
