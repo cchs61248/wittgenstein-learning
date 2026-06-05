@@ -1,7 +1,6 @@
 """DB-backed inflight lock CRUD test。"""
 import asyncio
 import os
-import tempfile
 import unittest
 
 from backend.db.database import init_db, close_db, get_db
@@ -10,14 +9,10 @@ from backend.db.inflight_lock import acquire, release, is_active, cleanup_stale,
 
 class TestInflightLockDb(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_acquire_and_release(self):
         ok = await acquire("k1", session_id="s", kind="tutor")
@@ -37,10 +32,9 @@ class TestInflightLockDb(unittest.IsolatedAsyncioTestCase):
         # 把 "old" 的 started_at 改成 700 秒前
         db = await get_db()
         await db.execute(
-            "UPDATE inflight_locks SET started_at = started_at - 700 WHERE key = ?",
-            ("old",),
+            "UPDATE inflight_locks SET started_at = started_at - 700 WHERE key = $1",
+            "old",
         )
-        await db.commit()
 
         n = await cleanup_stale(max_age_s=600)
         self.assertEqual(n, 1)
@@ -56,10 +50,9 @@ class TestInflightLockDb(unittest.IsolatedAsyncioTestCase):
         await acquire("dead_k", session_id="s", kind="resume_session")
         db = await get_db()
         await db.execute(
-            "UPDATE inflight_locks SET worker_pid = ? WHERE key = ?",
-            (99999999, "dead_k"),
+            "UPDATE inflight_locks SET worker_pid = $1 WHERE key = $2",
+            99999999, "dead_k",
         )
-        await db.commit()
         n = await cleanup_dead_worker_locks()
         self.assertEqual(n, 1)
         self.assertFalse(await is_active("dead_k"))
@@ -67,8 +60,7 @@ class TestInflightLockDb(unittest.IsolatedAsyncioTestCase):
     async def test_meta_json_persisted(self):
         await acquire("k_meta", session_id="s", kind="tutor", meta_json='{"q": "hi"}')
         db = await get_db()
-        cur = await db.execute("SELECT meta_json FROM inflight_locks WHERE key = ?", ("k_meta",))
-        row = await cur.fetchone()
+        row = await db.fetchrow("SELECT meta_json FROM inflight_locks WHERE key = $1", "k_meta")
         self.assertEqual(row[0], '{"q": "hi"}')
 
 
@@ -76,14 +68,10 @@ class TestInflightLockConcurrent(unittest.IsolatedAsyncioTestCase):
     """v2 plan B2 Step 7：cleanup_stale 與 acquire 並行不應 deadlock。"""
 
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_cleanup_stale_concurrent_with_acquire_no_deadlock(self):
         async def _run():
