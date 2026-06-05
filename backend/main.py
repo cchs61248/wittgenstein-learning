@@ -444,6 +444,17 @@ async def websocket_endpoint(
             )
 
             if msg_type == "start_session":
+                from .auth.utils import get_role_by_email
+                if await get_role_by_email(payload.get("email", "")) != "admin":
+                    _ws_log.info(
+                        "start_session denied non_admin  session=%s  user=%s",
+                        session_id, user_id,
+                    )
+                    await emit({
+                        "type": "forbidden",
+                        "payload": {"message": "僅管理員可新增教材"},
+                    })
+                    continue
                 _start_key = f"{session_id}:start"
 
                 async def _cache_lookup():
