@@ -1,8 +1,8 @@
 # 完整 Docker 部署：API（uvicorn）+ Curriculum Worker（Arq）+ Redis
 #
 # 結構：
-#   - api / curriculum-worker 共用 learning_db named volume（ext4，避開 Windows bind mount 翻譯層）
-#   - SQLite 開 WAL（named volume 上安全），多 process 並發寫不會 corrupted
+#   - api / curriculum-worker 共用 postgres 服務（pg_data named volume）
+#   - PostgreSQL 原生處理多 process 併發寫；DBeaver 可從 localhost:5432 連線
 #   - 共用 Dockerfile.worker
 #   - 前端可繼續本機 npm run dev（打 localhost:8000 → docker api）
 #
