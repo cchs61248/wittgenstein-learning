@@ -11,9 +11,8 @@ Fix: `_lookup_answer_cache` filters by current session.current_stage_id.
 """
 
 import json
-import tempfile
+import os
 import unittest
-from pathlib import Path
 
 from backend.db.database import close_db, get_db, init_db
 from backend.main import _lookup_answer_cache
@@ -22,26 +21,24 @@ from backend.memory import session_memory
 
 class TestSubmitAnswerCacheStageScoping(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        await init_db(str(Path(self._tmp.name) / "test.db"))
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
         self.sid = "sess_x"
         self.uid = "u_x"
 
         db = await get_db()
         await db.execute(
-            "INSERT INTO users (user_id, email, password_hash, session_version) VALUES (?,?,?,?)",
-            (self.uid, "u@x.com", "h", 1),
+            "INSERT INTO users (user_id, email, password_hash, session_version) VALUES ($1,$2,$3,$4)",
+            self.uid, "u@x.com", "h", 1,
         )
         await db.execute(
             """INSERT INTO sessions (session_id, user_id, content_hash, total_stages,
                 raw_content_summary, status, stages_json, current_stage_id,
                 provider_name, model_name, question_mode, title, source_file_ids_json)
-               VALUES (?,?,?,?,?,'active',?,?,?,?,?,?,?)""",
-            (self.sid, self.uid, "h", 2, "", json.dumps([]), 8,
-             "monica", "g", "multiple_choice", "t", json.dumps([])),
+               VALUES ($1,$2,$3,$4,$5,'active',$6,$7,$8,$9,$10,$11,$12)""",
+            self.sid, self.uid, "h", 2, "", json.dumps([]), 8,
+            "monica", "g", "multiple_choice", "t", json.dumps([]),
         )
-        await db.commit()
 
         # 種 stage 8 已答過的 q_cb_1
         await session_memory.insert_qa_record(
@@ -50,7 +47,6 @@ class TestSubmitAnswerCacheStageScoping(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self) -> None:
         await close_db()
-        self._tmp.cleanup()
 
     async def test_same_stage_hits_cache(self):
         """同 stage 同 question_id：應命中 cache（Bug F 修補保留）。"""

@@ -1,6 +1,5 @@
 """LLM result cache CRUD tests."""
 import os
-import tempfile
 import unittest
 
 from backend.db.database import init_db, close_db
@@ -11,14 +10,10 @@ from backend.llm.cache_context import llm_cache_context, set_content_hash
 
 class TestLlmCache(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_cache_roundtrip(self):
         key = "abc123"

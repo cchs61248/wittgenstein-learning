@@ -1,6 +1,5 @@
 """Tests for curriculum session prepare and Arq enqueue."""
 import os
-import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,23 +14,18 @@ from backend.utils.content_hash import compute_content_hash
 async def _ensure_user(user_id: str = "u1") -> None:
     db = await get_db()
     await db.execute(
-        "INSERT OR IGNORE INTO users (user_id, email, password_hash) VALUES (?, ?, ?)",
-        (user_id, f"{user_id}@test.local", "hash"),
+        "INSERT INTO users (user_id, email, password_hash) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING",
+        user_id, f"{user_id}@test.local", "hash",
     )
-    await db.commit()
 
 
 class TestSessionPrepare(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         await _ensure_user()
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_prepare_persists_stub_chunks_and_checkpoint_meta(self):
         chunks = [{"chunk_id": "c0", "order_index": 0, "text": "hello"}]
@@ -61,15 +55,11 @@ class TestSessionPrepare(unittest.IsolatedAsyncioTestCase):
 
 class TestEnqueueCurriculumJob(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         await _ensure_user()
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_enqueue_acquires_lock_and_enqueues(self):
         redis = AsyncMock()

@@ -4,7 +4,6 @@ D1: pipeline is unified to small-file paths; resume behavior is now centered on
 `single_split` / `per_source_split` checkpoints rather than `region_loop`.
 """
 import os
-import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -79,20 +78,15 @@ def _mk_orch() -> LearningOrchestrator:
 
 class TestCurriculumPipelineResume(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         db = await get_db()
         await db.execute(
-            "INSERT OR IGNORE INTO users (user_id, email, password_hash) VALUES (?, ?, ?)",
-            ("u1", "u1@test.local", "hash"),
+            "INSERT INTO users (user_id, email, password_hash) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING",
+            "u1", "u1@test.local", "hash",
         )
-        await db.commit()
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_resume_skips_completed_single_split(self):
         """If a prior single_split run completed (all_candidates persisted),
