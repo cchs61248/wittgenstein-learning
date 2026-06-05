@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import asyncpg
-
 from ..db.database import get_db
 
 _PIPELINE_VERSION = "v2"

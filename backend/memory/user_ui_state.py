@@ -4,8 +4,6 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-import asyncpg
-
 from ..db.database import get_db
 
 DEFAULT_UI_STATE: dict[str, Any] = {"v": 1, "layoutBySession": {}, "bookshelfOrder": []}

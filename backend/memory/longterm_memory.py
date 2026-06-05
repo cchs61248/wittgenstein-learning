@@ -1,6 +1,5 @@
 import json
 from datetime import datetime, timezone
-import asyncpg
 from ..db.database import get_db
 
 

@@ -5,8 +5,6 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-import asyncpg
-
 from ..db.database import get_db
 from ..llm.base_provider import LLMResponse
 
@@ -91,7 +89,7 @@ async def put(
     )
 
 
-async def record_hit(cache_key: str) -> None:
+async def record_hit(cache_key: str) -> int:
     db = await get_db()
     tag = await db.execute(
         """UPDATE llm_result_cache
