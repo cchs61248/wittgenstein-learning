@@ -6,6 +6,7 @@ export interface AuthResponse {
   access_token: string;
   user_id: string;
   email: string;
+  role: string;
 }
 
 export async function register(email: string, password: string): Promise<AuthResponse> {

@@ -42,6 +42,10 @@ def client_and_token(monkeypatch, tmp_path):
                 "VALUES (?, ?, ?, ?)",
                 ("u_epub_test", "epub@test", "hash", 1),
             )
+            await db.execute(
+                "INSERT OR REPLACE INTO email_whitelist (email, role) VALUES (?, ?)",
+                ("epub@test", "admin"),
+            )
             await db.commit()
 
         asyncio.get_event_loop().run_until_complete(_seed())

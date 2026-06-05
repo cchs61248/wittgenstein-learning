@@ -55,3 +55,27 @@ async def decode_token_active(token: str) -> Optional[dict]:
     if int(row[0]) != int(sv):
         return None
     return payload
+
+
+async def get_role_by_email(email: str) -> str:
+    """即時查 email_whitelist 回傳角色；查無回 'user'（最小權限 fail-safe）。
+
+    角色不寫進 JWT，每次受保護請求即時查表，admin 改 DB 後下一個請求即生效。
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT role FROM email_whitelist WHERE email = ?", (email,)
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return "user"
+    return str(row[0])
+
+
+async def is_email_whitelisted(email: str) -> bool:
+    """email 是否在白名單內（供註冊閘門）。"""
+    db = await get_db()
+    async with db.execute(
+        "SELECT 1 FROM email_whitelist WHERE email = ?", (email,)
+    ) as cur:
+        return await cur.fetchone() is not None
