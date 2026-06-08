@@ -40,8 +40,9 @@ class TestRegenerate(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_non_failed(self):
         await session_memory.create_generating_stub("s_gen", "u1", "h")
-        with self.assertRaises(RegenerateError):
+        with self.assertRaises(RegenerateError) as ctx:
             await regenerate_failed_session("s_gen", use_arq=False)
+        self.assertIn("not_failed:", str(ctx.exception))
 
     async def test_rejects_missing_chunks(self):
         await _mk_failed("s_nochunk", with_chunks=False)

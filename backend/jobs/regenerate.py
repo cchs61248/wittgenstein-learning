@@ -25,6 +25,11 @@ class RegenerateError(Exception):
 
 
 async def regenerate_failed_session(session_id: str, *, use_arq: bool) -> dict:
+    """對 watchdog 標 failed 的 session 重新觸發生成。
+
+    status 非 'failed' 或無 source_chunks → raise RegenerateError（呼叫端映射 409）。
+    回傳 {"status": "generating", "session_id": ...}。
+    """
     row = await session_memory.get_session(session_id)
     if not row:
         raise RegenerateError("session_not_found")
@@ -50,7 +55,8 @@ async def regenerate_failed_session(session_id: str, *, use_arq: bool) -> dict:
             "order_decision": None,
         }
 
-    # 清掉不可信的 partial 狀態
+    # 清掉不可信的 partial 狀態。release 後到 enqueue 之間鎖是空的，但
+    # enqueue_curriculum_job（與 in-process resume）都會自行 acquire，故恰好一條重生會跑。
     await ckpt.delete_checkpoint(session_id)
     await release(inflight_key(session_id))
 
@@ -61,11 +67,13 @@ async def regenerate_failed_session(session_id: str, *, use_arq: bool) -> dict:
         "WHERE session_id=$1 AND status='failed'",
         session_id,
     )
-    # 重建乾淨 checkpoint（completed_region_ids=[]），讓 Arq resume 入口可運作
+    # 重建乾淨 checkpoint，讓 Arq resume 入口可運作。
+    # 顯式傳 completed_region_ids=[] 強制清空狀態，不依賴「delete 先於 upsert」的隱含順序。
     await ckpt.upsert_checkpoint(
         session_id,
         content_hash=row["content_hash"],
         pipeline_meta=meta,
+        completed_region_ids=[],
     )
 
     if use_arq:
