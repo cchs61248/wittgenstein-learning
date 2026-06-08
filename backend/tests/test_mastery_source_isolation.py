@@ -8,7 +8,6 @@
 """
 import json
 import os
-import tempfile
 import unittest
 
 from backend.db.database import init_db, close_db, get_db
@@ -17,21 +16,16 @@ from backend.memory import longterm_memory, session_memory
 
 class TestMasterySourceIsolation(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         # 建立 user record（concept_mastery 有 FK constraint）
         db = await get_db()
         await db.execute(
-            "INSERT INTO users (user_id, email, password_hash) VALUES (?, ?, ?)",
-            ("u1", "u1@test", "x"),
+            "INSERT INTO users (user_id, email, password_hash) VALUES ($1, $2, $3)",
+            "u1", "u1@test", "x",
         )
-        await db.commit()
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def _write(self, concept: str, score: float, sig: str | None):
         await longterm_memory.update_concept_mastery(
@@ -96,29 +90,23 @@ class TestMasterySourceIsolation(unittest.IsolatedAsyncioTestCase):
 
 class TestGetSourceSignature(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         db = await get_db()
         await db.execute(
-            "INSERT INTO users (user_id, email, password_hash) VALUES (?, ?, ?)",
-            ("u1", "u1@test", "x"),
+            "INSERT INTO users (user_id, email, password_hash) VALUES ($1, $2, $3)",
+            "u1", "u1@test", "x",
         )
-        await db.commit()
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def _make_session(self, sess_id: str, file_ids: list[str] | None):
         db = await get_db()
         await db.execute(
             """INSERT INTO sessions (session_id, user_id, content_hash, total_stages,
-                source_file_ids_json) VALUES (?, ?, ?, ?, ?)""",
-            (sess_id, "u1", "h", 0, json.dumps(file_ids) if file_ids is not None else "[]"),
+                source_file_ids_json) VALUES ($1, $2, $3, $4, $5)""",
+            sess_id, "u1", "h", 0, json.dumps(file_ids) if file_ids is not None else "[]",
         )
-        await db.commit()
 
     async def _make_session_with_hash(
         self, sess_id: str, content_hash: str, file_ids: list[str] | None
@@ -126,13 +114,10 @@ class TestGetSourceSignature(unittest.IsolatedAsyncioTestCase):
         db = await get_db()
         await db.execute(
             """INSERT INTO sessions (session_id, user_id, content_hash, total_stages,
-                source_file_ids_json) VALUES (?, ?, ?, ?, ?)""",
-            (
-                sess_id, "u1", content_hash, 0,
-                json.dumps(file_ids) if file_ids is not None else "[]",
-            ),
+                source_file_ids_json) VALUES ($1, $2, $3, $4, $5)""",
+            sess_id, "u1", content_hash, 0,
+            json.dumps(file_ids) if file_ids is not None else "[]",
         )
-        await db.commit()
 
     async def test_content_hash_preferred_over_file_ids(self):
         await self._make_session_with_hash("s1", "abc123hash", ["fid_book_A"])
@@ -144,10 +129,9 @@ class TestGetSourceSignature(unittest.IsolatedAsyncioTestCase):
         db = await get_db()
         await db.execute(
             """INSERT INTO sessions (session_id, user_id, content_hash, total_stages,
-                source_file_ids_json) VALUES (?, ?, ?, ?, ?)""",
-            ("s2", "u1", "", 0, json.dumps(["fid_B", "fid_A"])),
+                source_file_ids_json) VALUES ($1, $2, $3, $4, $5)""",
+            "s2", "u1", "", 0, json.dumps(["fid_B", "fid_A"]),
         )
-        await db.commit()
         sig = await session_memory.get_source_signature("s2")
         self.assertEqual(sig, "fid_A|fid_B")
 

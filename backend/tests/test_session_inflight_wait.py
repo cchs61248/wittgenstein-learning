@@ -1,7 +1,6 @@
 """Session-level inflight wait：resume 應等待 :answer: 等子 key 的 run_stage。"""
 import asyncio
 import os
-import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -12,14 +11,10 @@ from backend.ws import generation_handle as gh
 
 class TestSessionInflightDb(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_has_session_inflight_any_key(self):
         await acquire("sess_a:answer:q1", session_id="sess_a", kind="submit_answer")
@@ -45,16 +40,12 @@ class TestSessionInflightDb(unittest.IsolatedAsyncioTestCase):
 
 class TestWaitForSessionIdle(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         gh._registry.clear()
 
     async def asyncTearDown(self):
         gh._registry.clear()
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_waits_for_answer_subkey_task(self):
         done = asyncio.Event()

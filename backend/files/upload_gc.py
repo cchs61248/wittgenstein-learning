@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..db.database import get_db
 from .upload_store import UPLOAD_DIR, delete_upload, iter_upload_metas  # noqa: F401  # UPLOAD_DIR re-exported as test monkeypatch target
 
 
@@ -21,24 +21,22 @@ def _parse_uploaded_at(raw: str | None) -> datetime | None:
         return None
 
 
-def collect_referenced_file_ids(db_path: str | Path) -> set[str]:
+async def collect_referenced_file_ids() -> set[str]:
     """從 sessions.source_file_ids_json 收集所有仍被引用的 file_id。"""
     referenced: set[str] = set()
-    conn = sqlite3.connect(str(db_path))
-    try:
-        cur = conn.execute("SELECT source_file_ids_json FROM sessions")
-        for (raw,) in cur.fetchall():
-            try:
-                ids = json.loads(raw or "[]")
-            except Exception:
-                continue
-            if not isinstance(ids, list):
-                continue
-            for fid in ids:
-                if isinstance(fid, str) and fid:
-                    referenced.add(fid)
-    finally:
-        conn.close()
+    db = await get_db()
+    rows = await db.fetch("SELECT source_file_ids_json FROM sessions")
+    for row in rows:
+        raw = row[0]
+        try:
+            ids = json.loads(raw or "[]")
+        except Exception:
+            continue
+        if not isinstance(ids, list):
+            continue
+        for fid in ids:
+            if isinstance(fid, str) and fid:
+                referenced.add(fid)
     return referenced
 
 
@@ -69,8 +67,7 @@ def find_gc_candidates(
     return candidates
 
 
-def gc_unreferenced_uploads(
-    db_path: str | Path,
+async def gc_unreferenced_uploads(
     *,
     max_age_hours: float | None = 0,
     dry_run: bool = False,
@@ -82,7 +79,7 @@ def gc_unreferenced_uploads(
       - 0 或 None：立即刪除所有孤兒（啟動一次性清理用）
       - >0：僅刪除超過該時數的孤兒（避免誤刪剛上傳、尚未開 session 的檔案）
     """
-    referenced = collect_referenced_file_ids(db_path)
+    referenced = await collect_referenced_file_ids()
     age_limit = None if max_age_hours in (None, 0) else max_age_hours
     candidates = find_gc_candidates(referenced, max_age_hours=age_limit)
     deleted: list[str] = []

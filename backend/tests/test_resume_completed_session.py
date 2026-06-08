@@ -19,9 +19,8 @@ and turn this test green.
 """
 
 import json
-import tempfile
+import os
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from backend.db.database import close_db, get_db, init_db
@@ -36,9 +35,7 @@ async def _empty_async_gen():
 
 class TestResumeCompletedSession(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._tmp_dir = tempfile.TemporaryDirectory()
-        db_path = str(Path(self._tmp_dir.name) / "test_resume.db")
-        await init_db(db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
         self.session_id = "sess_test_completed"
         self.user_id = "u_test"
@@ -46,10 +43,9 @@ class TestResumeCompletedSession(unittest.IsolatedAsyncioTestCase):
         db = await get_db()
         # users row needed because sessions.user_id is a FK
         await db.execute(
-            "INSERT INTO users (user_id, email, password_hash, session_version) VALUES (?, ?, ?, ?)",
-            (self.user_id, "u_test@example.com", "hash", 1),
+            "INSERT INTO users (user_id, email, password_hash, session_version) VALUES ($1, $2, $3, $4)",
+            self.user_id, "u_test@example.com", "hash", 1,
         )
-        await db.commit()
 
         # 3 stages, all completed, full QA history
         stages_data = [
@@ -84,23 +80,20 @@ class TestResumeCompletedSession(unittest.IsolatedAsyncioTestCase):
                (session_id, user_id, content_hash, total_stages, raw_content_summary,
                 status, stages_json, current_stage_id,
                 provider_name, model_name, question_mode, title, source_file_ids_json)
-               VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                self.session_id,
-                self.user_id,
-                "hash_x",
-                3,
-                "test summary",
-                json.dumps(stages_data, ensure_ascii=False),
-                3,  # current_stage_id = 3 (last stage)
-                "monica",
-                "gemini-3-flash",
-                "multiple_choice",
-                "Test",
-                json.dumps([], ensure_ascii=False),
-            ),
+               VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10, $11, $12)""",
+            self.session_id,
+            self.user_id,
+            "hash_x",
+            3,
+            "test summary",
+            json.dumps(stages_data, ensure_ascii=False),
+            3,  # current_stage_id = 3 (last stage)
+            "monica",
+            "gemini-3-flash",
+            "multiple_choice",
+            "Test",
+            json.dumps([], ensure_ascii=False),
         )
-        await db.commit()
 
         # Seed each stage: completed status + stored explanation + stored
         # question(s) + matching qa_records (so the resume path lands in
@@ -140,7 +133,6 @@ class TestResumeCompletedSession(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self) -> None:
         await close_db()
-        self._tmp_dir.cleanup()
 
     async def test_resume_completed_session_does_not_mutate_status(self) -> None:
         # Late import: orchestrator pulls in many transitive deps, so we

@@ -45,14 +45,13 @@ async def decode_token_active(token: str) -> Optional[dict]:
         return None
 
     db = await get_db()
-    async with db.execute(
-        "SELECT session_version FROM users WHERE user_id = ?",
-        (user_id,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT session_version FROM users WHERE user_id = $1",
+        user_id,
+    )
     if not row:
         return None
-    if int(row[0]) != int(sv):
+    if int(row["session_version"]) != int(sv):
         return None
     return payload
 
@@ -63,19 +62,18 @@ async def get_role_by_email(email: str) -> str:
     角色不寫進 JWT，每次受保護請求即時查表，admin 改 DB 後下一個請求即生效。
     """
     db = await get_db()
-    async with db.execute(
-        "SELECT role FROM email_whitelist WHERE email = ?", (email,)
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT role FROM email_whitelist WHERE email = $1", email
+    )
     if not row:
         return "user"
-    return str(row[0])
+    return str(row["role"])
 
 
 async def is_email_whitelisted(email: str) -> bool:
     """email 是否在白名單內（供註冊閘門）。"""
     db = await get_db()
-    async with db.execute(
-        "SELECT 1 FROM email_whitelist WHERE email = ?", (email,)
-    ) as cur:
-        return await cur.fetchone() is not None
+    row = await db.fetchrow(
+        "SELECT 1 FROM email_whitelist WHERE email = $1", email
+    )
+    return row is not None

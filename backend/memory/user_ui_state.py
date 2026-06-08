@@ -11,11 +11,10 @@ DEFAULT_UI_STATE: dict[str, Any] = {"v": 1, "layoutBySession": {}, "bookshelfOrd
 
 async def get_ui_state(user_id: str) -> dict[str, Any]:
     db = await get_db()
-    async with db.execute(
-        "SELECT ui_state_json FROM user_learning_profile WHERE user_id = ?",
-        (user_id,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT ui_state_json FROM user_learning_profile WHERE user_id = $1",
+        user_id,
+    )
     if not row or row[0] is None or row[0] == "":
         return dict(DEFAULT_UI_STATE)
     try:
@@ -43,10 +42,9 @@ async def put_ui_state(user_id: str, layout_by_session: dict[str, Any], bookshel
     now = datetime.now(timezone.utc)
     await db.execute(
         """INSERT INTO user_learning_profile (user_id, ui_state_json, updated_at)
-           VALUES (?, ?, ?)
-           ON CONFLICT(user_id) DO UPDATE SET
-             ui_state_json = excluded.ui_state_json,
-             updated_at = excluded.updated_at""",
-        (user_id, payload, now),
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id) DO UPDATE SET
+             ui_state_json = EXCLUDED.ui_state_json,
+             updated_at = EXCLUDED.updated_at""",
+        user_id, payload, now,
     )
-    await db.commit()

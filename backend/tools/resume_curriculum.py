@@ -1,3 +1,4 @@
+# TODO(pg): 此離線運維腳本待改 asyncpg（仍引用已移除的 config.DB_PATH 與 SQLite 路徑語意）
 """Manually resume a generating curriculum session from checkpoint."""
 import argparse
 import asyncio

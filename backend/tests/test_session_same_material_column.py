@@ -1,6 +1,5 @@
 """sessions.same_material 欄位與 create_generating_stub 連通測試。"""
 import os
-import tempfile
 import unittest
 
 from backend.db.database import init_db, close_db, get_db
@@ -10,23 +9,21 @@ from backend.memory import session_memory
 async def _ensure_user(user_id: str = "u1") -> None:
     db = await get_db()
     await db.execute(
-        "INSERT OR IGNORE INTO users (user_id, email, password_hash) VALUES (?, ?, ?)",
-        (user_id, f"{user_id}@test.local", "hash"),
+        """INSERT INTO users (user_id, email, password_hash)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id) DO NOTHING""",
+        user_id, f"{user_id}@test.local", "hash",
     )
-    await db.commit()
 
 
 class TestSessionSameMaterialColumn(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        dsn = os.environ["DATABASE_URL"]
+        await init_db(dsn, reset=True)
         await _ensure_user()
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_create_session_with_same_material_true(self):
         await session_memory.create_generating_stub(
@@ -62,7 +59,8 @@ class TestSessionSameMaterialColumn(unittest.IsolatedAsyncioTestCase):
         # 第一次 init 已在 asyncSetUp 完成；再 init 一次同一個 DB 不應拋錯。
         # 模擬 worker / server 重啟後重跑 init_db 的情境。
         await close_db()
-        await init_db(self._db_path)
+        dsn = os.environ["DATABASE_URL"]
+        await init_db(dsn, reset=True)
         await _ensure_user()
         # 而且重 init 後仍能成功 INSERT + 帶 same_material
         await session_memory.create_generating_stub(

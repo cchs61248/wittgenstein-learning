@@ -6,7 +6,6 @@
 對應 spec: docs/superpowers/specs/2026-05-21-canonicalize-agent-design.md § 5
 """
 import os
-import tempfile
 import unittest
 
 from backend.memory import longterm_memory
@@ -23,35 +22,28 @@ async def _insert_mastery(
     await db.execute(
         """INSERT INTO concept_mastery
            (user_id, concept_name, mastery_score, total_exposures, source_signature, last_tested)
-           VALUES (?, ?, ?, ?, ?, datetime('now'))""",
-        (user_id, concept_name, mastery_score, total_exposures, source_signature),
+           VALUES ($1, $2, $3, $4, $5, NOW())""",
+        user_id, concept_name, mastery_score, total_exposures, source_signature,
     )
-    await db.commit()
 
 
 async def _clear_user(user_id: str):
     db = await get_db()
-    await db.execute("DELETE FROM concept_mastery WHERE user_id = ?", (user_id,))
-    await db.commit()
+    await db.execute("DELETE FROM concept_mastery WHERE user_id = $1", user_id)
 
 
 class TestGetConceptCanonicalPool(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self._tmpdir = tempfile.mkdtemp()
-        self._db_path = os.path.join(self._tmpdir, "test.db")
-        await init_db(self._db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         db = await get_db()
         await db.execute(
-            "INSERT INTO users (user_id, email, password_hash) VALUES (?, ?, ?)",
-            ("u_canon_pool_test", "u@test", "x"),
+            "INSERT INTO users (user_id, email, password_hash) VALUES ($1, $2, $3)",
+            "u_canon_pool_test", "u@test", "x",
         )
-        await db.commit()
         await _clear_user("u_canon_pool_test")
 
     async def asyncTearDown(self):
         await close_db()
-        if os.path.exists(self._db_path):
-            os.unlink(self._db_path)
 
     async def test_basic_returns_required_fields(self):
         """回傳 list[dict] 含 concept_name / total_exposures / last_tested 三欄。"""

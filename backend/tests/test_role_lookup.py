@@ -1,6 +1,5 @@
-import tempfile
+import os
 import unittest
-from pathlib import Path
 
 from backend.auth.utils import get_role_by_email, is_email_whitelisted
 from backend.db.database import close_db, get_db, init_db
@@ -8,23 +7,19 @@ from backend.db.database import close_db, get_db, init_db
 
 class TestRoleLookup(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._tmp_dir = tempfile.TemporaryDirectory()
-        db_path = str(Path(self._tmp_dir.name) / "test.db")
-        await init_db(db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
         db = await get_db()
         await db.execute(
-            "INSERT INTO email_whitelist (email, role) VALUES (?, ?)",
-            ("admin@example.com", "admin"),
+            "INSERT INTO email_whitelist (email, role) VALUES ($1, $2)",
+            "admin@example.com", "admin",
         )
         await db.execute(
-            "INSERT INTO email_whitelist (email, role) VALUES (?, ?)",
-            ("learner@example.com", "user"),
+            "INSERT INTO email_whitelist (email, role) VALUES ($1, $2)",
+            "learner@example.com", "user",
         )
-        await db.commit()
 
     async def asyncTearDown(self) -> None:
         await close_db()
-        self._tmp_dir.cleanup()
 
     async def test_role_admin(self):
         self.assertEqual(await get_role_by_email("admin@example.com"), "admin")

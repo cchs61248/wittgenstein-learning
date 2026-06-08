@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
@@ -11,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from .config import (
-    DB_PATH,
+    DATABASE_URL,
     CORS_ORIGINS,
     CORS_ORIGIN_REGEX,
     DEFAULT_PROVIDER,
@@ -53,7 +54,9 @@ from .ws.generation_handle import (
 async def lifespan(app: FastAPI):
     setup_logging()
     ws_logger().info("Wittgenstein Learning System starting up")
-    await init_db(DB_PATH)
+    # 在 runtime 讀 env（而非 import-time 凍結的 config.DATABASE_URL）：
+    # 測試的 testcontainers fixture 在 import 後才設 DATABASE_URL，lifespan 要拿到最新值。
+    await init_db(os.getenv("DATABASE_URL", DATABASE_URL))
     # 清掉前次 worker 強制關閉時殘留的孤兒 inflight locks（Phase 3 Task B2）
     try:
         n_dead = await inflight_cleanup_dead_workers()
@@ -66,8 +69,7 @@ async def lifespan(app: FastAPI):
         ws_logger().warning(f"inflight_locks cleanup_stale failed on startup: {e}")
     # 清理未被 session 引用的 upload 孤兒（含上傳後未開 session、失敗 session 遺留）
     try:
-        gc_result = gc_unreferenced_uploads(
-            DB_PATH,
+        gc_result = await gc_unreferenced_uploads(
             max_age_hours=UPLOAD_ORPHAN_MAX_AGE_HOURS,
         )
         if gc_result["deleted_count"]:

@@ -3,6 +3,8 @@ import os
 
 import pytest
 
+from .pg_fixtures import _pg_container  # noqa: F401  (session autouse：起 PG 容器並設 DATABASE_URL)
+
 _LIVE_MARKERS = frozenset({"llm_live", "curriculum_live"})
 
 

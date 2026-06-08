@@ -13,18 +13,16 @@ DECISION_HISTORY_MAX_PER_SESSION = 200
 async def store_stages(session_id: str, stages: list[dict]) -> None:
     db = await get_db()
     await db.execute(
-        "UPDATE sessions SET stages_json = ? WHERE session_id = ?",
-        (json.dumps(stages, ensure_ascii=False), session_id),
+        "UPDATE sessions SET stages_json = $1 WHERE session_id = $2",
+        json.dumps(stages, ensure_ascii=False), session_id,
     )
-    await db.commit()
 
 
 async def get_session(session_id: str) -> Optional[dict]:
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT * FROM sessions WHERE session_id = $1", session_id
+    )
     return dict(row) if row else None
 
 
@@ -36,11 +34,10 @@ async def get_source_signature(session_id: str) -> str | None:
     皆無 → None（QG 退回不過濾的 legacy 行為）。
     """
     db = await get_db()
-    async with db.execute(
-        "SELECT content_hash, source_file_ids_json FROM sessions WHERE session_id = ?",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT content_hash, source_file_ids_json FROM sessions WHERE session_id = $1",
+        session_id,
+    )
     if not row:
         return None
     content_hash = (row[0] or "").strip() if row[0] is not None else ""
@@ -81,40 +78,38 @@ async def create_generating_stub(
     sources_json_str = json.dumps(sources_json or [], ensure_ascii=False)
     # 1/0/NULL：None 代表呼叫端沒提供（保留 NULL）
     same_material_val = None if same_material is None else (1 if same_material else 0)
-    await db.execute(
-        """INSERT OR IGNORE INTO sessions
-           (session_id, user_id, content_hash, total_stages, status, title,
-            source_file_ids_json, sources_json, provider_name, model_name,
-            question_mode, target_depth, same_material)
-           VALUES (?, ?, ?, 0, 'generating', '生成中…', ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            session_id, user_id, content_hash, file_ids_json, sources_json_str,
-            provider_name, model_name, question_mode, target_depth, same_material_val,
-        ),
-    )
-    # 若 stub 已存在（重試），補寫 file_ids 與 start 參數
-    await db.execute(
-        """UPDATE sessions
-           SET source_file_ids_json = ?,
-               sources_json = COALESCE(?, sources_json),
-               provider_name = COALESCE(?, provider_name),
-               model_name = COALESCE(?, model_name),
-               question_mode = COALESCE(?, question_mode),
-               target_depth = COALESCE(?, target_depth),
-               same_material = COALESCE(?, same_material)
-           WHERE session_id = ? AND status = 'generating'""",
-        (
-            file_ids_json,
-            sources_json_str if sources_json else None,
-            provider_name,
-            model_name,
-            question_mode,
-            target_depth,
-            same_material_val,
-            session_id,
-        ),
-    )
-    await db.commit()
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """INSERT INTO sessions
+                   (session_id, user_id, content_hash, total_stages, status, title,
+                    source_file_ids_json, sources_json, provider_name, model_name,
+                    question_mode, target_depth, same_material)
+                   VALUES ($1, $2, $3, 0, 'generating', '生成中…', $4, $5, $6, $7, $8, $9, $10)
+                   ON CONFLICT (session_id) DO NOTHING""",
+                session_id, user_id, content_hash, file_ids_json, sources_json_str,
+                provider_name, model_name, question_mode, target_depth, same_material_val,
+            )
+            # 若 stub 已存在（重試），補寫 file_ids 與 start 參數
+            await conn.execute(
+                """UPDATE sessions
+                   SET source_file_ids_json = $1,
+                       sources_json = COALESCE($2, sources_json),
+                       provider_name = COALESCE($3, provider_name),
+                       model_name = COALESCE($4, model_name),
+                       question_mode = COALESCE($5, question_mode),
+                       target_depth = COALESCE($6, target_depth),
+                       same_material = COALESCE($7, same_material)
+                   WHERE session_id = $8 AND status = 'generating'""",
+                file_ids_json,
+                sources_json_str if sources_json else None,
+                provider_name,
+                model_name,
+                question_mode,
+                target_depth,
+                same_material_val,
+                session_id,
+            )
 
 
 async def _delete_session_upload_blobs(session_id: str) -> list[str]:
@@ -122,11 +117,10 @@ async def _delete_session_upload_blobs(session_id: str) -> list[str]:
     from ..files.upload_store import delete_upload
 
     db = await get_db()
-    async with db.execute(
-        "SELECT source_file_ids_json FROM sessions WHERE session_id = ?",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT source_file_ids_json FROM sessions WHERE session_id = $1",
+        session_id,
+    )
     if not row:
         return []
     try:
@@ -143,25 +137,28 @@ async def _delete_session_upload_blobs(session_id: str) -> list[str]:
 async def abandon_generating_stub(session_id: str) -> None:
     """ContentSplitter 失敗或取消時，標記 abandoned 並 GC 關聯 upload。"""
     db = await get_db()
-    async with db.execute(
-        "SELECT status FROM sessions WHERE session_id = ?",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT status FROM sessions WHERE session_id = $1",
+        session_id,
+    )
     if not row or row[0] != "generating":
         return
 
     await _delete_session_upload_blobs(session_id)
-    await db.execute("DELETE FROM source_chunks WHERE session_id = ?", (session_id,))
     from . import curriculum_checkpoint as ckpt
     await ckpt.delete_checkpoint(session_id)
-    await db.execute(
-        """UPDATE sessions
-           SET status = 'abandoned', source_file_ids_json = '[]'
-           WHERE session_id = ? AND status = 'generating'""",
-        (session_id,),
-    )
-    await db.commit()
+
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM source_chunks WHERE session_id = $1", session_id
+            )
+            await conn.execute(
+                """UPDATE sessions
+                   SET status = 'abandoned', source_file_ids_json = '[]'
+                   WHERE session_id = $1 AND status = 'generating'""",
+                session_id,
+            )
 
 
 async def create_pending_session(
@@ -188,112 +185,101 @@ async def create_pending_session(
            (session_id, user_id, content_hash, total_stages, raw_content_summary,
             status, stages_json, pending_map_json, provider_name, model_name,
             question_mode, title, source_file_ids_json)
-           VALUES (?, ?, ?, ?, ?, 'pending_confirmation', ?, ?, ?, ?, ?, ?, ?)
+           VALUES ($1, $2, $3, $4, $5, 'pending_confirmation', $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT(session_id) DO UPDATE SET
-             content_hash=excluded.content_hash,
-             total_stages=excluded.total_stages,
-             raw_content_summary=excluded.raw_content_summary,
+             content_hash=EXCLUDED.content_hash,
+             total_stages=EXCLUDED.total_stages,
+             raw_content_summary=EXCLUDED.raw_content_summary,
              status='pending_confirmation',
-             stages_json=excluded.stages_json,
-             pending_map_json=excluded.pending_map_json,
-             provider_name=excluded.provider_name,
-             model_name=excluded.model_name,
-             question_mode=excluded.question_mode,
-             title=excluded.title,
-             source_file_ids_json=excluded.source_file_ids_json,
+             stages_json=EXCLUDED.stages_json,
+             pending_map_json=EXCLUDED.pending_map_json,
+             provider_name=EXCLUDED.provider_name,
+             model_name=EXCLUDED.model_name,
+             question_mode=EXCLUDED.question_mode,
+             title=EXCLUDED.title,
+             source_file_ids_json=EXCLUDED.source_file_ids_json,
              updated_at=CURRENT_TIMESTAMP""",
-        (
-            session_id, user_id, content_hash, len(stages),
-            summary,
-            json.dumps(stages, ensure_ascii=False),
-            json.dumps(pending_map, ensure_ascii=False),
-            provider_name,
-            model_name,
-            question_mode,
-            summary,
-            file_ids_json,
-        ),
+        session_id, user_id, content_hash, len(stages),
+        summary,
+        json.dumps(stages, ensure_ascii=False),
+        json.dumps(pending_map, ensure_ascii=False),
+        provider_name,
+        model_name,
+        question_mode,
+        summary,
+        file_ids_json,
     )
-    await db.commit()
 
 
 async def activate_pending_session(session_id: str) -> None:
     db = await get_db()
     await db.execute(
         """UPDATE sessions
-           SET status = 'active', pending_map_json = NULL, updated_at = ?
-           WHERE session_id = ?""",
-        (_utcnow(), session_id),
+           SET status = 'active', pending_map_json = NULL, updated_at = $1
+           WHERE session_id = $2""",
+        _utcnow(), session_id,
     )
-    await db.commit()
 
 
 async def get_user_active_session(user_id: str) -> Optional[dict]:
     db = await get_db()
-    async with db.execute(
+    row = await db.fetchrow(
         """SELECT * FROM sessions
-           WHERE user_id = ? AND status IN ('active', 'pending_confirmation')
+           WHERE user_id = $1 AND status IN ('active', 'pending_confirmation')
            ORDER BY updated_at DESC LIMIT 1""",
-        (user_id,),
-    ) as cur:
-        row = await cur.fetchone()
+        user_id,
+    )
     return dict(row) if row else None
 
 
 async def complete_session(session_id: str) -> None:
     db = await get_db()
     await db.execute(
-        "UPDATE sessions SET status = 'completed', updated_at = ? WHERE session_id = ?",
-        (_utcnow(), session_id),
+        "UPDATE sessions SET status = 'completed', updated_at = $1 WHERE session_id = $2",
+        _utcnow(), session_id,
     )
-    await db.commit()
 
 
 async def get_stage_statuses(session_id: str) -> dict[int, str]:
     db = await get_db()
-    async with db.execute(
-        "SELECT stage_id, status FROM stage_progress WHERE session_id = ?",
-        (session_id,),
-    ) as cur:
-        rows = await cur.fetchall()
+    rows = await db.fetch(
+        "SELECT stage_id, status FROM stage_progress WHERE session_id = $1",
+        session_id,
+    )
     return {row["stage_id"]: row["status"] for row in rows}
 
 
 async def store_stage_explanation(session_id: str, stage_id: int, full_explanation: str) -> None:
     db = await get_db()
     await db.execute(
-        "UPDATE stage_progress SET full_explanation = ? WHERE session_id = ? AND stage_id = ?",
-        (full_explanation, session_id, stage_id),
+        "UPDATE stage_progress SET full_explanation = $1 WHERE session_id = $2 AND stage_id = $3",
+        full_explanation, session_id, stage_id,
     )
-    await db.commit()
 
 
 async def get_stage_explanation(session_id: str, stage_id: int) -> str:
     db = await get_db()
-    async with db.execute(
-        "SELECT full_explanation FROM stage_progress WHERE session_id = ? AND stage_id = ?",
-        (session_id, stage_id),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT full_explanation FROM stage_progress WHERE session_id = $1 AND stage_id = $2",
+        session_id, stage_id,
+    )
     return (row["full_explanation"] or "") if row else ""
 
 
 async def store_stage_questions(session_id: str, stage_id: int, questions: list[dict]) -> None:
     db = await get_db()
     await db.execute(
-        "UPDATE stage_progress SET questions_json = ? WHERE session_id = ? AND stage_id = ?",
-        (json.dumps(questions, ensure_ascii=False), session_id, stage_id),
+        "UPDATE stage_progress SET questions_json = $1 WHERE session_id = $2 AND stage_id = $3",
+        json.dumps(questions, ensure_ascii=False), session_id, stage_id,
     )
-    await db.commit()
 
 
 async def get_stage_questions(session_id: str, stage_id: int) -> list[dict]:
     db = await get_db()
-    async with db.execute(
-        "SELECT questions_json FROM stage_progress WHERE session_id = ? AND stage_id = ?",
-        (session_id, stage_id),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT questions_json FROM stage_progress WHERE session_id = $1 AND stage_id = $2",
+        session_id, stage_id,
+    )
     if not row:
         return []
     return json.loads(row["questions_json"] or "[]")
@@ -302,10 +288,9 @@ async def get_stage_questions(session_id: str, stage_id: int) -> list[dict]:
 async def update_current_stage(session_id: str, stage_id: int) -> None:
     db = await get_db()
     await db.execute(
-        "UPDATE sessions SET current_stage_id = ?, updated_at = ? WHERE session_id = ?",
-        (stage_id, _utcnow(), session_id),
+        "UPDATE sessions SET current_stage_id = $1, updated_at = $2 WHERE session_id = $3",
+        stage_id, _utcnow(), session_id,
     )
-    await db.commit()
 
 
 async def upsert_stage_progress(
@@ -321,34 +306,30 @@ async def upsert_stage_progress(
     await db.execute(
         """INSERT INTO stage_progress
            (session_id, stage_id, status, attempts, best_score, understanding_notes, completed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            ON CONFLICT(session_id, stage_id) DO UPDATE SET
-             status=excluded.status,
-             attempts=excluded.attempts,
-             best_score=excluded.best_score,
-             understanding_notes=excluded.understanding_notes,
-             completed_at=excluded.completed_at""",
-        (
-            session_id,
-            stage_id,
-            status,
-            attempts,
-            best_score,
-            json.dumps(understanding_notes, ensure_ascii=False),
-            completed_at,
-        ),
+             status=EXCLUDED.status,
+             attempts=EXCLUDED.attempts,
+             best_score=EXCLUDED.best_score,
+             understanding_notes=EXCLUDED.understanding_notes,
+             completed_at=EXCLUDED.completed_at""",
+        session_id,
+        stage_id,
+        status,
+        attempts,
+        best_score,
+        json.dumps(understanding_notes, ensure_ascii=False),
+        completed_at,
     )
-    await db.commit()
 
 
 async def get_stage_progress(session_id: str, stage_id: int) -> dict | None:
     db = await get_db()
-    async with db.execute(
+    row = await db.fetchrow(
         """SELECT status, attempts, best_score, understanding_notes
-           FROM stage_progress WHERE session_id = ? AND stage_id = ?""",
-        (session_id, stage_id),
-    ) as cur:
-        row = await cur.fetchone()
+           FROM stage_progress WHERE session_id = $1 AND stage_id = $2""",
+        session_id, stage_id,
+    )
     if row is None:
         return None
     d = dict(row)
@@ -363,33 +344,30 @@ async def update_stage_attempt(session_id: str, stage_id: int, attempt: int) -> 
     """retry 決策後立即更新輪次，讓 resume 能還原正確 current_attempt。"""
     db = await get_db()
     await db.execute(
-        "UPDATE stage_progress SET attempts = ? WHERE session_id = ? AND stage_id = ?",
-        (attempt, session_id, stage_id),
+        "UPDATE stage_progress SET attempts = $1 WHERE session_id = $2 AND stage_id = $3",
+        attempt, session_id, stage_id,
     )
-    await db.commit()
 
 
 async def get_stage_qa_records(session_id: str, stage_id: int) -> list[dict]:
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT question_id, question_text, question_type, user_answer, score, feedback
-           FROM qa_records WHERE session_id = ? AND stage_id = ?
+           FROM qa_records WHERE session_id = $1 AND stage_id = $2
            ORDER BY id""",
-        (session_id, stage_id),
-    ) as cur:
-        rows = await cur.fetchall()
+        session_id, stage_id,
+    )
     return [dict(row) for row in rows]
 
 
 async def get_all_stage_qa_records(session_id: str) -> dict[int, list[dict]]:
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT stage_id, question_id, question_text, question_type, user_answer, score, feedback
-           FROM qa_records WHERE session_id = ?
+           FROM qa_records WHERE session_id = $1
            ORDER BY stage_id, id""",
-        (session_id,),
-    ) as cur:
-        rows = await cur.fetchall()
+        session_id,
+    )
     grouped: dict[int, list[dict]] = {}
     for row in rows:
         r = dict(row)
@@ -400,12 +378,11 @@ async def get_all_stage_qa_records(session_id: str) -> dict[int, list[dict]]:
 
 async def get_all_stage_explanations(session_id: str) -> dict[int, str]:
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT stage_id, full_explanation FROM stage_progress
-           WHERE session_id = ? AND full_explanation IS NOT NULL AND full_explanation != ''""",
-        (session_id,),
-    ) as cur:
-        rows = await cur.fetchall()
+           WHERE session_id = $1 AND full_explanation IS NOT NULL AND full_explanation != ''""",
+        session_id,
+    )
     return {int(row["stage_id"]): row["full_explanation"] for row in rows}
 
 
@@ -420,35 +397,34 @@ async def insert_decision_record(
     strategy_snapshot: dict,
 ) -> None:
     db = await get_db()
-    await db.execute(
-        """INSERT INTO decision_records
-           (session_id, stage_id, decision, best_score, next_stage_id, next_stage_score,
-            reason_lines_json, strategy_snapshot_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            session_id,
-            stage_id,
-            decision,
-            best_score,
-            next_stage_id,
-            next_stage_score,
-            json.dumps(reason_lines, ensure_ascii=False),
-            json.dumps(strategy_snapshot, ensure_ascii=False),
-        ),
-    )
-    # 每個 session 只保留最近 N 筆決策歷史，避免表無限成長
-    await db.execute(
-        """DELETE FROM decision_records
-           WHERE session_id = ?
-             AND id NOT IN (
-               SELECT id FROM decision_records
-               WHERE session_id = ?
-               ORDER BY id DESC
-               LIMIT ?
-             )""",
-        (session_id, session_id, DECISION_HISTORY_MAX_PER_SESSION),
-    )
-    await db.commit()
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """INSERT INTO decision_records
+                   (session_id, stage_id, decision, best_score, next_stage_id, next_stage_score,
+                    reason_lines_json, strategy_snapshot_json)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                session_id,
+                stage_id,
+                decision,
+                best_score,
+                next_stage_id,
+                next_stage_score,
+                json.dumps(reason_lines, ensure_ascii=False),
+                json.dumps(strategy_snapshot, ensure_ascii=False),
+            )
+            # 每個 session 只保留最近 N 筆決策歷史，避免表無限成長
+            await conn.execute(
+                """DELETE FROM decision_records
+                   WHERE session_id = $1
+                     AND id NOT IN (
+                       SELECT id FROM decision_records
+                       WHERE session_id = $2
+                       ORDER BY id DESC
+                       LIMIT $3
+                     )""",
+                session_id, session_id, DECISION_HISTORY_MAX_PER_SESSION,
+            )
 
 
 async def get_decision_records(
@@ -456,18 +432,18 @@ async def get_decision_records(
     limit: int = DECISION_HISTORY_MAX_PER_SESSION,
 ) -> list[dict]:
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT stage_id, decision, best_score, next_stage_id, next_stage_score,
                   reason_lines_json, strategy_snapshot_json, created_at
            FROM decision_records
-           WHERE session_id = ?
+           WHERE session_id = $1
            ORDER BY id ASC
-           LIMIT ?""",
-        (session_id, limit),
-    ) as cur:
-        rows = await cur.fetchall()
+           LIMIT $2""",
+        session_id, limit,
+    )
     records: list[dict] = []
     for row in rows:
+        created_at = row["created_at"]
         records.append(
             {
                 "stage_id": row["stage_id"],
@@ -477,7 +453,7 @@ async def get_decision_records(
                 "next_stage_score": row["next_stage_score"],
                 "reason_lines": json.loads(row["reason_lines_json"] or "[]"),
                 "strategy_snapshot": json.loads(row["strategy_snapshot_json"] or "{}"),
-                "created_at": row["created_at"],
+                "created_at": created_at.isoformat() if created_at is not None else None,
             }
         )
     return records
@@ -486,28 +462,37 @@ async def get_decision_records(
 async def insert_source_chunks(session_id: str, chunks: list[dict]) -> None:
     """將本地切好的 source_chunks 存入 DB（教材 source truth）。"""
     db = await get_db()
+    rows = [
+        (
+            c["chunk_id"],
+            session_id,
+            c["order_index"],
+            c["text"],
+            c.get("section_title"),
+            c.get("char_start"),
+            c.get("char_end"),
+            c.get("source_id"),
+            c.get("source_index"),
+            c.get("source_label"),
+        )
+        for c in chunks
+    ]
     await db.executemany(
-        """INSERT OR REPLACE INTO source_chunks
+        """INSERT INTO source_chunks
            (chunk_id, session_id, order_index, text, section_title, char_start, char_end,
             source_id, source_index, source_label)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        [
-            (
-                c["chunk_id"],
-                session_id,
-                c["order_index"],
-                c["text"],
-                c.get("section_title"),
-                c.get("char_start"),
-                c.get("char_end"),
-                c.get("source_id"),
-                c.get("source_index"),
-                c.get("source_label"),
-            )
-            for c in chunks
-        ],
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (session_id, chunk_id) DO UPDATE SET
+             order_index   = EXCLUDED.order_index,
+             text          = EXCLUDED.text,
+             section_title = EXCLUDED.section_title,
+             char_start    = EXCLUDED.char_start,
+             char_end      = EXCLUDED.char_end,
+             source_id     = EXCLUDED.source_id,
+             source_index  = EXCLUDED.source_index,
+             source_label  = EXCLUDED.source_label""",
+        rows,
     )
-    await db.commit()
 
 
 async def purge_source_uploads(session_id: str, file_ids: list[str]) -> None:
@@ -519,10 +504,9 @@ async def purge_source_uploads(session_id: str, file_ids: list[str]) -> None:
             purge_upload_files(fid)
     db = await get_db()
     await db.execute(
-        "UPDATE sessions SET source_file_ids_json = '[]' WHERE session_id = ?",
-        (session_id,),
+        "UPDATE sessions SET source_file_ids_json = '[]' WHERE session_id = $1",
+        session_id,
     )
-    await db.commit()
 
 
 async def get_source_chunks(
@@ -535,46 +519,42 @@ async def get_source_chunks(
     """
     db = await get_db()
     if chunk_ids is None:
-        async with db.execute(
-            "SELECT * FROM source_chunks WHERE session_id = ? ORDER BY order_index",
-            (session_id,),
-        ) as cur:
-            rows = await cur.fetchall()
+        rows = await db.fetch(
+            "SELECT * FROM source_chunks WHERE session_id = $1 ORDER BY order_index",
+            session_id,
+        )
     else:
         if not chunk_ids:
             return []
-        placeholders = ",".join("?" * len(chunk_ids))
-        async with db.execute(
-            f"SELECT * FROM source_chunks WHERE session_id = ? AND chunk_id IN ({placeholders}) ORDER BY order_index",
-            (session_id, *chunk_ids),
-        ) as cur:
-            rows = await cur.fetchall()
+        placeholders = ", ".join(f"${i + 2}" for i in range(len(chunk_ids)))
+        rows = await db.fetch(
+            f"SELECT * FROM source_chunks WHERE session_id = $1 AND chunk_id IN ({placeholders}) ORDER BY order_index",
+            session_id, *chunk_ids,
+        )
     return [dict(row) for row in rows]
 
 
 async def get_recent_qa_summary(session_id: str, max_items: int = 5) -> list[dict]:
     """取得最近 N 筆問答記錄摘要（供 ContextBuilder 使用）。"""
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT stage_id, question_text, user_answer, score
-           FROM qa_records WHERE session_id = ?
-           ORDER BY id DESC LIMIT ?""",
-        (session_id, max_items),
-    ) as cur:
-        rows = await cur.fetchall()
+           FROM qa_records WHERE session_id = $1
+           ORDER BY id DESC LIMIT $2""",
+        session_id, max_items,
+    )
     return [dict(row) for row in reversed(rows)]
 
 
 async def get_last_decision_record(session_id: str) -> Optional[dict]:
     """取得最後一筆決策記錄（含 strategy_snapshot）。"""
     db = await get_db()
-    async with db.execute(
+    row = await db.fetchrow(
         """SELECT stage_id, decision, best_score, strategy_snapshot_json
-           FROM decision_records WHERE session_id = ?
+           FROM decision_records WHERE session_id = $1
            ORDER BY id DESC LIMIT 1""",
-        (session_id,),
-    ) as cur:
-        row = await cur.fetchone()
+        session_id,
+    )
     if not row:
         return None
     return {
@@ -600,40 +580,38 @@ async def insert_qa_record(
         """INSERT INTO qa_records
            (session_id, stage_id, question_id, question_text, question_type,
             user_answer, score, feedback)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (session_id, stage_id, question_id, question_text, question_type,
-         user_answer, score, feedback),
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+        session_id, stage_id, question_id, question_text, question_type,
+        user_answer, score, feedback,
     )
-    await db.commit()
 
 
 async def get_user_sessions(user_id: str) -> list[dict]:
     """回傳用戶所有書本（排除 abandoned），含完成進度統計。"""
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT session_id, title, raw_content_summary, status,
                   total_stages, updated_at
            FROM sessions
-           WHERE user_id = ? AND status != 'abandoned'
+           WHERE user_id = $1 AND status != 'abandoned'
            ORDER BY updated_at DESC""",
-        (user_id,),
-    ) as cur:
-        rows = await cur.fetchall()
+        user_id,
+    )
     result = []
     for row in rows:
         r = dict(row)
-        async with db.execute(
-            "SELECT COUNT(*) AS cnt FROM stage_progress WHERE session_id = ? AND status = 'completed'",
-            (r["session_id"],),
-        ) as cnt_cur:
-            cnt_row = await cnt_cur.fetchone()
+        cnt_row = await db.fetchrow(
+            "SELECT COUNT(*) AS cnt FROM stage_progress WHERE session_id = $1 AND status = 'completed'",
+            r["session_id"],
+        )
+        updated_at = r["updated_at"]
         result.append({
             "session_id": r["session_id"],
             "title": r["title"] or r["raw_content_summary"] or "未命名學習材料",
             "status": r["status"],
             "total_stages": int(r["total_stages"] or 0),
             "completed_stages": int(cnt_row["cnt"] if cnt_row else 0),
-            "updated_at": str(r["updated_at"]) if r["updated_at"] else None,
+            "updated_at": updated_at.isoformat() if updated_at is not None else None,
         })
     return result
 
@@ -641,10 +619,9 @@ async def get_user_sessions(user_id: str) -> list[dict]:
 async def update_session_title(session_id: str, user_id: str, title: str) -> bool:
     db = await get_db()
     await db.execute(
-        "UPDATE sessions SET title = ? WHERE session_id = ? AND user_id = ?",
-        (title.strip(), session_id, user_id),
+        "UPDATE sessions SET title = $1 WHERE session_id = $2 AND user_id = $3",
+        title.strip(), session_id, user_id,
     )
-    await db.commit()
     return True
 
 
@@ -653,11 +630,10 @@ async def delete_session(session_id: str, user_id: str) -> bool:
     from ..files.upload_store import delete_upload
 
     db = await get_db()
-    async with db.execute(
-        "SELECT source_file_ids_json FROM sessions WHERE session_id = ? AND user_id = ?",
-        (session_id, user_id),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT source_file_ids_json FROM sessions WHERE session_id = $1 AND user_id = $2",
+        session_id, user_id,
+    )
     if not row:
         return False
 
@@ -666,13 +642,14 @@ async def delete_session(session_id: str, user_id: str) -> bool:
     except Exception:
         file_ids = []
 
-    for tbl in ("qa_records", "stage_progress", "source_chunks", "decision_records", "tutor_records"):
-        await db.execute(f"DELETE FROM {tbl} WHERE session_id = ?", (session_id,))
-    await db.execute(
-        "DELETE FROM sessions WHERE session_id = ? AND user_id = ?",
-        (session_id, user_id),
-    )
-    await db.commit()
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            for tbl in ("qa_records", "stage_progress", "source_chunks", "decision_records", "tutor_records"):
+                await conn.execute(f"DELETE FROM {tbl} WHERE session_id = $1", session_id)
+            await conn.execute(
+                "DELETE FROM sessions WHERE session_id = $1 AND user_id = $2",
+                session_id, user_id,
+            )
 
     # 清理磁碟上的 upload blob（失敗不阻擋 session 刪除）
     for fid in file_ids:
@@ -690,25 +667,24 @@ async def insert_tutor_record(
     scope: str = "current_chapter",
 ) -> int:
     db = await get_db()
-    cur = await db.execute(
+    new_id = await db.fetchval(
         """INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope, scope)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (session_id, stage_id, question, answer, 1 if in_scope else 0, scope),
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING id""",
+        session_id, stage_id, question, answer, 1 if in_scope else 0, scope,
     )
-    await db.commit()
-    return cur.lastrowid
+    return new_id
 
 
 async def get_all_tutor_records(session_id: str) -> dict[int, list[dict]]:
     """回傳 session 所有 tutor 問答，以 stage_id 分組，按插入順序排列。"""
     db = await get_db()
-    async with db.execute(
+    rows = await db.fetch(
         """SELECT id, stage_id, question, answer, in_scope, scope
-           FROM tutor_records WHERE session_id = ?
+           FROM tutor_records WHERE session_id = $1
            ORDER BY id ASC""",
-        (session_id,),
-    ) as cur:
-        rows = await cur.fetchall()
+        session_id,
+    )
     result: dict[int, list[dict]] = {}
     for row in rows:
         sid = row["stage_id"]
@@ -731,9 +707,8 @@ async def get_all_tutor_records(session_id: str) -> dict[int, list[dict]]:
 
 async def delete_tutor_record(record_id: int, session_id: str) -> bool:
     db = await get_db()
-    cur = await db.execute(
-        "DELETE FROM tutor_records WHERE id = ? AND session_id = ?",
-        (record_id, session_id),
+    row = await db.fetchrow(
+        "DELETE FROM tutor_records WHERE id = $1 AND session_id = $2 RETURNING id",
+        record_id, session_id,
     )
-    await db.commit()
-    return cur.rowcount > 0
+    return row is not None

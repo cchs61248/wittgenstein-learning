@@ -1,4 +1,4 @@
-"""SQLite-backed LLM result cache for curriculum pipeline."""
+"""asyncpg-backed LLM result cache for curriculum pipeline."""
 from __future__ import annotations
 
 import json
@@ -31,11 +31,10 @@ def _dict_to_response(data: dict) -> LLMResponse:
 
 async def get(cache_key: str) -> LLMResponse | None:
     db = await get_db()
-    async with db.execute(
-        "SELECT result_json FROM llm_result_cache WHERE cache_key = ?",
-        (cache_key,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT result_json FROM llm_result_cache WHERE cache_key = $1",
+        cache_key,
+    )
     if not row:
         return None
     try:
@@ -46,11 +45,10 @@ async def get(cache_key: str) -> LLMResponse | None:
 
 async def get_row(cache_key: str) -> dict[str, Any] | None:
     db = await get_db()
-    async with db.execute(
-        "SELECT * FROM llm_result_cache WHERE cache_key = ?",
-        (cache_key,),
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT * FROM llm_result_cache WHERE cache_key = $1",
+        cache_key,
+    )
     if not row:
         return None
     return dict(row)
@@ -72,48 +70,45 @@ async def put(
         """INSERT INTO llm_result_cache
            (cache_key, scope, content_hash, agent_name, region_id, prompt_version,
             model_name, result_json, input_tokens, output_tokens)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(cache_key) DO UPDATE SET
-            result_json = excluded.result_json,
-            input_tokens = excluded.input_tokens,
-            output_tokens = excluded.output_tokens,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (cache_key) DO UPDATE SET
+            result_json = EXCLUDED.result_json,
+            input_tokens = EXCLUDED.input_tokens,
+            output_tokens = EXCLUDED.output_tokens,
             last_hit_at = CURRENT_TIMESTAMP""",
-        (
-            cache_key,
-            scope,
-            content_hash,
-            agent_name,
-            region_id,
-            prompt_version,
-            model_name,
-            json.dumps(_response_to_dict(result), ensure_ascii=False),
-            result.input_tokens,
-            result.output_tokens,
-        ),
+        cache_key,
+        scope,
+        content_hash,
+        agent_name,
+        region_id,
+        prompt_version,
+        model_name,
+        json.dumps(_response_to_dict(result), ensure_ascii=False),
+        result.input_tokens,
+        result.output_tokens,
     )
-    await db.commit()
 
 
-async def record_hit(cache_key: str) -> None:
+async def record_hit(cache_key: str) -> int:
     db = await get_db()
-    await db.execute(
+    tag = await db.execute(
         """UPDATE llm_result_cache
            SET hit_count = hit_count + 1, last_hit_at = CURRENT_TIMESTAMP
-           WHERE cache_key = ?""",
-        (cache_key,),
+           WHERE cache_key = $1""",
+        cache_key,
     )
-    await db.commit()
+    # tag is e.g. "UPDATE 1"; return value unused by callers but parse for completeness
+    return int(tag.split()[-1])
 
 
 async def stats_by_content_hash(content_hash: str) -> dict[str, Any]:
     db = await get_db()
-    async with db.execute(
+    row = await db.fetchrow(
         """SELECT COUNT(*) AS entries,
                   COALESCE(SUM(hit_count), 0) AS total_hits
-           FROM llm_result_cache WHERE content_hash = ?""",
-        (content_hash,),
-    ) as cur:
-        row = await cur.fetchone()
+           FROM llm_result_cache WHERE content_hash = $1""",
+        content_hash,
+    )
     if not row:
         return {"entries": 0, "total_hits": 0}
     return {"entries": row[0], "total_hits": row[1]}
@@ -122,11 +117,10 @@ async def stats_by_content_hash(content_hash: str) -> dict[str, Any]:
 async def evict_older_than(days: int) -> int:
     if days <= 0:
         return 0
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat(sep=" ")
+    cutoff = datetime.utcnow() - timedelta(days=days)
     db = await get_db()
-    cur = await db.execute(
-        "DELETE FROM llm_result_cache WHERE created_at < ?",
-        (cutoff,),
+    tag = await db.execute(
+        "DELETE FROM llm_result_cache WHERE created_at < $1",
+        cutoff,
     )
-    await db.commit()
-    return cur.rowcount
+    return int(tag.split()[-1])

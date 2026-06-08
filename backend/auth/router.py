@@ -17,19 +17,18 @@ async def register(body: UserRegister):
         log.info("register denied not_whitelisted  email=%s", body.email)
         raise HTTPException(status_code=403, detail="此 Email 未經授權，請聯絡管理員")
 
-    async with db.execute("SELECT user_id FROM users WHERE email = ?", (body.email,)) as cur:
-        if await cur.fetchone():
-            log.info("register conflict  email=%s", body.email)
-            raise HTTPException(status_code=409, detail="Email 已被使用")
+    existing = await db.fetchrow("SELECT user_id FROM users WHERE email = $1", body.email)
+    if existing:
+        log.info("register conflict  email=%s", body.email)
+        raise HTTPException(status_code=409, detail="Email 已被使用")
 
     user_id = str(uuid.uuid4())
     pw_hash = hash_password(body.password)
     session_version = 1
     await db.execute(
-        "INSERT INTO users (user_id, email, password_hash, session_version) VALUES (?, ?, ?, ?)",
-        (user_id, body.email, pw_hash, session_version),
+        "INSERT INTO users (user_id, email, password_hash, session_version) VALUES ($1, $2, $3, $4)",
+        user_id, body.email, pw_hash, session_version,
     )
-    await db.commit()
 
     role = await get_role_by_email(body.email)
     log.info("register ok  user_id=%s  email=%s  role=%s", user_id, body.email, role)
@@ -42,33 +41,29 @@ async def login(body: UserLogin):
     log = ws_logger()
     db = await get_db()
 
-    async with db.execute(
-        "SELECT user_id, password_hash FROM users WHERE email = ?", (body.email,)
-    ) as cur:
-        row = await cur.fetchone()
+    row = await db.fetchrow(
+        "SELECT user_id, password_hash FROM users WHERE email = $1", body.email
+    )
 
     if not row:
         log.warning("login fail unknown_email  email=%s", body.email)
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
-    if not verify_password(body.password, row[1]):
-        log.warning("login fail bad_password  user_id=%s  email=%s", row[0], body.email)
+    if not verify_password(body.password, row["password_hash"]):
+        log.warning("login fail bad_password  user_id=%s  email=%s", row["user_id"], body.email)
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
 
-    await db.execute(
-        "UPDATE users SET session_version = session_version + 1 WHERE user_id = ?",
-        (row[0],),
+    session_version = await db.fetchval(
+        "UPDATE users SET session_version = session_version + 1 WHERE user_id = $1 RETURNING session_version",
+        row["user_id"],
     )
-    await db.commit()
-    async with db.execute("SELECT session_version FROM users WHERE user_id = ?", (row[0],)) as cur:
-        sv_row = await cur.fetchone()
-    session_version = int(sv_row[0]) if sv_row else 1
+    session_version = int(session_version) if session_version is not None else 1
     log.info(
         "login ok  user_id=%s  email=%s  session_version=%d",
-        row[0], body.email, session_version,
+        row["user_id"], body.email, session_version,
     )
     role = await get_role_by_email(body.email)
-    token = create_token(row[0], body.email, session_version=session_version)
-    return TokenOut(access_token=token, user_id=row[0], email=body.email, role=role)
+    token = create_token(row["user_id"], body.email, session_version=session_version)
+    return TokenOut(access_token=token, user_id=row["user_id"], email=body.email, role=role)
 
 
 @router.get("/me", response_model=UserOut)

@@ -1,20 +1,16 @@
-import tempfile
+import os
 import unittest
-from pathlib import Path
 
-from backend.db.database import close_db, init_db
+from backend.db.database import close_db, get_db, init_db
 from backend.memory.session_memory import get_all_tutor_records, insert_tutor_record
 
 
 class TestTutorRecords(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._tmp_dir = tempfile.TemporaryDirectory()
-        db_path = str(Path(self._tmp_dir.name) / "test.db")
-        await init_db(db_path)
+        await init_db(os.environ["DATABASE_URL"], reset=True)
 
     async def asyncTearDown(self) -> None:
         await close_db()
-        self._tmp_dir.cleanup()
 
     async def test_insert_and_get_single_stage(self):
         await insert_tutor_record("sess1", 2, "什麼是命題？", "命題是有真假值的陳述。", True)
@@ -67,25 +63,21 @@ class TestTutorRecords(unittest.IsolatedAsyncioTestCase):
 
     async def test_scope_null_backward_compat_in_scope_true(self):
         """舊資料 scope=NULL + in_scope=1 應反推為 current_chapter"""
-        from backend.db.database import get_db
         db = await get_db()
         await db.execute(
-            "INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope, scope) VALUES (?, ?, ?, ?, ?, ?)",
-            ("sess6", 1, "舊問題", "舊回答", 1, None),
+            "INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope, scope) VALUES ($1, $2, $3, $4, $5, $6)",
+            "sess6", 1, "舊問題", "舊回答", True, None,
         )
-        await db.commit()
         result = await get_all_tutor_records("sess6")
         self.assertEqual(result[1][0]["scope"], "current_chapter")
 
     async def test_scope_null_backward_compat_in_scope_false(self):
         """舊資料 scope=NULL + in_scope=0 應反推為 out_of_scope"""
-        from backend.db.database import get_db
         db = await get_db()
         await db.execute(
-            "INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope, scope) VALUES (?, ?, ?, ?, ?, ?)",
-            ("sess7", 1, "舊教材外問題", "舊外部回答", 0, None),
+            "INSERT INTO tutor_records (session_id, stage_id, question, answer, in_scope, scope) VALUES ($1, $2, $3, $4, $5, $6)",
+            "sess7", 1, "舊教材外問題", "舊外部回答", False, None,
         )
-        await db.commit()
         result = await get_all_tutor_records("sess7")
         self.assertEqual(result[1][0]["scope"], "out_of_scope")
 

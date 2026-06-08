@@ -1,7 +1,7 @@
 """DB-backed inflight lock — 跨 worker dedup 的 acquire/release/is_active CRUD。"""
+import asyncpg
 import ctypes
 import os
-import sqlite3
 import sys
 import time
 from typing import Optional
@@ -58,16 +58,15 @@ async def acquire(
         await db.execute(
             "INSERT INTO inflight_locks "
             "(key, session_id, kind, started_at, worker_pid, meta_json) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (key, session_id, kind, time.time(), os.getpid(), meta_json),
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            key, session_id, kind, time.time(), os.getpid(), meta_json,
         )
-        await db.commit()
         log.debug(
             "inflight_lock acquire ok  key=%s  session=%s  kind=%s  pid=%d",
             key, session_id, kind, os.getpid(),
         )
         return True
-    except sqlite3.IntegrityError:
+    except asyncpg.UniqueViolationError:
         # UNIQUE PRIMARY KEY 衝突 — 已有人 hold（預期路徑）
         log.debug(
             "inflight_lock acquire race_lost  key=%s  session=%s  kind=%s",
@@ -88,20 +87,17 @@ async def acquire(
 async def release(key: str) -> None:
     log = ws_logger()
     db = await get_db()
-    cur = await db.execute("DELETE FROM inflight_locks WHERE key = ?", (key,))
-    await db.commit()
+    tag = await db.execute("DELETE FROM inflight_locks WHERE key = $1", key)
+    deleted = int(tag.split()[-1]) if tag else 0
     log.debug(
         "inflight_lock release  key=%s  deleted=%d",
-        key, cur.rowcount or 0,
+        key, deleted,
     )
 
 
 async def is_active(key: str) -> bool:
     db = await get_db()
-    cur = await db.execute(
-        "SELECT 1 FROM inflight_locks WHERE key = ? LIMIT 1", (key,)
-    )
-    row = await cur.fetchone()
+    row = await db.fetchrow("SELECT 1 FROM inflight_locks WHERE key = $1 LIMIT 1", key)
     return row is not None
 
 
@@ -116,26 +112,22 @@ async def has_session_inflight(
     """
     db = await get_db()
     if exclude_kinds:
-        placeholders = ",".join("?" * len(exclude_kinds))
+        placeholders = ",".join(f"${i + 2}" for i in range(len(exclude_kinds)))
         sql = (
             f"SELECT 1 FROM inflight_locks "
-            f"WHERE session_id = ? AND kind NOT IN ({placeholders}) LIMIT 1"
+            f"WHERE session_id = $1 AND kind NOT IN ({placeholders}) LIMIT 1"
         )
-        params: tuple = (session_id, *exclude_kinds)
+        row = await db.fetchrow(sql, session_id, *exclude_kinds)
     else:
-        sql = "SELECT 1 FROM inflight_locks WHERE session_id = ? LIMIT 1"
-        params = (session_id,)
-    cur = await db.execute(sql, params)
-    return (await cur.fetchone()) is not None
+        row = await db.fetchrow(
+            "SELECT 1 FROM inflight_locks WHERE session_id = $1 LIMIT 1", session_id
+        )
+    return row is not None
 
 
 async def active_keys_for_session(session_id: str) -> list[str]:
     db = await get_db()
-    cur = await db.execute(
-        "SELECT key FROM inflight_locks WHERE session_id = ?",
-        (session_id,),
-    )
-    rows = await cur.fetchall()
+    rows = await db.fetch("SELECT key FROM inflight_locks WHERE session_id = $1", session_id)
     return [r[0] for r in rows]
 
 
@@ -143,10 +135,7 @@ async def cleanup_dead_worker_locks() -> int:
     """清掉 worker_pid 已不存在（reload / crash）的孤兒 lock。"""
     log = ws_logger()
     db = await get_db()
-    async with db.execute(
-        "SELECT key, session_id, kind, worker_pid FROM inflight_locks"
-    ) as cur:
-        rows = await cur.fetchall()
+    rows = await db.fetch("SELECT key, session_id, kind, worker_pid FROM inflight_locks")
     dead = [r for r in rows if not _pid_alive(r[3])]
     if dead:
         log.info(
@@ -167,20 +156,18 @@ async def cleanup_stale(max_age_s: float = 600) -> int:
     cutoff = time.time() - max_age_s
     db = await get_db()
     # 先撈出要被清的細節，方便 debug
-    async with db.execute(
+    stale = await db.fetch(
         "SELECT key, session_id, kind, worker_pid, started_at "
-        "FROM inflight_locks WHERE started_at < ?",
-        (cutoff,),
-    ) as cur:
-        stale = await cur.fetchall()
+        "FROM inflight_locks WHERE started_at < $1",
+        cutoff,
+    )
     if stale:
         log.debug(
             "inflight_lock cleanup_stale targets  cutoff=%.0f  count=%d  entries=%s",
             cutoff, len(stale),
             [(r[0], r[1], r[2], r[3]) for r in stale],
         )
-    cur = await db.execute(
-        "DELETE FROM inflight_locks WHERE started_at < ?", (cutoff,)
+    tag = await db.execute(
+        "DELETE FROM inflight_locks WHERE started_at < $1", cutoff
     )
-    await db.commit()
-    return cur.rowcount or 0
+    return int(tag.split()[-1]) if tag else 0
