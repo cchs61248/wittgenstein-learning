@@ -2663,6 +2663,8 @@ textarea:disabled {
 .km-summary-toggle:hover {
   opacity: 0.85;
 }
+
+.quality-warning-banner {
   margin-bottom: 16px;
   padding: 12px 14px;
   border-radius: var(--radius-sm);
