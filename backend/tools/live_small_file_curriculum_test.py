@@ -44,6 +44,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from backend.config import DATABASE_URL
+
+DSN = os.getenv("DATABASE_URL", DATABASE_URL)
+
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / "backend" / ".env")
@@ -313,7 +317,7 @@ async def main(
     from backend.tools.curriculum_worker_guard import DbContentionError, assert_no_db_contention
 
     setup_logging()
-    await init_db(str(ROOT / "data" / "learning.db"))
+    await init_db(DSN)
 
     if cleanup_all:
         deleted = await cleanup_live_sessions()
