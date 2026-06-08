@@ -3,7 +3,6 @@ import { useSessionStore } from './store/sessionStore';
 import { AuthForm } from './components/AuthForm';
 import { UploadModal } from './components/UploadModal';
 import { KnowledgeMapModal } from './components/KnowledgeMapModal';
-import { QualityWarningBanner } from './components/QualityWarningBanner';
 import { ExplanationPanel } from './components/ExplanationPanel';
 import { QuestionPanel } from './components/QuestionPanel';
 import { AskTutorPanel } from './components/AskTutorPanel';
@@ -15,6 +14,8 @@ import {
   renameSession,
   deleteSession,
   syntheticGeneratingSession,
+  retryCurriculum,
+  dismissCurriculum,
 } from './api/session';
 import { verifyAuth } from './api/auth';
 import { fetchUserUiState } from './api/userUiState';
@@ -459,6 +460,7 @@ export default function App() {
       // 教材分析失敗（abandoned 等）才退回上傳；進行中的學習 session（active）不應誤觸。
       const hasStages = useSessionStore.getState().stages.length > 0;
       if (!hasStages) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setIsWaitingForCurrentGeneration(false);
         setShowUpload(true);
       }
@@ -1063,6 +1065,16 @@ export default function App() {
     );
   };
 
+  const handleRetryBook = async (sessionId: string) => {
+    await retryCurriculum(token!, sessionId);
+    listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
+  };
+
+  const handleDismissBook = async (sessionId: string) => {
+    await dismissCurriculum(token!, sessionId);
+    listSessions(token!).then(fresh => setBookshelf(prev => reconcileBookshelf(prev, fresh)));
+  };
+
   const kickedModal = kickedMessage ? (
     <div className="modal-overlay kicked-overlay">
       <div className="modal-card kicked-card">
@@ -1175,6 +1187,8 @@ export default function App() {
                 disableNewMaterial={hasGenerating}
                 onRename={handleRenameBook}
                 onDelete={handleDeleteBook}
+                onRetry={handleRetryBook}
+                onDismiss={handleDismissBook}
               />
             </div>
           )}

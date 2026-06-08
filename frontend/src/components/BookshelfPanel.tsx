@@ -13,12 +13,15 @@ interface BookshelfPanelProps {
   canAddMaterial?: boolean;
   onRename: (sessionId: string, title: string) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
+  onRetry: (sessionId: string) => Promise<void>;
+  onDismiss: (sessionId: string) => Promise<void>;
 }
 
 function statusLabel(status: BookEntry['status']): string {
   if (status === 'active') return '學習中';
   if (status === 'completed') return '已完成';
   if (status === 'generating') return '生成中…';
+  if (status === 'failed') return '生成失敗';
   return '待確認';
 }
 
@@ -26,6 +29,7 @@ function statusClass(status: BookEntry['status']): string {
   if (status === 'active') return 'status-active';
   if (status === 'completed') return 'status-completed';
   if (status === 'generating') return 'status-generating';
+  if (status === 'failed') return 'status-failed';
   return 'status-pending';
 }
 
@@ -35,9 +39,11 @@ interface BookItemProps {
   onSwitch: () => void;
   onRename: (title: string) => Promise<void>;
   onDelete: () => Promise<void>;
+  onRetry: (sessionId: string) => Promise<void>;
+  onDismiss: (sessionId: string) => Promise<void>;
 }
 
-function BookItem({ entry, isActive, onSwitch, onRename, onDelete }: BookItemProps) {
+function BookItem({ entry, isActive, onSwitch, onRename, onDelete, onRetry, onDismiss }: BookItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(entry.title);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -170,6 +176,30 @@ function BookItem({ entry, isActive, onSwitch, onRename, onDelete }: BookItemPro
         )}
       </div>
 
+      {entry.status === 'failed' && (
+        <div className="book-failed-row">
+          <span className="book-failed-hint">
+            課程生成中斷或逾時，尚未產生完整結果。
+          </span>
+          <div className="book-failed-actions">
+            <button
+              className="book-retry-btn"
+              onClick={(e) => { e.stopPropagation(); onRetry(entry.sessionId); }}
+              aria-label={`重新生成「${entry.title}」`}
+            >
+              重新生成
+            </button>
+            <button
+              className="book-dismiss-btn"
+              onClick={(e) => { e.stopPropagation(); onDismiss(entry.sessionId); }}
+              aria-label={`移除「${entry.title}」`}
+            >
+              移除
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="book-progress-row">
         <div className="book-progress-bar-track" aria-hidden="true">
           <div className="book-progress-bar-fill" style={{ width: `${pct}%` }} />
@@ -194,6 +224,8 @@ export function BookshelfPanel({
   canAddMaterial = true,
   onRename,
   onDelete,
+  onRetry,
+  onDismiss,
 }: BookshelfPanelProps) {
   const [view, setView] = useState<'list' | 'map'>('list');
   const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
@@ -275,7 +307,7 @@ export function BookshelfPanel({
   }, [view, activeSessionId]);
 
   const handleBookSelect = (entry: BookEntry) => {
-    if (entry.status === 'generating') return;
+    if (entry.status === 'generating' || entry.status === 'failed') return;
     patchSessionLayoutPrefs(entry.sessionId, { bookshelfPanelView: 'map' });
     setViewingSessionId(entry.sessionId);
     setView('map');
@@ -342,6 +374,8 @@ export function BookshelfPanel({
               onSwitch={() => handleBookSelect(entry)}
               onRename={(title) => onRename(entry.sessionId, title)}
               onDelete={() => onDelete(entry.sessionId)}
+              onRetry={onRetry}
+              onDismiss={onDismiss}
             />
           ))
         )}
