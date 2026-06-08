@@ -170,14 +170,20 @@ async def abandon_failed_session(session_id: str) -> None:
     if not row or row["status"] != "failed":
         return
     await _delete_session_upload_blobs(session_id)
-    await db.execute("DELETE FROM source_chunks WHERE session_id = $1", session_id)
     from . import curriculum_checkpoint as ckpt
     await ckpt.delete_checkpoint(session_id)
-    await db.execute(
-        "UPDATE sessions SET status='abandoned', source_file_ids_json='[]' "
-        "WHERE session_id = $1 AND status='failed'",
-        session_id,
-    )
+
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM source_chunks WHERE session_id = $1", session_id
+            )
+            await conn.execute(
+                """UPDATE sessions
+                   SET status = 'abandoned', source_file_ids_json = '[]'
+                   WHERE session_id = $1 AND status = 'failed'""",
+                session_id,
+            )
 
 
 async def create_pending_session(
