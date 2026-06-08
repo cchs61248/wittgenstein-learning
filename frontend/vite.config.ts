@@ -5,9 +5,12 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   build: {
-    // lightningcss has a known issue minifying certain webkit pseudo-element selectors;
-    // disable CSS minification to avoid the whitespace-in-pseudo-element error.
-    cssMinify: false,
+    // CSS minification via lightningcss (rolldown-vite default). This was
+    // previously disabled because lightningcss crashed on malformed CSS in
+    // App.css (an orphaned .quality-warning-banner declaration block whose
+    // selector had been deleted). That root cause is now fixed, so the
+    // default minifier works again.
+    cssMinify: true,
   },
   server: {
     allowedHosts: ['.trycloudflare.com'],
