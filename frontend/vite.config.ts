@@ -4,6 +4,11 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // lightningcss has a known issue minifying certain webkit pseudo-element selectors;
+    // disable CSS minification to avoid the whitespace-in-pseudo-element error.
+    cssMinify: false,
+  },
   server: {
     allowedHosts: ['.trycloudflare.com'],
     proxy: {
