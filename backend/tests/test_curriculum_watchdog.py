@@ -19,7 +19,10 @@ async def _ensure_user(user_id: str = "u1") -> None:
 
 
 async def _age_session(session_id: str, seconds: float) -> None:
-    """把 sessions.updated_at 往前推 seconds（模擬已生成一段時間）。"""
+    """把 sessions.updated_at 往前推 seconds（模擬已生成一段時間）。
+
+    僅動 sessions.updated_at；不影響 curriculum_checkpoints.updated_at。
+    """
     db = await get_db()
     await db.execute(
         "UPDATE sessions SET updated_at = now() - make_interval(secs => $2) "
@@ -59,7 +62,15 @@ class TestFindDead(unittest.IsolatedAsyncioTestCase):
 
     async def test_fresh_checkpoint_keeps_alive(self):
         await self._mk("s_ckpt", 700)
+        # checkpoint 於 ageing 之後 upsert → cp.updated_at = now()，idle 很新；
+        # 即使 session.updated_at 老，GREATEST 取 checkpoint 心跳故不算 stale。
         await ckpt.upsert_checkpoint("s_ckpt", content_hash="h")
+        dead = await wd.find_dead_generating_sessions(stale_s=600, hardcap_s=3600)
+        self.assertEqual(dead, [])
+
+    async def test_within_stale_window_not_dead(self):
+        # age 落在 stale 窗內（599 < 600）→ SQL 算術不應跨越邊界
+        await self._mk("s_edge", 599)
         dead = await wd.find_dead_generating_sessions(stale_s=600, hardcap_s=3600)
         self.assertEqual(dead, [])
 

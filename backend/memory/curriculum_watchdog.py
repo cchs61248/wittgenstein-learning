@@ -29,6 +29,7 @@ SELECT s.session_id,
 FROM sessions s
 LEFT JOIN curriculum_checkpoints cp ON cp.session_id = s.session_id
 WHERE s.status = 'generating'
+ORDER BY s.session_id
 """
 
 
@@ -47,9 +48,12 @@ def _classify_dead(
 
 
 async def find_dead_generating_sessions(*, stale_s: float, hardcap_s: float) -> list[dict]:
-    """回傳判定為死亡的 generating session（含 reason）。
+    """回傳判定為死亡的 generating session（含 reason），依 session_id 排序。
 
     死亡 = age > hardcap（不論鎖）或（idle > stale 且 無有效鎖）。
+
+    注意（競態）：本函式與呼叫端的 UPDATE 是兩次獨立 pool 獲取；呼叫端在標記前
+    必須以 `WHERE status='generating'` 做 CAS，避免兩次之間狀態已改變而誤覆寫。
     """
     db = await get_db()
     rows = await db.fetch(_FIND_SQL, list(QUERY_ONLY_KINDS))
