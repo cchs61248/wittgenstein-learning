@@ -133,3 +133,48 @@ class TestClassify(unittest.TestCase):
     def test_stale_requires_no_lock(self):
         self.assertIsNone(wd._classify_dead(
             age_s=100, idle_s=700, has_lock=True, stale_s=600, hardcap_s=3600))
+
+
+class TestSweep(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await init_db(os.environ["DATABASE_URL"], reset=True)
+        await _ensure_user()
+
+    async def asyncTearDown(self):
+        await close_db()
+
+    async def _mk_old(self, sid: str) -> None:
+        await session_memory.create_generating_stub(sid, "u1", "h")
+        await _age_session(sid, 700)
+
+    async def test_sweep_marks_failed(self):
+        await self._mk_old("s1")
+        n = await wd.sweep_dead_generating(stale_s=600, hardcap_s=3600)
+        self.assertEqual(n, 1)
+        row = await session_memory.get_session("s1")
+        self.assertEqual(row["status"], "failed")
+
+    async def test_sweep_preserves_source_chunks(self):
+        await self._mk_old("s2")
+        await session_memory.insert_source_chunks(
+            "s2", [{"chunk_id": "c1", "text": "hi", "order_index": 0}]
+        )
+        await wd.sweep_dead_generating(stale_s=600, hardcap_s=3600)
+        chunks = await session_memory.get_source_chunks("s2")
+        self.assertEqual(len(chunks), 1)
+
+    async def test_sweep_idempotent(self):
+        await self._mk_old("s3")
+        first = await wd.sweep_dead_generating(stale_s=600, hardcap_s=3600)
+        second = await wd.sweep_dead_generating(stale_s=600, hardcap_s=3600)
+        self.assertEqual(first, 1)
+        self.assertEqual(second, 0)
+
+    async def test_sweep_does_not_touch_abandoned(self):
+        await self._mk_old("s4")
+        db = await get_db()
+        await db.execute("UPDATE sessions SET status='abandoned' WHERE session_id='s4'")
+        n = await wd.sweep_dead_generating(stale_s=600, hardcap_s=3600)
+        self.assertEqual(n, 0)
+        row = await session_memory.get_session("s4")
+        self.assertEqual(row["status"], "abandoned")

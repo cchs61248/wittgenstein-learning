@@ -76,3 +76,39 @@ async def find_dead_generating_sessions(*, stale_s: float, hardcap_s: float) -> 
             "reason": reason,
         })
     return dead
+
+
+async def sweep_dead_generating(*, stale_s: float, hardcap_s: float) -> int:
+    """標記死亡 session 為 failed（冪等），逐筆 log reason，回傳實際標記數量。
+
+    以 `WHERE status='generating'` 做 CAS：兩次 pool 獲取之間若狀態已被改成
+    abandoned/active 等，RETURNING 不會回傳該列，故不會誤覆寫。
+    """
+    dead = await find_dead_generating_sessions(stale_s=stale_s, hardcap_s=hardcap_s)
+    if not dead:
+        return 0
+    ids = [d["session_id"] for d in dead]
+    db = await get_db()
+    rows = await db.fetch(
+        "UPDATE sessions SET status = 'failed', updated_at = now() "
+        "WHERE session_id = ANY($1::text[]) AND status = 'generating' "
+        "RETURNING session_id",
+        ids,
+    )
+    marked = {r["session_id"] for r in rows}
+    for d in dead:
+        if d["session_id"] not in marked:
+            continue
+        if d["reason"] == "hardcap_timeout":
+            _log.warning(
+                "watchdog marked session failed: reason=hardcap_timeout "
+                "session_id=%s age_seconds=%.0f",
+                d["session_id"], d["age_seconds"],
+            )
+        else:
+            _log.warning(
+                "watchdog marked session failed: reason=stale_no_lock "
+                "session_id=%s idle_seconds=%.0f",
+                d["session_id"], d["idle_seconds"],
+            )
+    return len(marked)
