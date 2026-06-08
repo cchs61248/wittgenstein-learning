@@ -202,7 +202,7 @@ Set-Location "c:\Users\<username>\Documents\aaron\wittgenstein-learning\backend"
                  └─ DriftVerifierAgent     → Citation accuracy 驗證（逐條 claim 核對原文）
 ```
 
-> 詳細 Agent 說明、DB Schema、Migration 列表、WebSocket 協定、完整 REST API 規格、學習流程等見 [BACKEND_FLOW.md](./BACKEND_FLOW.md)。
+> 詳細 Agent 說明、DB Schema（單一 baseline `schema.sql`，無歷史 migration）、WebSocket 協定、完整 REST API 規格、學習流程等見 [BACKEND_FLOW.md](./BACKEND_FLOW.md)。
 
 ### 靜態檔服務
 

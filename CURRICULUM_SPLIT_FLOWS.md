@@ -257,7 +257,7 @@ LLM 成本：1 次。
 | 按開始後完全沒動 | uvicorn 缺 `arq`、WS crash | uvicorn terminal traceback |
 | 有 `session_generating` 但 worker 0 job | Redis / worker 沒起 | `docker compose logs curriculum-worker` |
 | 切完沒地圖 | prepare 或 worker 例外 | worker log、DB `sessions` 狀態 |
-| Windows DB disk I/O | WAL + bind-mount | `SQLITE_JOURNAL_MODE=DELETE` |
+| 連不上 DB / 連線被拒 | PostgreSQL 沒起、`DATABASE_URL` 錯 | `docker compose ps postgres`、確認 `DATABASE_URL` |
 | 教材該合的沒合 / 不該合的合了 | 閾值不對 | 調 `STAGE_TITLE_MERGE_THRESHOLD` |
 | 多檔關鍵詞一直分歧 | canonicalize 沒開 | 設 `CONCEPT_CANONICALIZE=1` |
 

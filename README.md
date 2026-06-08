@@ -40,7 +40,7 @@
 - **Resume**：DB `sessions.same_material` 欄位記錄選擇，重啟後恢復一致流程
 - **Checkpoint 斷點續跑**：`curriculum_checkpoints` 記錄已完成切分區段，worker 重啟不從頭生成
 - **Arq + Redis 背景 worker**：`CURRICULUM_USE_ARQ=1` 時 uvicorn 只 prepare + enqueue
-- **LLM result cache**：`LLM_CACHE_ENABLED=1` 時 curriculum agents 共用 SQLite cache
+- **LLM result cache**：`LLM_CACHE_ENABLED=1` 時 curriculum agents 共用 PostgreSQL cache（`llm_result_cache` 表）
 - **Docker Compose**：`docker compose up -d` 一鍵啟動 Redis（`:6380`）+ curriculum-worker
 
 > 設計文件：`docs/superpowers/specs/2026-05-27-curriculum-unify-v2-design.md`
@@ -94,6 +94,8 @@
 
 - Python 3.11+
 - Node.js 18+
+- PostgreSQL 16（或 Docker：`docker compose up -d postgres`）
+- 跑後端測試另需 Docker daemon（testcontainers 起拋棄式 PG）
 
 ### 後端（Windows PowerShell 範例）
 
@@ -108,11 +110,16 @@ C:\Windows\py.exe -3 -m venv .venv
 
 # 設定環境變數
 copy .env.example .env
-# 編輯 .env，至少填入一組 LLM API key
+# 編輯 .env，至少填入一組 LLM API key 與 DATABASE_URL
+
+# 起 PostgreSQL（專案根目錄；或自備 PG 並設好 DATABASE_URL）
+docker compose up -d postgres
 
 # 啟動伺服器（入口是 run.py 不是 main.py）
 .\.venv\Scripts\uvicorn.exe run:app --reload --port 8000
 ```
+
+> schema 收斂於 `backend/db/schema.sql`（單一 baseline，無歷史 migration）；`init_db` 啟動時冪等套用（`CREATE TABLE IF NOT EXISTS`）。連線用 asyncpg pool，由 `DATABASE_URL` 設定。
 
 > 開發時請務必用 `uvicorn run:app` 而非 `uvicorn main:app`；`run.py` 會把上層目錄加入 `sys.path` 才能正確匯入 `backend.*`。
 
@@ -144,17 +151,19 @@ cd backend
 
 | 容器 | 用途 | Host 埠 |
 |------|------|---------|
+| `wl-postgres` | PostgreSQL 16（資料庫，DBeaver 可連） | `5432` |
 | `wl-redis` | Arq 佇列 | `6380` |
 | `wl-curriculum-worker` | 執行 `run_curriculum_job` | — |
 
-Compose 會把 `./data` 掛載為 `/seed`（唯讀種子 DB）、`wl-worker-data` 掛載為 `/data`（worker 實際寫入），並 bind-mount `./backend` 方便開發。Worker 容器內 `MONICA_BASE_URL` 預設指向 `host.docker.internal:8001`（本機 Monica 代理）。
+Compose 會起 `postgres`（資料落在 named volume `pg_data`）、`redis`，並 bind-mount `./backend` 方便開發。api / worker 皆透過 docker network 以 `DATABASE_URL=postgresql://wl:wl@postgres:5432/wl` 連 DB；worker 容器內 `MONICA_BASE_URL` 預設指向 `host.docker.internal:8001`（本機 Monica 代理）。
 
-> **Windows 注意**：Docker worker 將 SQLite copy 至 container volume 執行（避免 bind-mount I/O 問題）。本機 uvicorn 請勿同時跑 in-process curriculum；進度以 worker 內 DB 為準，容器退出時 sync 回 `./data/`。純本機開發也可不用 Docker，直接：
+> **DB 連線**：PostgreSQL 原生處理多 process 併發寫，uvicorn 與 worker 連同一個 DB 即可，無 SQLite 時代的 bind-mount / WAL / 種子複製問題。外部工具（DBeaver 等）連 `localhost:5432`，帳密 `wl/wl`、DB `wl`。
+> **純本機開發**也可不用 Docker 跑 worker（DB 仍需一個可連的 PostgreSQL，設好 `DATABASE_URL`）：
 > ```powershell
 > $env:REDIS_URL="redis://localhost:6380/0"
+> $env:DATABASE_URL="postgresql://wl:wl@localhost:5432/wl"
 > ..\.venv\Scripts\python.exe -m arq backend.jobs.arq_settings.WorkerSettings
 > ```
-> （需在 `wittgenstein-learning/` 目錄、與 uvicorn 共用同一 `learning.db`）
 
 詳見 [BACKEND_FLOW §12](./BACKEND_FLOW.md#12-curriculum-背景化checkpoint--arq--llm-cache)。
 
@@ -185,7 +194,9 @@ npm run lint
 | `MONICA_BASE_URL` | Monica 代理基底 URL（可選） | — |
 | `DEEPSEEK_API_KEY` | DeepSeek API 金鑰（可選） | — |
 | `DEFAULT_PROVIDER` | 預設 LLM（`claude` / `openai` / `gemini` / `monica` / `deepseek`） | `claude` |
-| `DB_PATH` | SQLite 路徑（相對路徑以 `backend/` 為基準） | `../data/learning.db` |
+| `DATABASE_URL` | PostgreSQL 連線（asyncpg） | `postgresql://wl:wl@localhost:5432/wl` |
+| `DB_POOL_MIN_SIZE` | asyncpg pool 最小連線數 | `1` |
+| `DB_POOL_MAX_SIZE` | asyncpg pool 最大連線數 | `10` |
 | `JWT_SECRET` | JWT 簽名密鑰 | `dev-secret-change-in-production` |
 | `JWT_EXPIRE_DAYS` | JWT 有效期（天） | `7` |
 | `CORS_ORIGINS` | 額外允許的 CORS 來源（逗號分隔；不設則用 Vite dev server 預設） | — |
@@ -196,7 +207,6 @@ npm run lint
 | `STAGE_TITLE_MERGE_THRESHOLD` | stage 標題去重合併閾值（0~1）；高=保守、低=積極合併 | `0.85` |
 | `CONCEPT_CANONICALIZE` | `1` 時 stage 合併後再跑 ConceptCanonicalize LLM 統一關鍵詞 | `0` |
 | `CROSS_MATERIAL_PEDAGOGICAL_PLANNER` | `1` 啟用 Phase 4 跨教材教學循序重排（僅 `same_material=False` + 過 gate；off 時 bit-for-bit 等價） | `0` |
-| `SQLITE_JOURNAL_MODE` | SQLite journal mode（Docker worker volume 建議 WAL） | `WAL` |
 
 > `PASS_THRESHOLD=0.75` 與 `MAX_STAGE_ATTEMPTS=3` 寫死在 orchestrator 中。Arq 相關：`ARQ_MAX_JOBS`（預設 1）、`ARQ_JOB_TIMEOUT_S`（預設 7200）、`LLM_CACHE_EVICT_DAYS`（預設 90）。完整列表見 [BACKEND_FLOW §10](./BACKEND_FLOW.md#10-設定與環境變數)。
 
@@ -247,12 +257,13 @@ backend/
 │   └── generation_handle.py    # _GenerationHandle (task + event)；同步 register/finish/cancel +
 │                                 #   async register_async/finish_async/cancel_async（同步寫 inflight_locks DB lock）
 ├── db/
-│   ├── database.py             # SQLite 連線、migration 022–024 等（內嵌）；PRAGMA journal_mode
+│   ├── database.py             # asyncpg pool（get_db/init_db/close_db）；套用 schema.sql baseline
+│   ├── schema.sql              # 單一 baseline schema（13 張表，無歷史 migration）
 │   └── inflight_lock.py        # acquire/release/cleanup_stale/cleanup_dead_worker_locks
 ├── memory/
 │   ├── working_memory.py       # 當次輪次狀態（含 current_teaching_intent）
-│   ├── session_memory.py       # 本次學習進度 + source_chunks（SQLite）
-│   ├── longterm_memory.py      # 跨會話掌握度 + misconceptions（SQLite，EMA α=0.3）
+│   ├── session_memory.py       # 本次學習進度 + source_chunks（PostgreSQL）
+│   ├── longterm_memory.py      # 跨會話掌握度 + misconceptions（PostgreSQL，EMA α=0.3）
 │   ├── curriculum_checkpoint.py # V2 region checkpoint CRUD
 │   └── llm_cache.py            # llm_result_cache CRUD
 ├── routers/
@@ -324,24 +335,25 @@ frontend/src/
 
 ### 資料庫 Schema
 
-十張以上資料表，由 `database.py` 內嵌 migration 增量建立（冪等）：
+13 張資料表，集中定義於 `backend/db/schema.sql`（單一 baseline，無歷史 migration）；`init_db` 啟動時以 `CREATE TABLE IF NOT EXISTS` 冪等套用：
 
 | 表 | 用途 |
 |----|------|
-| `users` | 帳號 + `session_version`（單裝置強制登出，Migration 011） |
+| `users` | 帳號 + `session_version`（單裝置強制登出） |
 | `sessions` | 學習會話、`stages_json`、`provider/model`、`question_mode`、`title`、`target_depth`、`source_file_ids_json` |
-| `source_chunks` | 後端 source truth；`chunk_NNNN` 文件層級命名（Migration 009） |
+| `source_chunks` | 後端 source truth；`chunk_NNNN` 文件層級命名 |
 | `stage_progress` | 各 stage 狀態、`full_explanation`、`questions_json` |
 | `qa_records` | 答題歷史 |
 | `decision_records` | 進度決策歷史（含 `strategy_snapshot_json` 與 selection_reason / high_severity / repeated_patterns） |
-| `tutor_records` | ask_tutor 問答（含 `scope` 三態，Migration 013–014） |
+| `tutor_records` | ask_tutor 問答（含 `scope` 三態） |
 | `concept_mastery` | 跨會話概念掌握度（EMA α=0.3）、`source_signature` 跨教材隔離 |
-| `user_learning_profile` | 學習風格、平均嘗試次數、`ui_state_json`（跨裝置 UI 同步，Migration 012） |
-| `inflight_locks` | 跨 worker dedup lock（Migration 016）；startup 清 stale / dead worker |
-| `curriculum_checkpoints` | V2 pipeline region 斷點（Migration 022） |
-| `llm_result_cache` | curriculum LLM 結果快取（Migration 024） |
+| `user_learning_profile` | 學習風格、平均嘗試次數、`ui_state_json`（跨裝置 UI 同步） |
+| `inflight_locks` | 跨 worker dedup lock；startup 清 stale / dead worker |
+| `curriculum_checkpoints` | V2 pipeline region 斷點 |
+| `llm_result_cache` | curriculum LLM 結果快取 |
+| `email_whitelist` | 註冊白名單 + 角色（`admin` / `user`）；只有白名單 email 可註冊 |
 
-完整 schema、欄位、index、migration 列表見 [BACKEND_FLOW §3](./BACKEND_FLOW.md#3-資料庫-schema)。
+完整 schema、欄位、index 見 [BACKEND_FLOW §3](./BACKEND_FLOW.md#3-資料庫-schema)。
 
 ### WebSocket 訊息協定
 
