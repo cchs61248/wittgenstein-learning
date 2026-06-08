@@ -61,3 +61,46 @@ class TestRegenerate(unittest.IsolatedAsyncioTestCase):
         cp = await ckpt.load_checkpoint("s_ok")
         self.assertIsNotNone(cp)
         self.assertEqual(cp["completed_region_ids"], [])
+
+    async def test_dirty_checkpoint_replaced_with_empty(self):
+        # criterion 3：既有 partial checkpoint 必須被乾淨的覆蓋
+        await _mk_failed("s_dirty")
+        await ckpt.upsert_checkpoint(
+            "s_dirty", content_hash="h", completed_region_ids=["region_000"]
+        )
+        with patch(
+            "backend.jobs.regenerate.resume_generating_session_background",
+            new=AsyncMock(),
+        ):
+            await regenerate_failed_session("s_dirty", use_arq=False)
+        cp = await ckpt.load_checkpoint("s_dirty")
+        self.assertEqual(cp["completed_region_ids"], [])
+
+    async def test_releases_inflight_lock(self):
+        # criterion 5：殘留 inflight lock 必須被釋放
+        from backend.db.inflight_lock import acquire, is_active
+        from backend.jobs.enqueue import inflight_key
+        await _mk_failed("s_lock")
+        await acquire(inflight_key("s_lock"), session_id="s_lock", kind="start_session")
+        self.assertTrue(await is_active(inflight_key("s_lock")))
+        with patch(
+            "backend.jobs.regenerate.resume_generating_session_background",
+            new=AsyncMock(),
+        ):
+            await regenerate_failed_session("s_lock", use_arq=False)
+        self.assertFalse(await is_active(inflight_key("s_lock")))
+
+    async def test_immediate_sweep_does_not_refail(self):
+        # criterion 8（核心安全契約）：retry 重置 updated_at，故即時 sweep 不會再殺。
+        # 用正常門檻（300s）：重生後 age≈0 << 300 → 存活。門檻會殺老 session 已由
+        # TestSweep.test_sweep_marks_failed 覆蓋，此處刻意不用極小門檻（會被 DB 延遲弄成 flaky）。
+        from backend.memory.curriculum_watchdog import sweep_dead_generating
+        await _mk_failed("s_sweep")
+        with patch(
+            "backend.jobs.regenerate.resume_generating_session_background",
+            new=AsyncMock(),
+        ):
+            await regenerate_failed_session("s_sweep", use_arq=False)
+        await sweep_dead_generating(stale_s=300, hardcap_s=300)
+        row = await session_memory.get_session("s_sweep")
+        self.assertEqual(row["status"], "generating")
