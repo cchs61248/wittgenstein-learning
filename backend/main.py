@@ -20,6 +20,10 @@ from .config import (
     CURRICULUM_USE_ARQ,
     REDIS_URL,
     LLM_CACHE_EVICT_DAYS,
+    GENERATING_WATCHDOG_ENABLED,
+    GENERATING_WATCHDOG_STALE_SECONDS,
+    GENERATING_WATCHDOG_HARDCAP_SECONDS,
+    GENERATING_WATCHDOG_INTERVAL_SECONDS,
 )
 from .db.database import init_db, close_db
 from .db.inflight_lock import cleanup_stale as inflight_cleanup_stale
@@ -48,6 +52,24 @@ from .ws.generation_handle import (
     cancel_async as _gen_cancel_async,
     wait_for_session_idle as _wait_for_session_idle,
 )
+
+
+async def _watchdog_loop():
+    """背景週期掃描：標記卡死的 generating session 為 failed。"""
+    from .memory.curriculum_watchdog import sweep_dead_generating
+    while True:
+        try:
+            await asyncio.sleep(GENERATING_WATCHDOG_INTERVAL_SECONDS)
+            n = await sweep_dead_generating(
+                stale_s=GENERATING_WATCHDOG_STALE_SECONDS,
+                hardcap_s=GENERATING_WATCHDOG_HARDCAP_SECONDS,
+            )
+            if n:
+                ws_logger().info("watchdog: marked %d stuck generating session(s) failed", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            ws_logger().warning("watchdog loop iteration failed: %s", e)
 
 
 @asynccontextmanager
@@ -107,7 +129,28 @@ async def lifespan(app: FastAPI):
                 )
         except Exception as e:
             ws_logger().warning(f"curriculum auto-resume failed on startup: {e}")
+    # Generating watchdog：標記卡死 session（獨立於 CURRICULUM_USE_ARQ）
+    app.state.watchdog_task = None
+    if GENERATING_WATCHDOG_ENABLED:
+        try:
+            from .memory.curriculum_watchdog import sweep_dead_generating
+            n = await sweep_dead_generating(
+                stale_s=GENERATING_WATCHDOG_STALE_SECONDS,
+                hardcap_s=GENERATING_WATCHDOG_HARDCAP_SECONDS,
+            )
+            if n:
+                ws_logger().info("watchdog: startup swept %d stuck session(s) to failed", n)
+        except Exception as e:
+            ws_logger().warning(f"watchdog startup sweep failed: {e}")
+        app.state.watchdog_task = asyncio.create_task(_watchdog_loop())
     yield
+    task = getattr(app.state, "watchdog_task", None)
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await close_db()
     ws_logger().info("Wittgenstein Learning System shutting down")
 

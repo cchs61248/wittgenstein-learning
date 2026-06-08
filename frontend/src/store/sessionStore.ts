@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapNode, KnowledgeMapPayload, SourceChunk, TutorMessage, TutorReplyPayload } from '../types/messages';
+import type { StageInfo, QuestionPayload, FeedbackPayload, StageDecisionPayload, KnowledgeMapPayload, SourceChunk, TutorMessage, TutorReplyPayload } from '../types/messages';
 
 export type StageStatus = 'pending' | 'current' | 'completed';
 

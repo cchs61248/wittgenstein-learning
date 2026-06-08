@@ -64,3 +64,19 @@ LLM_MAX_CONCURRENT: int = int(os.getenv("LLM_MAX_CONCURRENT", "0"))
 LLM_SLOT_WAIT_TIMEOUT_S: float = float(os.getenv("LLM_SLOT_WAIT_TIMEOUT_S", "120"))
 # Redis slot lease TTL（防止 worker crash 後 slot 永久佔用）
 LLM_SLOT_LEASE_S: int = int(os.getenv("LLM_SLOT_LEASE_S", "600"))
+
+# ── Generating watchdog（卡死 generating session 的 fail-safe）─────────────────
+# stale：無有效 inflight 鎖且無新進度超過此秒數 → 標 failed。
+# hardcap：即使仍持鎖，總生成時間（sessions.updated_at 起算）超過此秒數 → 標 failed（last-resort）。
+GENERATING_WATCHDOG_ENABLED: bool = os.getenv(
+    "GENERATING_WATCHDOG_ENABLED", "1"
+).strip().lower() in ("1", "true", "yes")
+GENERATING_WATCHDOG_STALE_SECONDS: float = float(
+    os.getenv("GENERATING_WATCHDOG_STALE_SECONDS", "600")
+)
+GENERATING_WATCHDOG_HARDCAP_SECONDS: float = float(
+    os.getenv("GENERATING_WATCHDOG_HARDCAP_SECONDS", "3600")
+)
+GENERATING_WATCHDOG_INTERVAL_SECONDS: float = float(
+    os.getenv("GENERATING_WATCHDOG_INTERVAL_SECONDS", "60")
+)

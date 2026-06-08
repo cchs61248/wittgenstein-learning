@@ -196,6 +196,36 @@ async def delete_session_endpoint(session_id: str, token: str = Query(...)):
     return {"ok": True}
 
 
+@router.post("/{session_id}/retry")
+async def retry_session_endpoint(session_id: str, token: str = Query(...)):
+    payload = await decode_token_active(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token 無效")
+    row = await session_memory.get_session(session_id)
+    if not row or row.get("user_id") != payload["sub"]:
+        raise HTTPException(status_code=404, detail="找不到 session")
+    from ..config import CURRICULUM_USE_ARQ
+    from ..jobs.regenerate import regenerate_failed_session, RegenerateError
+    try:
+        return await regenerate_failed_session(session_id, use_arq=CURRICULUM_USE_ARQ)
+    except RegenerateError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/{session_id}/dismiss")
+async def dismiss_session_endpoint(session_id: str, token: str = Query(...)):
+    payload = await decode_token_active(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token 無效")
+    row = await session_memory.get_session(session_id)
+    if not row or row.get("user_id") != payload["sub"]:
+        raise HTTPException(status_code=404, detail="找不到 session")
+    if row.get("status") != "failed":
+        raise HTTPException(status_code=409, detail=f"not_failed:{row.get('status')}")
+    await session_memory.abandon_failed_session(session_id)
+    return {"status": "abandoned", "session_id": session_id}
+
+
 @router.delete("/{session_id}/tutor/{record_id}")
 async def delete_tutor_record_endpoint(session_id: str, record_id: int, token: str = Query(...)):
     payload = await decode_token_active(token)

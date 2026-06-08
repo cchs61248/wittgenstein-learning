@@ -37,7 +37,7 @@ export async function getActiveSession(token: string): Promise<ActiveSession | n
 export interface BookEntry {
   sessionId: string;
   title: string;
-  status: 'active' | 'completed' | 'pending_confirmation' | 'generating';
+  status: 'active' | 'completed' | 'pending_confirmation' | 'generating' | 'failed';
   totalStages: number;
   completedStages: number;
   updatedAt: string | null;
@@ -153,6 +153,30 @@ export async function deleteTutorRecord(token: string, sessionId: string, record
     const res = await fetch(
       `${BASE}/sessions/${sessionId}/tutor/${recordId}?token=${encodeURIComponent(token)}`,
       { method: 'DELETE' }
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function retryCurriculum(token: string, sessionId: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${BASE}/sessions/${sessionId}/retry?token=${encodeURIComponent(token)}`,
+      { method: 'POST' }
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function dismissCurriculum(token: string, sessionId: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${BASE}/sessions/${sessionId}/dismiss?token=${encodeURIComponent(token)}`,
+      { method: 'POST' }
     );
     return res.ok;
   } catch {
