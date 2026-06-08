@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,10 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / "backend" / ".env")
+
+from backend.config import DATABASE_URL
+
+DSN = os.getenv("DATABASE_URL", DATABASE_URL)
 
 from backend.tools.golden_curriculum_sources import GOLDEN_SOURCES, GoldenSource, available_sources
 from backend.tools.live_small_file_curriculum_test import (
@@ -79,7 +84,7 @@ async def _run_llm_row(spec: GoldenSource, path: Path, *, full_v2: bool, run_sta
     from backend.utils.logger import setup_logging
 
     setup_logging()
-    await init_db(str(ROOT / "data" / "learning.db"))
+    await init_db(DSN)
     row = _check_probe(spec, path)
     if row.status == "fail":
         await close_db()
@@ -135,7 +140,7 @@ async def main(
         from backend.utils.logger import setup_logging
 
         setup_logging()
-        await init_db(str(ROOT / "data" / "learning.db"))
+        await init_db(DSN)
         deleted = await cleanup_live_sessions()
         print(f"Cleaned up {len(deleted)} live test session(s)")
         await close_db()
