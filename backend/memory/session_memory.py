@@ -534,6 +534,21 @@ async def purge_source_uploads(session_id: str, file_ids: list[str]) -> None:
     )
 
 
+def _json_safe_source_chunk(row) -> dict:
+    """asyncpg Record → dict，並把 created_at（timestamptz → datetime）轉成 ISO 字串。
+
+    DB 回的 raw chunk dict 帶 datetime 型 created_at；下游 build-phase agent
+    （SplitterVerifier / ContentOutline）會把整個 chunk dict 丟進 json.dumps 組 LLM
+    payload，datetime 不可序列化會讓 verifier fail-open（見 docs §9 P1）。在 loader
+    邊界把 created_at 轉成 ISO 字串即可單點根治，沿用本檔 get_decision_records 的慣例。
+    """
+    chunk = dict(row)
+    created = chunk.get("created_at")
+    if isinstance(created, datetime):
+        chunk["created_at"] = created.isoformat()
+    return chunk
+
+
 async def get_source_chunks(
     session_id: str,
     chunk_ids: list[str] | None = None,
@@ -556,7 +571,7 @@ async def get_source_chunks(
             f"SELECT * FROM source_chunks WHERE session_id = $1 AND chunk_id IN ({placeholders}) ORDER BY order_index",
             session_id, *chunk_ids,
         )
-    return [dict(row) for row in rows]
+    return [_json_safe_source_chunk(row) for row in rows]
 
 
 async def get_recent_qa_summary(session_id: str, max_items: int = 5) -> list[dict]:
