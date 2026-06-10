@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Proxy 目標：本機開發預設打 127.0.0.1:8000；在 Docker 內由 compose 設
+// VITE_PROXY_TARGET=http://api:8000（容器網路無法用 127.0.0.1 連到 api 容器）。
+const proxyTarget = process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8000'
+const wsProxyTarget = proxyTarget.replace(/^http/, 'ws')
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -15,14 +20,14 @@ export default defineConfig({
   server: {
     allowedHosts: ['.trycloudflare.com'],
     proxy: {
-      '/auth': { target: 'http://127.0.0.1:8000', changeOrigin: true },
-      '/upload': { target: 'http://127.0.0.1:8000', changeOrigin: true },
-      '/sessions': { target: 'http://127.0.0.1:8000', changeOrigin: true },
-      '/learner': { target: 'http://127.0.0.1:8000', changeOrigin: true },
-      '/user': { target: 'http://127.0.0.1:8000', changeOrigin: true },
-      '/health': { target: 'http://127.0.0.1:8000', changeOrigin: true },
-      '/config': { target: 'http://127.0.0.1:8000', changeOrigin: true },
-      '/ws': { target: 'ws://127.0.0.1:8000', ws: true, changeOrigin: true },
+      '/auth': { target: proxyTarget, changeOrigin: true },
+      '/upload': { target: proxyTarget, changeOrigin: true },
+      '/sessions': { target: proxyTarget, changeOrigin: true },
+      '/learner': { target: proxyTarget, changeOrigin: true },
+      '/user': { target: proxyTarget, changeOrigin: true },
+      '/health': { target: proxyTarget, changeOrigin: true },
+      '/config': { target: proxyTarget, changeOrigin: true },
+      '/ws': { target: wsProxyTarget, ws: true, changeOrigin: true },
     },
   },
 })

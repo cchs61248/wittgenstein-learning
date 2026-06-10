@@ -1,10 +1,10 @@
-# 完整 Docker 部署：API（uvicorn）+ Curriculum Worker（Arq）+ Redis
+# 完整 Docker 部署：Frontend（Vite dev）+ API（uvicorn）+ Curriculum Worker（Arq）+ Redis
 #
 # 結構：
 #   - api / curriculum-worker 共用 postgres 服務（pg_data named volume）
 #   - PostgreSQL 原生處理多 process 併發寫；DBeaver 可從 localhost:5432 連線
 #   - 共用 Dockerfile.worker
-#   - 前端可繼續本機 npm run dev（打 localhost:8000 → docker api）
+#   - frontend：vite dev server（http://localhost:5173，HMR），proxy 打 api 容器
 #
 # 用法：
 #   docker compose up -d --build
@@ -79,6 +79,42 @@ services:
       - ./backend:/app/backend
       # HF 模型 cache（in-process 模式或備援會用到）
       - hf_cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: wl-frontend
+    depends_on:
+      - api
+    environment:
+      TZ: Asia/Taipei
+      # 容器內 vite proxy 需打 api 容器（不可用 host 的 127.0.0.1:8000）
+      VITE_PROXY_TARGET: http://api:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      # 原始碼 bind mount → HMR 看得到 frontend/ 變動
+      - ./frontend:/app
+      # anonymous volume 遮蔽 host(Windows) 的 node_modules，
+      # 保留容器內 npm ci 裝好的 Linux native binary（rolldown/lightningcss）
+      - /app/node_modules
+    restart: unless-stopped
+
+  # Cloudflare quick tunnel（取代手動的 cloudflared.exe tunnel --url http://localhost:5173）。
+  # opt-in：只在加 --profile tunnel 時啟動，避免每次 up 都把站台公開到外網。
+  #   docker compose --profile tunnel up -d
+  #   docker compose logs cloudflared   # 取隨機 https://*.trycloudflare.com 網址
+  # vite.config.ts 已 allowedHosts ['.trycloudflare.com']；proxy 會把 /auth /ws 等轉到 api。
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: wl-cloudflared
+    profiles: ["tunnel"]
+    depends_on:
+      - frontend
+    # 容器內打 frontend 容器（不可用 host 的 localhost:5173）
+    command: tunnel --url http://frontend:5173
     restart: unless-stopped
 
   curriculum-worker:
