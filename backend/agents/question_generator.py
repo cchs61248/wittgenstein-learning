@@ -5,6 +5,7 @@ from .base_agent import BaseAgent, AgentContext
 from ..llm.base_provider import LLMMessage, MessageRole
 from ..utils.prompt_templates import SYSTEM_PROMPTS
 from ..utils import extract_json
+from ..utils.option_normalize import normalize_question_options
 
 
 def _format_distribution_quota(
@@ -242,6 +243,10 @@ class QuestionGeneratorAgent(BaseAgent):
             if q["answer_mode"] != "multiple_choice":
                 q["options"] = []
                 q["correct_option_id"] = None
+            else:
+                # LLM 常把 option key 吐成 option_id；正規化成全系統契約的 id，
+                # 否則前端會全選、提交空答案（見 option_normalize 說明）。
+                normalize_question_options(q)
 
         violations = _check_distribution_violations(
             data.get("questions", []), stage.get("key_concepts", []), num_questions
