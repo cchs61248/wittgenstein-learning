@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 from ..db.database import get_db
+from ..utils.option_normalize import normalize_question_options
 
 
 def _utcnow() -> datetime:
@@ -307,7 +308,13 @@ async def get_stage_questions(session_id: str, stage_id: int) -> list[dict]:
     )
     if not row:
         return []
-    return json.loads(row["questions_json"] or "[]")
+    questions = json.loads(row["questions_json"] or "[]")
+    # 治癒已存的舊 MC 題：早期 QG 未正規化，option key 為 option_id，
+    # 直接回給前端會全選。resume 載回時就地修正，免 migration。
+    for q in questions:
+        if isinstance(q, dict) and q.get("answer_mode") == "multiple_choice":
+            normalize_question_options(q)
+    return questions
 
 
 async def update_current_stage(session_id: str, stage_id: int) -> None:
