@@ -24,6 +24,7 @@ interface SessionState {
   email: string | null;
   role: string | null;
   setAuth: (token: string, userId: string, email: string, role: string) => void;
+  setRole: (role: string) => void;
   clearAuth: () => void;
 
   // 會話
@@ -208,6 +209,10 @@ export const useSessionStore = create<SessionState>((set) => ({
     localStorage.setItem('wl_email', email);
     localStorage.setItem('wl_role', role);
     set({ token, userId, email, role });
+  },
+  setRole: (role) => {
+    localStorage.setItem('wl_role', role);
+    set({ role });
   },
   clearAuth: () => {
     localStorage.removeItem('wl_token');

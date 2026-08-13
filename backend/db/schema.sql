@@ -175,7 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_result_cache(created_at)
 
 CREATE TABLE IF NOT EXISTS email_whitelist (
     email      TEXT PRIMARY KEY,
-    role       TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user')),
+    role       TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user','editor')),
     note       TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );

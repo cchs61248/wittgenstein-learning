@@ -21,6 +21,7 @@ interface Source {
 }
 
 interface Props {
+  role?: string | null;
   onStart: (
     provider: ProviderType,
     depth: DepthType,
@@ -126,6 +127,11 @@ const PROVIDER_MODELS: Record<ProviderType, { id: string; label: string }[]> = {
   ],
 };
 
+const EDITOR_MODELS: { id: string; label: string }[] = [
+  { id: 'claude-4.6-sonnet', label: 'Claude 4.6 Sonnet — 預設' },
+  { id: 'gemini-3-flash', label: 'Gemini 3 Flash — 快速' },
+];
+
 const MAX_SOURCES = 50;
 
 function genId() {
@@ -134,22 +140,30 @@ function genId() {
 
 // ── 主元件 ────────────────────────────────────────────────────
 
-export function UploadModal({ onStart, onClose }: Props) {
+export function UploadModal({ role, onStart, onClose }: Props) {
   const { token } = useSessionStore();
+  const isEditor = role === 'editor';
   const [sources, setSources] = useState<Source[]>([]);
-  const [provider, setProvider] = useState<ProviderType>('claude');
-  const [model, setModel] = useState(PROVIDER_MODELS.claude[0].id);
+  const [provider, setProvider] = useState<ProviderType>(isEditor ? 'monica' : 'claude');
+  const [model, setModel] = useState(
+    isEditor ? EDITOR_MODELS[0].id : PROVIDER_MODELS.claude[0].id,
+  );
   const [depth, setDepth] = useState<DepthType>('intermediate');
   const [questionMode, setQuestionMode] = useState<'short_answer' | 'multiple_choice'>('short_answer');
   const [materialMode, setMaterialMode] = useState<'same' | 'different' | null>(null);
 
-  // 從後端取得預設 provider
+  // 從後端取得預設 provider（editor 角色鎖定 monica，不套用）
   useEffect(() => {
+    if (isEditor) {
+      setProvider('monica');
+      setModel(EDITOR_MODELS[0].id);
+      return;
+    }
     fetchDefaultProvider().then((p) => {
       setProvider(p);
       setModel(PROVIDER_MODELS[p][0].id);
     });
-  }, []);
+  }, [isEditor]);
 
   // URL 輸入
   const [urlInput, setUrlInput] = useState('');
@@ -447,7 +461,7 @@ export function UploadModal({ onStart, onClose }: Props) {
     );
   };
 
-  const models = PROVIDER_MODELS[provider];
+  const models = isEditor ? EDITOR_MODELS : PROVIDER_MODELS[provider];
 
   // ── 渲染 ───────────────────────────────────────────────────
 
@@ -688,13 +702,17 @@ export function UploadModal({ onStart, onClose }: Props) {
         <div className="modal-options">
           <div className="option-group">
             <label>AI 提供商</label>
-            <select value={provider} onChange={(e) => handleProviderChange(e.target.value as ProviderType)}>
-              <option value="claude">Anthropic Claude</option>
-              <option value="openai">OpenAI</option>
-              <option value="gemini">Google Gemini</option>
-              <option value="monica">Monica（本地代理）</option>
-              <option value="deepseek">DeepSeek</option>
-            </select>
+            {isEditor ? (
+              <p className="modal-locked-provider">Monica（本地代理，此角色限定）</p>
+            ) : (
+              <select value={provider} onChange={(e) => handleProviderChange(e.target.value as ProviderType)}>
+                <option value="claude">Anthropic Claude</option>
+                <option value="openai">OpenAI</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="monica">Monica（本地代理）</option>
+                <option value="deepseek">DeepSeek</option>
+              </select>
+            )}
           </div>
 
           <div className="option-group">

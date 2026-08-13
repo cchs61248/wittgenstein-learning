@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..auth.utils import decode_token_active, get_role_by_email
+from ..auth.role_policy import MATERIAL_UPLOAD_ROLES
 from ..config import UPLOAD_MAX_CHAR_COUNT, UPLOAD_MAX_FILE_MB
 from ..files.upload_store import (
     is_plain_upload,
@@ -46,8 +47,8 @@ async def _require_admin_or_403(authorization: Optional[str]) -> None:
     payload = await decode_token_active(authorization.removeprefix("Bearer "))
     if not payload:
         raise HTTPException(status_code=401, detail="Token 無效")
-    if await get_role_by_email(payload.get("email", "")) != "admin":
-        raise HTTPException(status_code=403, detail="僅管理員可新增教材")
+    if await get_role_by_email(payload.get("email", "")) not in MATERIAL_UPLOAD_ROLES:
+        raise HTTPException(status_code=403, detail="僅管理員或教材編輯者可新增教材")
 
 
 def _save_parsed_upload(

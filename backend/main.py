@@ -35,6 +35,7 @@ from .routers.session import router as session_router
 from .routers.learner import router as learner_router
 from .routers.user_ui import router as user_ui_router
 from .auth.utils import decode_token_active, get_role_by_email
+from .auth.role_policy import MATERIAL_UPLOAD_ROLES, validate_provider_for_role
 from .llm.provider_factory import create_provider
 from .orchestrator.learning_orchestrator import LearningOrchestrator
 from .memory.working_memory import get_working_memory, delete_working_memory
@@ -489,10 +490,11 @@ async def websocket_endpoint(
             )
 
             if msg_type == "start_session":
-                if await get_role_by_email(payload.get("email", "")) != "admin":
+                role = await get_role_by_email(payload.get("email", ""))
+                if role not in MATERIAL_UPLOAD_ROLES:
                     _ws_log.info(
-                        "start_session denied non_admin  session=%s  user=%s",
-                        session_id, user_id,
+                        "start_session denied no_upload_role  session=%s  user=%s  role=%s",
+                        session_id, user_id, role,
                     )
                     await emit({
                         "type": "forbidden",
@@ -520,6 +522,18 @@ async def websocket_endpoint(
 
                 provider_name: str = p.get("provider", DEFAULT_PROVIDER)
                 model: str | None = p.get("model") or None
+
+                provider_err = validate_provider_for_role(role, provider_name, model)
+                if provider_err:
+                    _ws_log.info(
+                        "start_session denied provider_policy  session=%s  user=%s  role=%s  provider=%s  model=%s",
+                        session_id, user_id, role, provider_name, model,
+                    )
+                    await emit({
+                        "type": "forbidden",
+                        "payload": {"message": provider_err},
+                    })
+                    continue
 
                 built = await _build_source_chunks_from_payload(p, emit)
                 if built is None:

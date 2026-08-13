@@ -23,6 +23,7 @@ def client(monkeypatch, tmp_path):
         for uid, email, role in [
             ("u_admin", "admin@x", "admin"),
             ("u_user", "user@x", "user"),
+            ("u_editor", "editor@x", "editor"),
         ]:
             await db.execute(
                 "INSERT INTO users (user_id, email, password_hash, session_version) "
@@ -59,6 +60,15 @@ def test_upload_file_allowed_for_admin(client):
         "/upload",
         files={"file": ("a.txt", b"hello world content", "text/plain")},
         headers={"Authorization": f"Bearer {_token('u_admin', 'admin@x')}"},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_upload_file_allowed_for_editor(client):
+    resp = client.post(
+        "/upload",
+        files={"file": ("b.txt", b"hello editor content", "text/plain")},
+        headers={"Authorization": f"Bearer {_token('u_editor', 'editor@x')}"},
     )
     assert resp.status_code == 200, resp.text
 

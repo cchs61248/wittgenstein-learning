@@ -351,7 +351,7 @@ frontend/src/
 | `inflight_locks` | 跨 worker dedup lock；startup 清 stale / dead worker |
 | `curriculum_checkpoints` | V2 pipeline region 斷點 |
 | `llm_result_cache` | curriculum LLM 結果快取 |
-| `email_whitelist` | 註冊白名單 + 角色（`admin` / `user`）；只有白名單 email 可註冊 |
+| `email_whitelist` | 註冊白名單 + 角色（`admin` / `editor` / `user`）；只有白名單 email 可註冊；`editor` 可新增教材但 AI 僅限 Monica（模型限 Claude 4.6 Sonnet / Gemini 3 Flash） |
 
 完整 schema、欄位、index 見 [BACKEND_FLOW §3](./BACKEND_FLOW.md#3-資料庫-schema)。
 

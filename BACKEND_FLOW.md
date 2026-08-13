@@ -383,11 +383,11 @@ INDEX: idx_llm_cache_content_hash, idx_llm_cache_scope_agent, idx_llm_cache_crea
 ### `email_whitelist`
 ```
 email      TEXT PRIMARY KEY
-role       TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user'))
+role       TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user','editor'))
 note       TEXT
 created_at TIMESTAMPTZ DEFAULT now()
 ```
-註冊白名單：`/auth/register` 只允許 email 命中此表者成功註冊，角色（`admin` / `user`）一併寫入 user。`user` 角色不可新增教材（upload / 建課綱），但可閱讀既有教材、答題、提問；`admin` 可用全部功能。帳號與權限直接在 DB 維護。
+註冊白名單：`/auth/register` 只允許 email 命中此表者成功註冊，角色（`admin` / `editor` / `user`）一併寫入 user。`user` 角色不可新增教材（upload / 建課綱），但可閱讀既有教材、答題、提問；`admin` 可用全部功能；`editor` 可新增教材，但啟動生成時 AI 代理商僅限 Monica，模型僅限 `claude-4.6-sonnet` 或 `gemini-3-flash`。帳號與權限直接在 DB 維護。
 
 ---
 

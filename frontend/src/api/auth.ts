@@ -9,6 +9,22 @@ export interface AuthResponse {
   role: string;
 }
 
+export interface UserOut {
+  user_id: string;
+  email: string;
+  role: string;
+}
+
+export async function fetchMe(token: string): Promise<UserOut | null> {
+  try {
+    const res = await fetch(`${BASE}/auth/me?token=${encodeURIComponent(token)}`);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function register(email: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${BASE}/auth/register`, {
     method: 'POST',

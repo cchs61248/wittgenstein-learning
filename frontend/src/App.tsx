@@ -17,7 +17,7 @@ import {
   retryCurriculum,
   dismissCurriculum,
 } from './api/session';
-import { verifyAuth } from './api/auth';
+import { verifyAuth, fetchMe } from './api/auth';
 import { fetchUserUiState } from './api/userUiState';
 import { applyServerUiStateToLocal, dispatchUiStateSyncedFromServer } from './utils/userUiStateSync';
 import type { BookEntry } from './api/session';
@@ -46,8 +46,8 @@ const initialSessionIdSnapshot: string | null =
   typeof window !== 'undefined' ? localStorage.getItem('wl_session_id') : null;
 
 export default function App() {
-  const { token, email, role, clearAuth } = useSessionStore();
-  const isAdmin = role === 'admin';
+  const { token, email, role, clearAuth, setRole } = useSessionStore();
+  const canAddMaterial = role === 'admin' || role === 'editor';
   const {
     setSession,
     setExplanationComplete,
@@ -290,7 +290,7 @@ export default function App() {
           applyLayoutForSession(generatingEntry.sessionId);
           return;
         }
-        if (useSessionStore.getState().role === 'admin') {
+        if (canAddMaterial) {
           setShowUpload(true);
         }
         return;
@@ -380,11 +380,17 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // 週期驗證 token：若其他裝置重新登入造成 token 失效，這端自動回登入頁
+  // 週期驗證 token，並從 /auth/me 同步最新 role（DB 改角色後不需重新登入）
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
     const runCheck = async () => {
+      const me = await fetchMe(token);
+      if (cancelled) return;
+      if (me) {
+        setRole(me.role);
+        return;
+      }
       const status = await verifyAuth(token);
       if (cancelled) return;
       // 網路問題（fetch reject / 5xx）：不處理，留給 WS 重連邏輯與下次 tick；
@@ -405,7 +411,7 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [token, clearAuth, clearSession]);
+  }, [token, clearAuth, clearSession, setRole]);
 
   // 書櫃有「生成中」項目時輪詢，頁面重整後也能自動追蹤狀態轉換
   const hasGenerating = bookshelf.some(b => b.status === 'generating');
@@ -1183,7 +1189,7 @@ export default function App() {
                 activeSessionId={storeSessionId}
                 onSwitch={handleSwitchSession}
                 onNewMaterial={() => setShowUpload(true)}
-                canAddMaterial={isAdmin}
+                canAddMaterial={canAddMaterial}
                 disableNewMaterial={hasGenerating}
                 onRename={handleRenameBook}
                 onDelete={handleDeleteBook}
@@ -1295,6 +1301,7 @@ export default function App() {
 
       {showUpload && !pendingMap && (
         <UploadModal
+          role={role}
           onStart={handleStart}
           onClose={() => {
             setShowUpload(false);
