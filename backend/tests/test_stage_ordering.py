@@ -262,6 +262,86 @@ class TestMergeSingletonChunkStages(unittest.TestCase):
         single = [_stage("X", ["chunk_0001"])]
         self.assertEqual(merge_singleton_chunk_stages(single), single)
 
+    def test_parallel_ordinal_siblings_not_cascaded(self):
+        """sess_7r5prsw3c real bug: reroll correctly split 道德經「四樣核心功夫」
+        into 4 independent 1-chunk stages（不爭/虛中/樸實/自然）, each declared
+        via an explicit ordinal marker（一）〜（四）. The old cascading merge
+        folded all 4 into a single stage (losing the SplitterVerifier-mandated
+        parallel split). Same-base-different-ordinal siblings must be preserved
+        even though each is a middle singleton.
+        """
+        stages = [
+            _stage("Intro", ["chunk_0000", "chunk_0001"]),
+            _stage("道德經功夫（一）：不爭的功夫", ["chunk_0008"], kc=["上善若水"]),
+            _stage("道德經功夫（二）：虛中的功夫", ["chunk_0009"], kc=["跂者不立"]),
+            _stage("道德經功夫（三）：樸實的功夫", ["chunk_0010"], kc=["豫兮若冬涉川"]),
+            _stage("道德經功夫（四）：自然的功夫", ["chunk_0011"], kc=["道法自然"]),
+            _stage("End", ["chunk_0023"]),
+        ]
+        out = merge_singleton_chunk_stages(stages)
+        titles = [s["title"] for s in out]
+        self.assertEqual(
+            titles,
+            [
+                "Intro",
+                "道德經功夫（一）：不爭的功夫",
+                "道德經功夫（二）：虛中的功夫",
+                "道德經功夫（三）：樸實的功夫",
+                "道德經功夫（四）：自然的功夫",
+                "End",
+            ],
+        )
+
+    def test_non_ordinal_singletons_still_cascade_merged(self):
+        """Regression guard: the ordinal-sibling exception must not disable the
+        original P4c behaviour for genuinely thin, unrelated 1-chunk stages."""
+        stages = [
+            _stage("Intro", ["chunk_0000", "chunk_0001"]),
+            _stage("Solo A", ["chunk_0002"], kc=["x"]),
+            _stage("Solo B", ["chunk_0003"], kc=["y"]),
+            _stage("End", ["chunk_0004", "chunk_0005"]),
+        ]
+        out = merge_singleton_chunk_stages(stages)
+        titles = [s["title"] for s in out]
+        self.assertEqual(titles, ["Intro", "End"])
+        self.assertIn("chunk_0002", out[0]["source_chunk_ids"])
+        self.assertIn("chunk_0003", out[0]["source_chunk_ids"])
+
+    def test_dissimilar_titles_without_ordinal_marker_not_merged(self):
+        """Extend protection beyond explicit ordinal markers: singletons with
+        clearly unrelated substantive titles (no shared lexical overlap) must
+        also stay independent, even without a "（N）" marker. Calibrated so
+        generic filler titles ("Intro"/"Solo"-style) still cascade-merge as
+        before — see `_SINGLETON_MERGE_TITLE_SIM_FLOOR` calibration comment."""
+        stages = [
+            _stage("Intro", ["chunk_0000", "chunk_0001"]),
+            _stage("蘋果的種植方法", ["chunk_0002"], kc=["嫁接", "施肥週期"]),
+            _stage("銀行放款風控流程", ["chunk_0003"], kc=["信用評分"]),
+            _stage("End", ["chunk_0004", "chunk_0005"]),
+        ]
+        out = merge_singleton_chunk_stages(stages)
+        titles = [s["title"] for s in out]
+        self.assertIn("蘋果的種植方法", titles, f"unrelated topic must stay separate: {titles}")
+        self.assertIn("銀行放款風控流程", titles, f"unrelated topic must stay separate: {titles}")
+
+    def test_merge_skipped_when_key_concepts_would_exceed_cap(self):
+        """Safety net: even without an ordinal marker, don't silently cascade-merge
+        singletons into a mega-stage that blows past STAGE_MAX_KEY_CONCEPTS."""
+        from backend.utils.small_curriculum import STAGE_MAX_KEY_CONCEPTS
+
+        prev_kc = [f"concept_{i}" for i in range(STAGE_MAX_KEY_CONCEPTS)]
+        stages = [
+            _stage("Intro", ["chunk_0000", "chunk_0001"]),
+            _stage("Body", ["chunk_0002", "chunk_0003"], kc=prev_kc),
+            _stage("Solo", ["chunk_0004"], kc=["one_more_concept"]),
+            _stage("End", ["chunk_0005", "chunk_0006"]),
+        ]
+        out = merge_singleton_chunk_stages(stages)
+        titles = [s["title"] for s in out]
+        self.assertIn("Solo", titles, f"Solo should stay separate to avoid kc overflow: {titles}")
+        body = next(s for s in out if s["title"] == "Body")
+        self.assertEqual(len(body["key_concepts"]), STAGE_MAX_KEY_CONCEPTS)
+
 
 class TestEnsureEmptyKeyConceptsFallback(unittest.TestCase):
     def test_colon_title_not_truncated_naively(self):

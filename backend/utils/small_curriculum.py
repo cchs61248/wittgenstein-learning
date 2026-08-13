@@ -1419,6 +1419,38 @@ def detect_large_single_source_risk(
     }
 
 
+def _has_ordinal_marker(stage: dict) -> bool:
+    """True if the stage title carries an explicit ordinal marker (e.g.
+    "道德經功夫（二）：虛中的功夫"), signalling it is a declared item of an
+    enumerated parallel series that must never be silently folded into a
+    neighbouring stage by P4c thin-stage cleanup — regardless of what that
+    neighbour is, since the neighbour may itself be a non-series stage (e.g.
+    an intro) or an earlier sibling that already lost its own ordinal title
+    to a previous merge.
+
+    Bug this guards against (sess_7r5prsw3c, 2026-08-13): SplitterVerifier
+    correctly detected a parallel-option mash-up ("四樣核心功夫" 不爭/虛中/樸實/
+    自然 collapsed into 2 stages) and triggered a reroll with an explicit
+    repair_plan_struct requiring 4 independent stages. The reroll's LLM output
+    followed that instruction (each practice became its own 1-chunk stage with
+    an explicit （一）〜（四） ordinal marker), but the OLD cascading merge below
+    had no title/topic awareness — it silently folded all 4 back into a single
+    stage (worse than the original mash-up), with zero log trail. Treating any
+    ordinal-marked singleton as protected keeps genuine parallel series intact
+    while still collapsing truly unrelated thin stages.
+    """
+    return _extract_ordinal_group(stage.get("title") or "") is not None
+
+
+# Calibrated against `backend/utils/fuzzy_match.similarity` (difflib char-ratio):
+# generic filler title pairs that SHOULD still cascade-merge score 0.18-0.25
+# (e.g. "Intro"/"Solo"=0.222, "Intro"/"End"=0.250, "Intro"/"Solo B"=0.182);
+# genuinely distinct substantive topics score <=0.08 (e.g. "道德經功夫（一）：
+# 不爭的功夫"/"致富框架：背景與本金陷阱"=0.077, "借錢工具"/"投資心理：輸家性格與
+# 對策"=0.000). 0.12 sits in the gap between the two clusters.
+_SINGLETON_MERGE_TITLE_SIM_FLOOR = 0.12
+
+
 def merge_singleton_chunk_stages(stages: list[dict]) -> list[dict]:
     """P4c: middle stages with exactly 1 chunk are merged into the previous stage.
 
@@ -1431,6 +1463,21 @@ def merge_singleton_chunk_stages(stages: list[dict]) -> list[dict]:
     legitimately stands alone, and the final chunk is often a closing remark.
     Follow-up overflow stages (kind=follow_up_orphan) are also preserved — they
     were intentionally split out by `_append_orphan_overflow_stages`.
+
+    Three guards prevent this thin-stage cleanup from cascading into a semantic
+    regression (sess_7r5prsw3c, 2026-08-13 — see `_has_ordinal_marker`):
+    - A singleton whose title carries an explicit ordinal marker (e.g. "X（一）")
+      is never cascade-merged into a neighbour — it is a declared item of an
+      enumerated parallel series and must survive as its own stage.
+    - A merge that would push the target stage's deduplicated key_concepts past
+      `STAGE_MAX_KEY_CONCEPTS` is skipped — a ballooning kc count is itself a
+      signal that unrelated topics are being folded together.
+    - A merge is skipped when the candidate's title shares almost no lexical
+      overlap with the target's title (`_SINGLETON_MERGE_TITLE_SIM_FLOOR`) —
+      catches parallel/unrelated substantive topics that lack an ordinal marker
+      (e.g. "蘋果的種植方法" next to "銀行放款風控流程"). Calibrated to stay clear
+      of generic filler titles ("Intro"/"Solo"-style placeholders), which score
+      noticeably higher and must keep cascade-merging as originally designed.
 
     Caller responsibility: run AFTER `enforce_stage_ordering` so "previous" means
     "previous in reading order".
@@ -1447,8 +1494,30 @@ def merge_singleton_chunk_stages(stages: list[dict]) -> list[dict]:
         if len(cids) != 1 or (s.get("kind") in ("follow_up_orphan", "summary")):
             out.append(dict(s))
             continue
-        # Singleton in the middle: merge into the just-appended previous stage
+
+        if _has_ordinal_marker(s):
+            out.append(dict(s))
+            continue
+
         prev = out[-1]
+        prev_title = (prev.get("title") or "").strip()
+        s_title = (s.get("title") or "").strip()
+        if (
+            prev_title and s_title
+            and similarity(prev_title, s_title) < _SINGLETON_MERGE_TITLE_SIM_FLOOR
+        ):
+            out.append(dict(s))
+            continue
+
+        merged_kc_count = len({
+            *(prev.get("key_concepts") or []),
+            *(s.get("key_concepts") or []),
+        })
+        if merged_kc_count > STAGE_MAX_KEY_CONCEPTS:
+            out.append(dict(s))
+            continue
+
+        # Singleton in the middle: merge into the just-appended previous stage
         _merge_stage_into(prev, s)
 
     out.append(dict(stages[-1]))  # tail always kept
