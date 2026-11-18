@@ -20,6 +20,16 @@ class TestValidateProviderForRole(unittest.TestCase):
             validate_provider_for_role("editor", "monica", "gemini-3-flash")
         )
 
+    def test_editor_monica_all_allowed_models(self):
+        from backend.auth.role_policy import EDITOR_ALLOWED_MODELS
+
+        for model in EDITOR_ALLOWED_MODELS:
+            self.assertIsNone(validate_provider_for_role("editor", "monica", model), model)
+
+    def test_editor_rejects_credit_models(self):
+        for model in ("claude-opus-5.5", "gpt-6.2-astra", "kimi-k3"):
+            self.assertIsNotNone(validate_provider_for_role("editor", "monica", model), model)
+
     def test_editor_monica_no_model_ok(self):
         self.assertIsNone(validate_provider_for_role("editor", "monica", None))
 
