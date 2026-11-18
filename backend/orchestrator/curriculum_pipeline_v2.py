@@ -12,7 +12,7 @@ from ..agents.global_curriculum_verifier import verify_global_coverage
 from ..memory import session_memory
 from ..memory import curriculum_checkpoint as ckpt_mem
 from ..utils.canonicalize_apply import apply_canonical_mappings
-from ..utils.fuzzy_match import concepts_match
+from ..utils.fuzzy_match import concept_jaccard
 from ..utils.reducer_constants import MAX_MERGED_OUTCOME_CHUNKS
 from ..utils.region_planning import is_listicle_source
 from ..utils.small_curriculum import (
@@ -128,7 +128,12 @@ def _build_knowledge_map_summary(summary_parts: list[str], stage_count: int) -> 
 
 
 def _dedupe_within(candidates: list[dict], threshold: float = 0.85) -> list[dict]:
-    """合併 kc 相似 candidate；合併後 chunk 數超過 cap 則拒絕合併、保留獨立 candidate。
+    """合併 kc 集合高度相似的 candidate；合併後 chunk 數超過 cap 則拒絕合併、保留獨立 candidate。
+
+    相似度採「整組 key_concepts 的 jaccard」，不採「任一對 kc 字串的最高相似度」。
+    後者會因單一共用或近似名稱（如「隔離區」、「中繼資料」⊂「中繼資料表」、「簽章網址」⊂「預簽章網址」）
+    把講不同主題的 stage 整段併掉，被併的 stage 連標題一起消失（sess_rykux8gxa：reroll 出 10 stage，
+    靜默壓成 6 stage，中繼資料／處理／下載／清理路徑全部遺失，且無任何 log）。
 
     chunk cap 來自 sess_live_049d39ce stage 2 案例：region_001/002/005 splitter 各出
     「房屋貸款」相關 candidate，dedupe 把跨 region chunks 全併入單一 candidate，
@@ -140,11 +145,11 @@ def _dedupe_within(candidates: list[dict], threshold: float = 0.85) -> list[dict
         placed = False
         incoming_ids = c.get("source_chunk_ids") or []
         for m in merged:
-            if concepts_match(
+            score = concept_jaccard(
                 [str(x) for x in m.get("key_concepts") or []],
                 [str(x) for x in c.get("key_concepts") or []],
-                threshold=threshold,
-            ):
+            )
+            if score >= threshold:
                 m_ids = m.setdefault("source_chunk_ids", [])
                 projected_total = len({*m_ids, *incoming_ids})
                 if projected_total > MAX_MERGED_OUTCOME_CHUNKS:
@@ -158,6 +163,10 @@ def _dedupe_within(candidates: list[dict], threshold: float = 0.85) -> list[dict
                         c.get("title"),
                     )
                     continue
+                _log.info(
+                    "v2 candidate dedupe merged  kc_jaccard=%.2f  title=%s  into=%s  chunks=%d",
+                    score, c.get("title"), m.get("title"), projected_total,
+                )
                 for cid in incoming_ids:
                     if cid not in m_ids:
                         m_ids.append(cid)
@@ -1077,7 +1086,12 @@ async def run_start_session_v2(
     # The previous large-file else-branch (MacroRegionPlanner + per-region loop
     # + GlobalCurriculumReducer + Plan B) has been removed.
 
+    _n_before_dedupe = len(all_candidates)
     all_candidates = _dedupe_candidates(all_candidates, same_material=same_material)
+    _log.info(
+        "v2 candidate dedupe  session=%s  before=%d  after=%d",
+        session_id, _n_before_dedupe, len(all_candidates),
+    )
 
     chunks_lookup = {
         c["chunk_id"]: c.get("text", "")
@@ -1129,7 +1143,12 @@ async def run_start_session_v2(
         }
     allow_merge = postprocess_mode == "cross_material_merge_and_coordinate"
 
+    _n_before_norm = len(stages)
     stages = normalize_stages_pre_verify(stages, source_chunks)
+    _log.info(
+        "v2 normalize pre_verify  session=%s  before=%d  after=%d",
+        session_id, _n_before_norm, len(stages),
+    )
 
     # P0b-1: cross-source merge by key_concepts jaccard (default ≥ 0.6).
     # Catches per-source splitter naming drift across chapters where titles
@@ -1152,7 +1171,13 @@ async def run_start_session_v2(
     # P4c: middle singleton stages folded into previous neighbour. Runs in every
     # mode — this is thin-stage cleanup (a 1-chunk stage is too thin for a
     # teaching round), not a semantic merge, so it does not erase splitter intent.
+    _n_before_singleton = len(stages)
     stages = merge_singleton_chunk_stages(stages)
+    if len(stages) != _n_before_singleton:
+        _log.info(
+            "v2 singleton fold  session=%s  before=%d  after=%d",
+            session_id, _n_before_singleton, len(stages),
+        )
 
     # P0b-2: LLM Stage Consolidator for long materials (≥ 30 chunks).
     # Per-source splitter has no global view; this pass does cross-chapter
@@ -1281,7 +1306,12 @@ async def run_start_session_v2(
                 )
 
     if is_compact_curriculum(source_chunks):
+        _n_before_finalize = len(stages)
         stages = finalize_small_file_stages(stages, source_chunks)
+        _log.info(
+            "v2 compact finalize  session=%s  before=%d  after=%d",
+            session_id, _n_before_finalize, len(stages),
+        )
         gverify = verify_global_coverage(stages, source_chunks, required_outline)
         if gverify.get("aligned") and not initial_gverify.get("aligned"):
             _log.info(

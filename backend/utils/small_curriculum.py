@@ -983,6 +983,24 @@ def _extract_followup(stage: dict) -> tuple[str, int] | None:
     return base, batch
 
 
+def _stage_reading_position(stage: dict, usage: dict[str, int]) -> str:
+    """閱讀順序位置（enforce_stage_ordering 用）。
+
+    splitter 允許相鄰 stage 共用邊界 chunk，若用 min() 取全部 chunk，單一共用 chunk
+    會把 stage 拉到真正前驅之前（sess_rykux8gxa：「處理路徑」與「中繼資料路徑」都含
+    chunk_0002，處理路徑被排到中繼資料路徑前面，教學順序錯亂）。因此：
+    - 有獨佔 chunk（沒有其他 stage 使用）→ 取獨佔 chunk 的最小值
+    - 全部 chunk 都被共用 → 取最後一個 chunk（stage 的內容延伸到哪裡）
+    """
+    cids = [c for c in (stage.get("source_chunk_ids") or []) if c]
+    if not cids:
+        return "chunk_zzzz"
+    exclusive = [c for c in cids if usage.get(c, 0) <= 1]
+    if exclusive:
+        return min(exclusive)
+    return max(cids)
+
+
 def enforce_stage_ordering(stages: list[dict]) -> list[dict]:
     """Force stages into reading order. Runs after consolidator since LLM may violate.
 
@@ -1022,6 +1040,12 @@ def enforce_stage_ordering(stages: list[dict]) -> list[dict]:
         prefix, n = key
         groups.setdefault(prefix, []).append((n, s))
 
+    # chunk 使用次數（僅計 base stage；follow-up 本來就與 base 共用 chunk）
+    usage: dict[str, int] = {}
+    for s in orderable:
+        for cid in set(s.get("source_chunk_ids") or []):
+            usage[cid] = usage.get(cid, 0) + 1
+
     # Build (sort_key, [stage,...]) buckets
     buckets: list[tuple[str, list[dict]]] = []
     for prefix, members in groups.items():
@@ -1030,9 +1054,12 @@ def enforce_stage_ordering(stages: list[dict]) -> list[dict]:
             continue
         members.sort(key=lambda pair: pair[0])
         group_stages = [s for _, s in members]
-        buckets.append((min(_stage_min_chunk(s) for s in group_stages), group_stages))
+        buckets.append((
+            min(_stage_reading_position(s, usage) for s in group_stages),
+            group_stages,
+        ))
     for s in singles:
-        buckets.append((_stage_min_chunk(s), [s]))
+        buckets.append((_stage_reading_position(s, usage), [s]))
 
     buckets.sort(key=lambda b: b[0])
     flat: list[dict] = []

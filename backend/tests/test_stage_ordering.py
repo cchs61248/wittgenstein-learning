@@ -109,6 +109,37 @@ class TestEnforceStageOrdering(unittest.TestCase):
         titles = [s["title"] for s in enforce_stage_ordering(stages)]
         self.assertEqual(titles, ["A", "B", "C"])
 
+    def test_shared_boundary_chunk_does_not_drag_stage_forward(self):
+        """sess_rykux8gxa：「處理路徑」與「中繼資料路徑」都含共用 chunk_0002，
+        舊版 min() 把處理路徑排到中繼資料路徑之前。應依獨佔 chunk 排序。"""
+        stages = [
+            _stage("大型二進位檔", ["chunk_0000", "chunk_0001"]),
+            _stage("設計診斷", ["chunk_0002", "chunk_0001"]),
+            _stage("中繼資料路徑", ["chunk_0003", "chunk_0004"]),
+            _stage("上傳路徑", ["chunk_0005", "chunk_0006", "chunk_0011"]),
+            _stage("狀態同步", ["chunk_0008", "chunk_0005"]),
+            _stage("處理路徑", ["chunk_0007", "chunk_0002"]),
+            _stage("下載路徑", ["chunk_0009", "chunk_0002"]),
+            _stage("清理路徑", ["chunk_0010", "chunk_0008"]),
+        ]
+        titles = [s["title"] for s in enforce_stage_ordering(stages)]
+        self.assertLess(titles.index("中繼資料路徑"), titles.index("上傳路徑"))
+        self.assertLess(titles.index("上傳路徑"), titles.index("處理路徑"))
+        self.assertLess(titles.index("處理路徑"), titles.index("下載路徑"))
+        self.assertLess(titles.index("下載路徑"), titles.index("清理路徑"))
+        self.assertLess(titles.index("設計診斷"), titles.index("中繼資料路徑"))
+
+    def test_fully_shared_stage_positioned_by_last_chunk(self):
+        """全部 chunk 都被共用的 stage 以最後一個 chunk 定位，不被最小值拉前。"""
+        stages = [
+            _stage("A", ["chunk_0000", "chunk_0001"]),
+            _stage("B", ["chunk_0002", "chunk_0003"]),
+            _stage("C", ["chunk_0003", "chunk_0004"]),
+            _stage("D", ["chunk_0004", "chunk_0005"]),
+        ]
+        titles = [s["title"] for s in enforce_stage_ordering(stages)]
+        self.assertEqual(titles, ["A", "B", "C", "D"])
+
     def test_node_id_reassigned(self):
         stages = [
             _stage("B", ["chunk_0020"]),
